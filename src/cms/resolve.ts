@@ -1,15 +1,13 @@
 import { loadBlocks, findPageByPath, type Resolvable } from "./loader";
 import { getSection } from "./registry";
-import { initShopifyFromBlocks } from "../commerce/shopify/init";
-import productListLoader from "../commerce/shopify/loaders/ProductList";
-import productDetailsPageLoader from "../commerce/shopify/loaders/ProductDetailsPage";
-import productListingPageLoader from "../commerce/shopify/loaders/ProductListingPage";
 
 export type ResolvedSection = {
   component: string;
   props: Record<string, unknown>;
   key: string;
 };
+
+export type CommerceLoader = (props: any) => Promise<any>;
 
 const SKIP_RESOLVE_TYPES = new Set([
   "Deco",
@@ -23,13 +21,33 @@ const SKIP_RESOLVE_TYPES = new Set([
   "website/sections/Seo/SeoV2.tsx",
 ]);
 
-type CommerceLoader = (props: any) => Promise<any>;
+/**
+ * Registry of commerce loaders that can be registered by apps.
+ * Sites call registerCommerceLoader() to wire up their platform integrations.
+ */
+const commerceLoaders: Record<string, CommerceLoader> = {};
 
-const COMMERCE_LOADERS: Record<string, CommerceLoader> = {
-  "shopify/loaders/ProductList.ts": productListLoader,
-  "shopify/loaders/ProductDetailsPage.ts": productDetailsPageLoader,
-  "shopify/loaders/ProductListingPage.ts": productListingPageLoader,
-};
+export function registerCommerceLoader(key: string, loader: CommerceLoader) {
+  commerceLoaders[key] = loader;
+}
+
+export function registerCommerceLoaders(loaders: Record<string, CommerceLoader>) {
+  Object.assign(commerceLoaders, loaders);
+}
+
+let initCallback: (() => void) | null = null;
+let initialized = false;
+
+export function onBeforeResolve(callback: () => void) {
+  initCallback = callback;
+}
+
+function ensureInitialized() {
+  if (!initialized && initCallback) {
+    initCallback();
+    initialized = true;
+  }
+}
 
 async function resolveValue(
   value: unknown,
@@ -52,59 +70,43 @@ async function resolveValue(
 
   const resolveType = obj.__resolveType as string;
 
-  if (SKIP_RESOLVE_TYPES.has(resolveType)) {
-    return null;
-  }
+  if (SKIP_RESOLVE_TYPES.has(resolveType)) return null;
 
-  // Handle Lazy sections -- unwrap the inner section
   if (resolveType === "website/sections/Rendering/Lazy.tsx") {
-    if (obj.section) {
-      return resolveValue(obj.section, routeParams);
-    }
-    return null;
+    return obj.section ? resolveValue(obj.section, routeParams) : null;
   }
 
-  // Handle "resolved" blocks (data that's already resolved)
-  if (resolveType === "resolved") {
-    return obj.data ?? null;
-  }
+  if (resolveType === "resolved") return obj.data ?? null;
 
-  // Handle URL param extraction (e.g. slug from route)
   if (resolveType === "website/functions/requestToParam.ts") {
     const paramName = (obj as any).param as string;
     return routeParams?.[paramName] ?? null;
   }
 
-  // Handle commerce extension loaders (wrapper pattern)
   if (
     resolveType === "commerce/loaders/product/extensions/detailsPage.ts" ||
     resolveType === "commerce/loaders/product/extensions/listingPage.ts"
   ) {
-    if (obj.data) {
-      return resolveValue(obj.data, routeParams);
-    }
-    return null;
+    return obj.data ? resolveValue(obj.data, routeParams) : null;
   }
 
-  // Handle commerce loaders (Shopify, VTEX, etc.)
-  const commerceLoader = COMMERCE_LOADERS[resolveType];
+  // Check commerce loaders
+  const commerceLoader = commerceLoaders[resolveType];
   if (commerceLoader) {
-    initShopifyFromBlocks();
     const { __resolveType, ...loaderProps } = obj;
     const resolvedProps: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(loaderProps)) {
       resolvedProps[k] = await resolveValue(v, routeParams);
     }
     try {
-      const result = await commerceLoader(resolvedProps);
-      return result;
+      return await commerceLoader(resolvedProps);
     } catch (error) {
       console.error(`[CMS] Commerce loader ${resolveType} failed:`, error);
       return null;
     }
   }
 
-  // Check if it's a named block (indirect reference)
+  // Named blocks
   const blocks = loadBlocks();
   if (blocks[resolveType]) {
     const referencedBlock = blocks[resolveType] as Record<string, unknown>;
@@ -112,16 +114,13 @@ async function resolveValue(
     return resolveValue({ ...referencedBlock, ...restOverrides }, routeParams);
   }
 
-  // Check if it's an unresolvable loader/action reference
-  if (
-    resolveType.includes("/loaders/") ||
-    resolveType.includes("/actions/")
-  ) {
+  // Unhandled loaders/actions
+  if (resolveType.includes("/loaders/") || resolveType.includes("/actions/")) {
     console.warn(`[CMS] Unhandled loader: ${resolveType}`);
     return null;
   }
 
-  // Direct section reference -- resolve nested props
+  // Direct section reference
   const { __resolveType, ...rest } = obj;
   const resolvedProps: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(rest)) {
@@ -139,6 +138,8 @@ export async function resolveDecoPage(
   params: Record<string, string>;
   resolvedSections: ResolvedSection[];
 } | null> {
+  ensureInitialized();
+
   const match = findPageByPath(targetPath);
   if (!match) {
     console.warn(`[CMS] No page found for path: ${targetPath}`);
@@ -150,8 +151,6 @@ export async function resolveDecoPage(
   console.log(
     `[CMS] Matched "${page.name}" (pattern: ${page.path}) for path: ${targetPath}`
   );
-
-  initShopifyFromBlocks();
 
   const resolvedSections: ResolvedSection[] = [];
 

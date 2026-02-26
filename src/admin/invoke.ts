@@ -1,26 +1,21 @@
-import { initShopifyFromBlocks } from "../commerce/shopify/init";
-import productListLoader from "../commerce/shopify/loaders/ProductList";
-import productDetailsPageLoader from "../commerce/shopify/loaders/ProductDetailsPage";
-import productListingPageLoader from "../commerce/shopify/loaders/ProductListingPage";
-
-type LoaderFn = (props: any) => Promise<any>;
-
-const LOADERS: Record<string, LoaderFn> = {
-  "shopify/loaders/ProductList.ts": productListLoader,
-  "shopify/loaders/ProductDetailsPage.ts": productDetailsPageLoader,
-  "shopify/loaders/ProductListingPage.ts": productListingPageLoader,
-};
-
 /**
  * Handles /deco/invoke -- executes a loader or action by key.
- * The admin calls this to test loaders and fetch data during editing.
+ * Commerce loaders must be registered via registerCommerceLoader() before use.
  */
-export async function handleInvoke(request: Request): Promise<Response> {
-  initShopifyFromBlocks();
 
+// Access the commerce loaders that were registered by the site/apps
+let getRegisteredLoaders: () => Record<string, (props: any) => Promise<any>> = () => ({});
+
+export function setInvokeLoaders(getter: () => Record<string, (props: any) => Promise<any>>) {
+  getRegisteredLoaders = getter;
+}
+
+export async function handleInvoke(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const pathParts = url.pathname.split("/deco/invoke/");
   const invokeKey = pathParts[1] || "";
+
+  const loaders = getRegisteredLoaders();
 
   let body: any = {};
   if (request.method === "POST") {
@@ -33,7 +28,7 @@ export async function handleInvoke(request: Request): Promise<Response> {
 
   // Single invoke by key
   if (invokeKey) {
-    const loader = LOADERS[invokeKey];
+    const loader = loaders[invokeKey];
     if (!loader) {
       return new Response(JSON.stringify({ error: `Unknown loader: ${invokeKey}` }), {
         status: 404,
@@ -61,7 +56,7 @@ export async function handleInvoke(request: Request): Promise<Response> {
 
     for (const [key, payload] of Object.entries(body)) {
       const loaderKey = (payload as any)?.__resolveType || key;
-      const loader = LOADERS[loaderKey];
+      const loader = loaders[loaderKey];
 
       if (loader) {
         try {

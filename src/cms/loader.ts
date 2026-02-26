@@ -1,5 +1,3 @@
-import { blocks as generatedBlocks } from "./blocks.gen";
-
 export type Resolvable = {
   __resolveType?: string;
   [key: string]: unknown;
@@ -12,14 +10,19 @@ export type DecoPage = {
   seo?: Record<string, unknown>;
 };
 
-export function loadBlocks(): Record<string, unknown> {
-  return generatedBlocks;
-}
+let blockData: Record<string, unknown> = {};
 
 /**
- * Get all CMS page definitions, sorted by specificity (most specific first).
- * Exact paths come first, then parameterized, then wildcards.
+ * Set the blocks data. Called by the site at startup with the generated blocks.
  */
+export function setBlocks(blocks: Record<string, unknown>) {
+  blockData = blocks;
+}
+
+export function loadBlocks(): Record<string, unknown> {
+  return blockData;
+}
+
 export function getAllPages(): Array<{ key: string; page: DecoPage }> {
   const blocks = loadBlocks();
   const pages: Array<{ key: string; page: DecoPage; specificity: number }> = [];
@@ -31,13 +34,9 @@ export function getAllPages(): Array<{ key: string; page: DecoPage }> {
     if (!page.path) continue;
 
     let specificity = 0;
-    if (page.path === "/*") {
-      specificity = 0;
-    } else if (page.path.includes(":") || page.path.includes("$")) {
-      specificity = 1;
-    } else {
-      specificity = 2;
-    }
+    if (page.path === "/*") specificity = 0;
+    else if (page.path.includes(":") || page.path.includes("$")) specificity = 1;
+    else specificity = 2;
 
     pages.push({ key, page, specificity });
   }
@@ -47,20 +46,11 @@ export function getAllPages(): Array<{ key: string; page: DecoPage }> {
     .map(({ key, page }) => ({ key, page }));
 }
 
-/**
- * Match a URL path against a CMS page path pattern.
- * Supports:
- *   /exact/path     → exact match
- *   /products/:slug → named parameter capture
- *   /*              → wildcard catch-all
- */
 function matchPath(
   pattern: string,
   urlPath: string
 ): Record<string, string> | null {
-  if (pattern === "/*") {
-    return { _splat: urlPath };
-  }
+  if (pattern === "/*") return { _splat: urlPath };
 
   const patternParts = pattern.split("/").filter(Boolean);
   const urlParts = urlPath.split("/").filter(Boolean);
@@ -68,25 +58,16 @@ function matchPath(
   if (patternParts.length !== urlParts.length) return null;
 
   const params: Record<string, string> = {};
-
   for (let i = 0; i < patternParts.length; i++) {
     const pp = patternParts[i];
     const up = urlParts[i];
-
-    if (pp.startsWith(":")) {
-      params[pp.slice(1)] = up;
-    } else if (pp !== up) {
-      return null;
-    }
+    if (pp.startsWith(":")) params[pp.slice(1)] = up;
+    else if (pp !== up) return null;
   }
 
   return params;
 }
 
-/**
- * Find a CMS page block that matches the given URL path.
- * Returns the matched page and extracted route parameters.
- */
 export function findPageByPath(
   targetPath: string
 ): { page: DecoPage; params: Record<string, string> } | null {
@@ -95,9 +76,7 @@ export function findPageByPath(
   for (const { page } of allPages) {
     if (!page.path) continue;
     const params = matchPath(page.path, targetPath);
-    if (params !== null) {
-      return { page, params };
-    }
+    if (params !== null) return { page, params };
   }
 
   return null;
