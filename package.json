@@ -20,6 +20,13 @@
   "keywords": ["deco", "tanstack", "cms", "framework"],
   "author": "deco.cx",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/decocms/deco-start.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "peerDependencies": {
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
