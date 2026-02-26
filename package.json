@@ -1,0 +1,34 @@
+{
+  "name": "@decocms/start",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Deco framework for TanStack Start - CMS bridge, admin protocol, hooks, schema generation",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./cms": "./src/cms/index.ts",
+    "./admin": "./src/admin/index.ts",
+    "./hooks": "./src/hooks/index.ts",
+    "./types": "./src/types/index.ts",
+    "./scripts/generate-blocks": "./scripts/generate-blocks.ts",
+    "./scripts/generate-schema": "./scripts/generate-schema.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": ["deco", "tanstack", "cms", "framework"],
+  "author": "deco.cx",
+  "license": "MIT",
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "ts-morph": "^27.0.0",
+    "typescript": "^5.9.0"
+  }
+}
