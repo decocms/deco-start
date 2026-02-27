@@ -175,8 +175,12 @@ export async function resolveDecoPage(
   let rawSections: unknown[];
   if (Array.isArray(page.sections)) {
     rawSections = page.sections;
+    console.log(`[CMS] sections is array with ${rawSections.length} items`);
   } else {
+    const sectionsObj = page.sections as Record<string, unknown>;
+    console.log(`[CMS] sections is object with __resolveType: ${sectionsObj?.__resolveType}`);
     const resolved = await resolveValue(page.sections, params);
+    console.log(`[CMS] resolved sections: isArray=${Array.isArray(resolved)}, type=${typeof resolved}, length=${Array.isArray(resolved) ? resolved.length : 'N/A'}`);
     rawSections = Array.isArray(resolved) ? resolved : [];
   }
 
