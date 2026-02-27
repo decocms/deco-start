@@ -28,10 +28,6 @@ const SKIP_RESOLVE_TYPES = new Set([
   "deco-sites/std/sections/SEO.tsx",
 ]);
 
-/**
- * Registry of commerce loaders that can be registered by apps.
- * Sites call registerCommerceLoader() to wire up their platform integrations.
- */
 const commerceLoaders: Record<string, CommerceLoader> = {};
 
 export function registerCommerceLoader(key: string, loader: CommerceLoader) {
@@ -56,6 +52,17 @@ function ensureInitialized() {
   }
 }
 
+async function resolveProps(
+  obj: Record<string, unknown>,
+  routeParams?: Record<string, string>
+): Promise<Record<string, unknown>> {
+  const entries = Object.entries(obj);
+  const resolvedEntries = await Promise.all(
+    entries.map(async ([k, v]) => [k, await resolveValue(v, routeParams)] as const)
+  );
+  return Object.fromEntries(resolvedEntries);
+}
+
 async function resolveValue(
   value: unknown,
   routeParams?: Record<string, string>
@@ -68,11 +75,7 @@ async function resolveValue(
   const obj = value as Record<string, unknown>;
 
   if (!obj.__resolveType) {
-    const resolved: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(obj)) {
-      resolved[k] = await resolveValue(v, routeParams);
-    }
-    return resolved;
+    return resolveProps(obj, routeParams);
   }
 
   const resolveType = obj.__resolveType as string;
@@ -97,7 +100,6 @@ async function resolveValue(
     return obj.data ? resolveValue(obj.data, routeParams) : null;
   }
 
-  // Multivariate flags: pick first variant's value (matcher evaluation TBD)
   if (
     resolveType === "website/flags/multivariate.ts" ||
     resolveType === "website/flags/multivariate/section.ts"
@@ -109,14 +111,10 @@ async function resolveValue(
     return null;
   }
 
-  // Check commerce loaders
   const commerceLoader = commerceLoaders[resolveType];
   if (commerceLoader) {
     const { __resolveType, ...loaderProps } = obj;
-    const resolvedProps: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(loaderProps)) {
-      resolvedProps[k] = await resolveValue(v, routeParams);
-    }
+    const resolvedProps = await resolveProps(loaderProps, routeParams);
     try {
       return await commerceLoader(resolvedProps);
     } catch (error) {
@@ -125,7 +123,6 @@ async function resolveValue(
     }
   }
 
-  // Named blocks
   const blocks = loadBlocks();
   if (blocks[resolveType]) {
     const referencedBlock = blocks[resolveType] as Record<string, unknown>;
@@ -133,20 +130,14 @@ async function resolveValue(
     return resolveValue({ ...referencedBlock, ...restOverrides }, routeParams);
   }
 
-  // Unhandled loaders/actions
   if (resolveType.includes("/loaders/") || resolveType.includes("/actions/")) {
     console.warn(`[CMS] Unhandled loader: ${resolveType}`);
     return null;
   }
 
-  // Direct section reference
   const { __resolveType, ...rest } = obj;
-  const resolvedProps: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(rest)) {
-    resolvedProps[k] = await resolveValue(v, routeParams);
-  }
-
-  return { __resolveType: resolveType, ...resolvedProps };
+  const resolvedRest = await resolveProps(rest, routeParams);
+  return { __resolveType: resolveType, ...resolvedRest };
 }
 
 export async function resolveDecoPage(
@@ -171,54 +162,53 @@ export async function resolveDecoPage(
     `[CMS] Matched "${page.name}" (pattern: ${page.path}) for path: ${targetPath}`
   );
 
-  // Resolve sections: may be an array or a multivariate/flag object
   let rawSections: unknown[];
   if (Array.isArray(page.sections)) {
     rawSections = page.sections;
-    console.log(`[CMS] sections is array with ${rawSections.length} items`);
   } else {
-    const sectionsObj = page.sections as Record<string, unknown>;
-    console.log(`[CMS] sections is object with __resolveType: ${sectionsObj?.__resolveType}`);
     const resolved = await resolveValue(page.sections, params);
-    console.log(`[CMS] resolved sections: isArray=${Array.isArray(resolved)}, type=${typeof resolved}, length=${Array.isArray(resolved) ? resolved.length : 'N/A'}`);
     rawSections = Array.isArray(resolved) ? resolved : [];
   }
 
-  const resolvedSections: ResolvedSection[] = [];
+  // Resolve ALL sections in parallel
+  const sectionResults = await Promise.all(
+    rawSections.map(async (section) => {
+      try {
+        const resolved = await resolveValue(section, params);
+        if (!resolved || typeof resolved !== "object") return [];
 
-  for (const section of rawSections) {
-    try {
-      const resolved = await resolveValue(section, params);
-      if (!resolved || typeof resolved !== "object") continue;
+        const items = Array.isArray(resolved) ? resolved : [resolved];
+        const results: ResolvedSection[] = [];
 
-      // resolveValue may return an array (e.g. from nested multivariate)
-      const items = Array.isArray(resolved) ? resolved : [resolved];
+        for (const item of items) {
+          if (!item || typeof item !== "object") continue;
+          const obj = item as Record<string, unknown>;
+          if (!obj.__resolveType) continue;
 
-      for (const item of items) {
-        if (!item || typeof item !== "object") continue;
-        const obj = item as Record<string, unknown>;
-        if (!obj.__resolveType) continue;
+          const resolveType = obj.__resolveType as string;
+          const sectionLoader = getSection(resolveType);
+          if (!sectionLoader) {
+            console.warn(`[CMS] No component registered for: ${resolveType}`);
+            continue;
+          }
 
-        const resolveType = obj.__resolveType as string;
-
-        const sectionLoader = getSection(resolveType);
-        if (!sectionLoader) {
-          console.warn(`[CMS] No component registered for: ${resolveType}`);
-          continue;
+          const { __resolveType: _, ...props } = obj;
+          results.push({
+            component: resolveType,
+            props: props as Record<string, unknown>,
+            key: resolveType,
+          });
         }
 
-        const { __resolveType: _, ...props } = obj;
-
-        resolvedSections.push({
-          component: resolveType,
-          props: props as Record<string, unknown>,
-          key: resolveType,
-        });
+        return results;
+      } catch (e) {
+        console.error(`[CMS] Error resolving section:`, e);
+        return [];
       }
-    } catch (e) {
-      console.error(`[CMS] Error resolving section:`, e);
-    }
-  }
+    })
+  );
+
+  const resolvedSections = sectionResults.flat();
 
   console.log(
     `[CMS] Resolved ${resolvedSections.length} sections for "${page.name}"`

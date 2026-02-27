@@ -25,3 +25,7 @@ export function getSection(resolveType: string): RegistryEntry | undefined {
 export function listRegisteredSections(): string[] {
   return Object.keys(registry);
 }
+
+export function getSectionRegistry(): Record<string, RegistryEntry> {
+  return registry;
+}
