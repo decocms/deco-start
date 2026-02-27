@@ -6,7 +6,7 @@ export type Resolvable = {
 export type DecoPage = {
   name: string;
   path?: string;
-  sections: Resolvable[];
+  sections: Resolvable[] | Resolvable;
   seo?: Record<string, unknown>;
 };
 
@@ -30,7 +30,7 @@ export function getAllPages(): Array<{ key: string; page: DecoPage }> {
   for (const [key, block] of Object.entries(blocks)) {
     if (!key.startsWith("pages-")) continue;
     const page = block as DecoPage;
-    if (!page.sections || !Array.isArray(page.sections)) continue;
+    if (!page.sections) continue;
     if (!page.path) continue;
 
     let specificity = 0;

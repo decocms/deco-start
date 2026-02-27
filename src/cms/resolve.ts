@@ -13,12 +13,19 @@ const SKIP_RESOLVE_TYPES = new Set([
   "Deco",
   "htmx/sections/htmx.tsx",
   "website/sections/Analytics/Analytics.tsx",
+  "algolia/sections/Analytics/Algolia.tsx",
   "shopify/loaders/proxy.ts",
+  "vtex/loaders/proxy.ts",
   "website/loaders/pages.ts",
   "website/loaders/redirects.ts",
+  "website/loaders/fonts/googleFonts.ts",
+  "commerce/sections/Seo/SeoPDP.tsx",
   "commerce/sections/Seo/SeoPDPV2.tsx",
+  "commerce/sections/Seo/SeoPLP.tsx",
   "commerce/sections/Seo/SeoPLPV2.tsx",
+  "website/sections/Seo/Seo.tsx",
   "website/sections/Seo/SeoV2.tsx",
+  "deco-sites/std/sections/SEO.tsx",
 ]);
 
 /**
@@ -90,6 +97,18 @@ async function resolveValue(
     return obj.data ? resolveValue(obj.data, routeParams) : null;
   }
 
+  // Multivariate flags: pick first variant's value (matcher evaluation TBD)
+  if (
+    resolveType === "website/flags/multivariate.ts" ||
+    resolveType === "website/flags/multivariate/section.ts"
+  ) {
+    const variants = obj.variants as Array<{ value: unknown; rule?: unknown }> | undefined;
+    if (variants && variants.length > 0) {
+      return resolveValue(variants[0].value, routeParams);
+    }
+    return null;
+  }
+
   // Check commerce loaders
   const commerceLoader = commerceLoaders[resolveType];
   if (commerceLoader) {
@@ -152,31 +171,46 @@ export async function resolveDecoPage(
     `[CMS] Matched "${page.name}" (pattern: ${page.path}) for path: ${targetPath}`
   );
 
+  // Resolve sections: may be an array or a multivariate/flag object
+  let rawSections: unknown[];
+  if (Array.isArray(page.sections)) {
+    rawSections = page.sections;
+  } else {
+    const resolved = await resolveValue(page.sections, params);
+    rawSections = Array.isArray(resolved) ? resolved : [];
+  }
+
   const resolvedSections: ResolvedSection[] = [];
 
-  for (const section of page.sections) {
+  for (const section of rawSections) {
     try {
       const resolved = await resolveValue(section, params);
       if (!resolved || typeof resolved !== "object") continue;
 
-      const obj = resolved as Record<string, unknown>;
-      if (!obj.__resolveType) continue;
+      // resolveValue may return an array (e.g. from nested multivariate)
+      const items = Array.isArray(resolved) ? resolved : [resolved];
 
-      const resolveType = obj.__resolveType as string;
+      for (const item of items) {
+        if (!item || typeof item !== "object") continue;
+        const obj = item as Record<string, unknown>;
+        if (!obj.__resolveType) continue;
 
-      const sectionLoader = getSection(resolveType);
-      if (!sectionLoader) {
-        console.warn(`[CMS] No component registered for: ${resolveType}`);
-        continue;
+        const resolveType = obj.__resolveType as string;
+
+        const sectionLoader = getSection(resolveType);
+        if (!sectionLoader) {
+          console.warn(`[CMS] No component registered for: ${resolveType}`);
+          continue;
+        }
+
+        const { __resolveType: _, ...props } = obj;
+
+        resolvedSections.push({
+          component: resolveType,
+          props: props as Record<string, unknown>,
+          key: resolveType,
+        });
       }
-
-      const { __resolveType: _, ...props } = obj;
-
-      resolvedSections.push({
-        component: resolveType,
-        props: props as Record<string, unknown>,
-        key: resolveType,
-      });
     } catch (e) {
       console.error(`[CMS] Error resolving section:`, e);
     }
