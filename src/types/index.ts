@@ -17,7 +17,7 @@ export type App<TManifest = any, TState = any, TDeps extends any[] = any[]> = {
 export type AppContext<TApp extends App = App> = FnContext<TApp["state"]>;
 
 export type Section<TProps = any> = {
-  Component: React.ComponentType<TProps>;
+  Component: import("react").ComponentType<TProps>;
   props: TProps;
 };
 

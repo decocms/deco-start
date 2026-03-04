@@ -1,5 +1,3 @@
-import { useEffect } from "react";
-
 interface LiveControlsProps {
   site?: string;
   page?: any;
