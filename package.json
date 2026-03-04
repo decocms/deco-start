@@ -10,6 +10,10 @@
     "./admin": "./src/admin/index.ts",
     "./hooks": "./src/hooks/index.ts",
     "./types": "./src/types/index.ts",
+    "./sdk": "./src/sdk/index.ts",
+    "./sdk/useScript": "./src/sdk/useScript.ts",
+    "./sdk/signal": "./src/sdk/signal.ts",
+    "./sdk/clx": "./src/sdk/clx.ts",
     "./scripts/generate-blocks": "./scripts/generate-blocks.ts",
     "./scripts/generate-schema": "./scripts/generate-schema.ts"
   },
@@ -17,7 +21,12 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit"
   },
-  "keywords": ["deco", "tanstack", "cms", "framework"],
+  "keywords": [
+    "deco",
+    "tanstack",
+    "cms",
+    "framework"
+  ],
   "author": "deco.cx",
   "license": "MIT",
   "repository": {
@@ -28,11 +37,12 @@
     "registry": "https://npm.pkg.github.com"
   },
   "peerDependencies": {
+    "@tanstack/store": ">=0.7.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
-  "dependencies": {},
   "devDependencies": {
+    "@tanstack/store": "^0.9.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "ts-morph": "^27.0.0",
