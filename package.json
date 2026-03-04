@@ -14,6 +14,10 @@
     "./sdk/useScript": "./src/sdk/useScript.ts",
     "./sdk/signal": "./src/sdk/signal.ts",
     "./sdk/clx": "./src/sdk/clx.ts",
+    "./sdk/useId": "./src/sdk/useId.ts",
+    "./sdk/cookie": "./src/sdk/cookie.ts",
+    "./sdk/analytics": "./src/sdk/analytics.ts",
+    "./types/widgets": "./src/types/widgets.ts",
     "./scripts/generate-blocks": "./scripts/generate-blocks.ts",
     "./scripts/generate-schema": "./scripts/generate-schema.ts"
   },
