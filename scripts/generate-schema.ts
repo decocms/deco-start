@@ -1,3 +1,4 @@
+#!/usr/bin/env tsx
 /**
  * Schema Generator for deco admin compatibility.
  *
@@ -5,25 +6,40 @@
  * and generates JSON Schema 7 definitions in the format expected by
  * the deco admin (/deco/meta endpoint).
  *
- * Usage: npx tsx scripts/generate-schema.ts
+ * Usage (from site root):
+ *   npx tsx node_modules/@decocms/start/scripts/generate-schema.ts [options]
+ *
+ * Options:
+ *   --namespace   Section namespace  (default: "site")
+ *   --site        Site name          (default: "storefront")
+ *   --version     Framework version  (default: "1.0.0")
+ *   --sections    Sections directory (default: "src/sections")
+ *   --out         Output file        (default: "src/server/admin/meta.gen.json")
+ *   --platform    Platform name      (default: "cloudflare")
  */
-import { Project, Type, Symbol as MorphSymbol, Node, SyntaxKind } from "ts-morph";
+import { Project, Type, Symbol as MorphSymbol, Node } from "ts-morph";
 import fs from "node:fs";
 import path from "node:path";
 
-const SITE_NAMESPACE = "site";
-const SITE_NAME = "storefront";
-const FRAMEWORK_VERSION = "1.164.0";
-
-interface SchemaDefinition {
-  type?: string;
-  properties?: Record<string, any>;
-  required?: string[];
-  title?: string;
-  description?: string;
-  [key: string]: any;
+// ---------------------------------------------------------------------------
+// CLI arg parsing
+// ---------------------------------------------------------------------------
+const argv = process.argv.slice(2);
+function arg(name: string, fallback: string): string {
+  const idx = argv.indexOf(`--${name}`);
+  return idx !== -1 && argv[idx + 1] ? argv[idx + 1] : fallback;
 }
 
+const SITE_NAMESPACE = arg("namespace", "site");
+const SITE_NAME = arg("site", "storefront");
+const FRAMEWORK_VERSION = arg("version", "1.0.0");
+const SECTIONS_REL = arg("sections", "src/sections");
+const OUT_REL = arg("out", "src/server/admin/meta.gen.json");
+const PLATFORM = arg("platform", "cloudflare");
+
+// ---------------------------------------------------------------------------
+// Interfaces
+// ---------------------------------------------------------------------------
 interface MetaResponse {
   major: number;
   version: string;
@@ -35,62 +51,45 @@ interface MetaResponse {
   cloudProvider: string;
 }
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 function toBase64(str: string): string {
   return Buffer.from(str).toString("base64").replace(/=+$/, "");
 }
 
 function typeToJsonSchema(type: Type, visited = new Set<string>()): any {
   const typeText = type.getText();
-
-  if (visited.has(typeText)) {
-    return { type: "object" };
-  }
+  if (visited.has(typeText)) return { type: "object" };
   visited.add(typeText);
 
   try {
     if (type.isString() || type.isStringLiteral()) {
-      if (type.isStringLiteral()) {
-        return { type: "string", const: type.getLiteralValue() };
-      }
-      return { type: "string" };
+      return type.isStringLiteral()
+        ? { type: "string", const: type.getLiteralValue() }
+        : { type: "string" };
     }
-
-    if (type.isNumber() || type.isNumberLiteral()) {
-      return { type: "number" };
-    }
-
-    if (type.isBoolean() || type.isBooleanLiteral()) {
-      return { type: "boolean" };
-    }
-
-    if (type.isNull() || type.isUndefined()) {
-      return { type: "null" };
-    }
+    if (type.isNumber() || type.isNumberLiteral()) return { type: "number" };
+    if (type.isBoolean() || type.isBooleanLiteral()) return { type: "boolean" };
+    if (type.isNull() || type.isUndefined()) return { type: "null" };
 
     if (type.isArray()) {
-      const elementType = type.getArrayElementType();
-      if (elementType) {
-        return { type: "array", items: typeToJsonSchema(elementType, new Set(visited)) };
-      }
-      return { type: "array" };
+      const el = type.getArrayElementType();
+      return el
+        ? { type: "array", items: typeToJsonSchema(el, new Set(visited)) }
+        : { type: "array" };
     }
 
     if (type.isUnion()) {
-      const unionTypes = type.getUnionTypes();
-      const nonNull = unionTypes.filter((t) => !t.isNull() && !t.isUndefined());
-      if (nonNull.length === 1 && nonNull.length < unionTypes.length) {
-        const inner = typeToJsonSchema(nonNull[0], new Set(visited));
-        return { ...inner, nullable: true };
+      const parts = type.getUnionTypes();
+      const nonNull = parts.filter((t) => !t.isNull() && !t.isUndefined());
+      if (nonNull.length === 1 && nonNull.length < parts.length) {
+        return { ...typeToJsonSchema(nonNull[0], new Set(visited)), nullable: true };
       }
       if (nonNull.every((t) => t.isStringLiteral())) {
-        return {
-          type: "string",
-          enum: nonNull.map((t) => t.getLiteralValue()),
-        };
+        return { type: "string", enum: nonNull.map((t) => t.getLiteralValue()) };
       }
-      return {
-        anyOf: nonNull.map((t) => typeToJsonSchema(t, new Set(visited))),
-      };
+      return { anyOf: nonNull.map((t) => typeToJsonSchema(t, new Set(visited))) };
     }
 
     if (type.isObject() || type.isInterface()) {
@@ -101,24 +100,20 @@ function typeToJsonSchema(type: Type, visited = new Set<string>()): any {
         const name = prop.getName();
         if (name.startsWith("_") || name === "@type") continue;
 
-        const propType = prop.getTypeAtLocation(prop.getValueDeclaration()!);
+        const decl = prop.getValueDeclaration();
+        if (!decl) continue;
+        const propType = prop.getTypeAtLocation(decl);
         const schema = typeToJsonSchema(propType, new Set(visited));
 
-        const jsdocTags = getJsDocTags(prop);
-        if (jsdocTags.title) schema.title = jsdocTags.title;
-        if (jsdocTags.description) schema.description = jsdocTags.description;
-        if (jsdocTags.format) schema.format = jsdocTags.format;
-        if (jsdocTags.hide) schema.hide = "true";
-
-        if (!schema.title) {
-          schema.title = name.charAt(0).toUpperCase() + name.slice(1);
-        }
+        const tags = getJsDocTags(prop);
+        if (tags.title) schema.title = tags.title;
+        if (tags.description) schema.description = tags.description;
+        if (tags.format) schema.format = tags.format;
+        if (tags.hide) schema.hide = "true";
+        if (!schema.title) schema.title = name.charAt(0).toUpperCase() + name.slice(1);
 
         properties[name] = schema;
-
-        if (!prop.isOptional()) {
-          required.push(name);
-        }
+        if (!prop.isOptional()) required.push(name);
       }
 
       const result: any = { type: "object", properties };
@@ -134,31 +129,40 @@ function typeToJsonSchema(type: Type, visited = new Set<string>()): any {
 
 function getJsDocTags(symbol: MorphSymbol): Record<string, string> {
   const tags: Record<string, string> = {};
-  const declarations = symbol.getDeclarations();
-
-  for (const decl of declarations) {
+  for (const decl of symbol.getDeclarations()) {
     const jsDocs = Node.isJSDocable(decl) ? decl.getJsDocs() : [];
     for (const doc of jsDocs) {
       const desc = doc.getDescription().trim();
       if (desc) tags.description = desc;
-
       for (const tag of doc.getTags()) {
-        const tagName = tag.getTagName();
-        const text = tag.getCommentText()?.trim() || "true";
-        tags[tagName] = text;
+        tags[tag.getTagName()] = tag.getCommentText()?.trim() || "true";
       }
     }
   }
-
   return tags;
 }
 
+function findTsxFiles(dir: string): string[] {
+  const results: string[] = [];
+  if (!fs.existsSync(dir)) return results;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) results.push(...findTsxFiles(full));
+    else if (entry.name.endsWith(".tsx") || entry.name.endsWith(".ts")) results.push(full);
+  }
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
 function generateMeta(): MetaResponse {
-  const projectRoot = process.cwd();
-  const sectionsDir = path.join(projectRoot, "src/sections");
+  const root = process.cwd();
+  const sectionsDir = path.resolve(root, SECTIONS_REL);
+  const srcDir = path.join(root, "src");
 
   const project = new Project({
-    tsConfigFilePath: path.join(projectRoot, "tsconfig.json"),
+    tsConfigFilePath: path.join(root, "tsconfig.json"),
     skipAddingFilesFromTsConfig: true,
   });
 
@@ -166,20 +170,16 @@ function generateMeta(): MetaResponse {
   const sectionBlocks: Record<string, any> = {};
   const sectionRootAnyOf: any[] = [];
 
-  // Add the "Resolvable" (select from saved) entry
   const resolvableKey = toBase64("Resolvable");
   definitions[resolvableKey] = {
     title: "Select from saved",
     type: "object",
     required: ["__resolveType"],
     additionalProperties: false,
-    properties: {
-      __resolveType: { type: "string" },
-    },
+    properties: { __resolveType: { type: "string" } },
   };
   sectionRootAnyOf.push({ $ref: `#/definitions/${resolvableKey}` });
 
-  // Scan sections directory
   if (!fs.existsSync(sectionsDir)) {
     console.error(`Sections directory not found: ${sectionsDir}`);
     process.exit(1);
@@ -189,35 +189,24 @@ function generateMeta(): MetaResponse {
   console.log(`Found ${sectionFiles.length} section files`);
 
   for (const filePath of sectionFiles) {
-    const relativePath = path.relative(path.join(projectRoot, "src"), filePath);
+    const relativePath = path.relative(srcDir, filePath);
     const blockKey = `${SITE_NAMESPACE}/${relativePath}`;
 
     try {
       const sourceFile = project.addSourceFileAtPath(filePath);
 
-      // Find the Props interface or type alias
       let propsSchema: any = null;
-
       const propsInterface = sourceFile.getInterface("Props");
-      if (propsInterface) {
-        propsSchema = typeToJsonSchema(propsInterface.getType());
-      }
+      if (propsInterface) propsSchema = typeToJsonSchema(propsInterface.getType());
 
       const propsTypeAlias = sourceFile.getTypeAlias("Props");
-      if (!propsSchema && propsTypeAlias) {
-        propsSchema = typeToJsonSchema(propsTypeAlias.getType());
-      }
+      if (!propsSchema && propsTypeAlias) propsSchema = typeToJsonSchema(propsTypeAlias.getType());
 
-      // If no Props found, create an empty schema
-      if (!propsSchema) {
-        propsSchema = { type: "object", properties: {} };
-      }
+      if (!propsSchema) propsSchema = { type: "object", properties: {} };
 
-      // Create the Props definition key
       const propsDefKey = toBase64(`file:///${filePath}`) + "@Props";
       definitions[propsDefKey] = propsSchema;
 
-      // Create the section definition (wraps Props with __resolveType)
       const sectionDefKey = toBase64(blockKey);
       definitions[sectionDefKey] = {
         title: blockKey,
@@ -225,25 +214,12 @@ function generateMeta(): MetaResponse {
         allOf: [{ $ref: `#/definitions/${propsDefKey}` }],
         required: ["__resolveType"],
         properties: {
-          __resolveType: {
-            type: "string",
-            enum: [blockKey],
-            default: blockKey,
-          },
+          __resolveType: { type: "string", enum: [blockKey], default: blockKey },
         },
       };
 
-      // Add to manifest
-      sectionBlocks[blockKey] = {
-        $ref: `#/definitions/${sectionDefKey}`,
-        namespace: SITE_NAMESPACE,
-      };
-
-      // Add to root anyOf
-      sectionRootAnyOf.push({
-        $ref: `#/definitions/${sectionDefKey}`,
-        inputSchema: `#/definitions/${propsDefKey}`,
-      });
+      sectionBlocks[blockKey] = { $ref: `#/definitions/${sectionDefKey}`, namespace: SITE_NAMESPACE };
+      sectionRootAnyOf.push({ $ref: `#/definitions/${sectionDefKey}`, inputSchema: `#/definitions/${propsDefKey}` });
 
       console.log(`  ✓ ${blockKey}`);
     } catch (e) {
@@ -251,62 +227,37 @@ function generateMeta(): MetaResponse {
     }
   }
 
-  // Build the full meta response
-  const meta: MetaResponse = {
+  const emptyAnyOf = { anyOf: [] as any[] };
+  return {
     major: 1,
     version: FRAMEWORK_VERSION,
     namespace: SITE_NAMESPACE,
     site: SITE_NAME,
-    manifest: {
-      blocks: {
-        sections: sectionBlocks,
-      },
-    },
+    manifest: { blocks: { sections: sectionBlocks } },
     schema: {
       definitions,
       root: {
         sections: { anyOf: sectionRootAnyOf },
-        loaders: { anyOf: [] },
-        actions: { anyOf: [] },
-        pages: { anyOf: [] },
-        handlers: { anyOf: [] },
-        matchers: { anyOf: [] },
-        flags: { anyOf: [] },
-        functions: { anyOf: [] },
-        apps: { anyOf: [] },
+        loaders: emptyAnyOf,
+        actions: emptyAnyOf,
+        pages: emptyAnyOf,
+        handlers: emptyAnyOf,
+        matchers: emptyAnyOf,
+        flags: emptyAnyOf,
+        functions: emptyAnyOf,
+        apps: emptyAnyOf,
       },
     },
-    platform: "cloudflare",
-    cloudProvider: "cloudflare",
+    platform: PLATFORM,
+    cloudProvider: PLATFORM,
   };
-
-  return meta;
 }
 
-function findTsxFiles(dir: string): string[] {
-  const files: string[] = [];
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
-
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...findTsxFiles(fullPath));
-    } else if (entry.name.endsWith(".tsx") || entry.name.endsWith(".ts")) {
-      files.push(fullPath);
-    }
-  }
-
-  return files;
-}
-
-// Run
 const meta = generateMeta();
-const outPath = path.join(process.cwd(), "src/server/admin/meta.gen.json");
+const outPath = path.resolve(process.cwd(), OUT_REL);
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, JSON.stringify(meta, null, 2));
 
 const defCount = Object.keys(meta.schema.definitions).length;
-const sectionCount = Object.keys(meta.manifest.blocks.sections || {}).length;
-console.log(
-  `\nGenerated schema: ${defCount} definitions, ${sectionCount} sections → ${path.relative(process.cwd(), outPath)}`
-);
+const secCount = Object.keys(meta.manifest.blocks.sections || {}).length;
+console.log(`\nGenerated schema: ${defCount} definitions, ${secCount} sections → ${path.relative(process.cwd(), outPath)}`);
