@@ -22,6 +22,7 @@
     "./sdk/cacheHeaders": "./src/sdk/cacheHeaders.ts",
     "./sdk/invoke": "./src/sdk/invoke.ts",
     "./sdk/instrumentedFetch": "./src/sdk/instrumentedFetch.ts",
+    "./sdk/workerEntry": "./src/sdk/workerEntry.ts",
     "./middleware": "./src/middleware/index.ts",
     "./matchers/posthog": "./src/matchers/posthog.ts",
     "./types/widgets": "./src/types/widgets.ts",

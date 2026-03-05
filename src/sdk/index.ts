@@ -6,6 +6,7 @@ export { getCookie, setCookie, deleteCookie, getServerSideCookie, decodeCookie }
 export { useSendEvent, ANALYTICS_SCRIPT, gtmScript, type DataEventParams } from "./analytics";
 export { createCachedLoader, clearLoaderCache, getLoaderCacheStats, type CachePolicy, type CachedLoaderOptions } from "./cachedLoader";
 export { createServerTimings, type ServerTimings } from "./serverTimings";
-export { cacheHeaders, detectCacheProfile, type CacheProfile, type CacheHeadersConfig } from "./cacheHeaders";
+export { cacheHeaders, getCacheProfileConfig, routeCacheDefaults, detectCacheProfile, registerCachePattern, type CacheProfile, type CacheHeadersConfig } from "./cacheHeaders";
+export { createDecoWorkerEntry, type DecoWorkerEntryOptions } from "./workerEntry";
 export { createInvokeProxy, batchInvoke, invokeQueryOptions, type InvokeProxy } from "./invoke";
 export { createInstrumentedFetch, instrumentFetch, type FetchInstrumentationOptions, type FetchMetrics } from "./instrumentedFetch";
