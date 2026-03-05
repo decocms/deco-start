@@ -215,6 +215,9 @@ async function resolveValue(
   if (commerceLoader) {
     const { __resolveType, ...loaderProps } = obj;
     const resolvedProps = await resolveProps(loaderProps, routeParams, matcherCtx);
+    if (matcherCtx?.path) {
+      (resolvedProps as Record<string, unknown>).__pagePath = matcherCtx.path;
+    }
     try {
       return await commerceLoader(resolvedProps);
     } catch (error) {
