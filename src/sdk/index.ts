@@ -4,3 +4,8 @@ export { clx } from "./clx";
 export { useId } from "./useId";
 export { getCookie, setCookie, deleteCookie, getServerSideCookie, decodeCookie } from "./cookie";
 export { useSendEvent, ANALYTICS_SCRIPT, gtmScript, type DataEventParams } from "./analytics";
+export { createCachedLoader, clearLoaderCache, getLoaderCacheStats, type CachePolicy, type CachedLoaderOptions } from "./cachedLoader";
+export { createServerTimings, type ServerTimings } from "./serverTimings";
+export { cacheHeaders, detectCacheProfile, type CacheProfile, type CacheHeadersConfig } from "./cacheHeaders";
+export { createInvokeProxy, batchInvoke, invokeQueryOptions, type InvokeProxy } from "./invoke";
+export { createInstrumentedFetch, instrumentFetch, type FetchInstrumentationOptions, type FetchMetrics } from "./instrumentedFetch";

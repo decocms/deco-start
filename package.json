@@ -17,6 +17,13 @@
     "./sdk/useId": "./src/sdk/useId.ts",
     "./sdk/cookie": "./src/sdk/cookie.ts",
     "./sdk/analytics": "./src/sdk/analytics.ts",
+    "./sdk/cachedLoader": "./src/sdk/cachedLoader.ts",
+    "./sdk/serverTimings": "./src/sdk/serverTimings.ts",
+    "./sdk/cacheHeaders": "./src/sdk/cacheHeaders.ts",
+    "./sdk/invoke": "./src/sdk/invoke.ts",
+    "./sdk/instrumentedFetch": "./src/sdk/instrumentedFetch.ts",
+    "./middleware": "./src/middleware/index.ts",
+    "./matchers/posthog": "./src/matchers/posthog.ts",
     "./types/widgets": "./src/types/widgets.ts",
     "./scripts/generate-blocks": "./scripts/generate-blocks.ts",
     "./scripts/generate-schema": "./scripts/generate-schema.ts"

@@ -1,6 +1,7 @@
-import { Suspense, lazy, type ComponentType } from "react";
+import { Suspense, lazy, createElement, type ComponentType, type ReactNode } from "react";
 import type { ResolvedSection } from "../cms/resolve";
-import { getSectionRegistry } from "../cms/registry";
+import { getSectionRegistry, getSectionOptions } from "../cms/registry";
+import { SectionErrorBoundary } from "./SectionErrorFallback";
 
 type LazyComponent = ReturnType<typeof lazy>;
 
@@ -16,15 +17,19 @@ function getLazyComponent(key: string) {
   return lazyCache.get(key)!;
 }
 
-function SectionFallback() {
+function DefaultSectionFallback() {
   return <div className="w-full h-48 bg-base-200 animate-pulse rounded" />;
 }
 
 interface Props {
   sections: ResolvedSection[];
+  /** Global fallback for loading states. Per-section fallbacks from the registry take priority. */
+  loadingFallback?: ReactNode;
+  /** Global fallback for error states. Per-section error fallbacks take priority. */
+  errorFallback?: ReactNode;
 }
 
-export function DecoPageRenderer({ sections }: Props) {
+export function DecoPageRenderer({ sections, loadingFallback, errorFallback }: Props) {
   return (
     <>
       {sections.map((section, index) => {
@@ -32,18 +37,34 @@ export function DecoPageRenderer({ sections }: Props) {
 
         if (!LazyComponent) return null;
 
+        const options = getSectionOptions(section.component);
+        const fallback = options?.loadingFallback
+          ? createElement(options.loadingFallback)
+          : loadingFallback ?? <DefaultSectionFallback />;
+
+        const errFallback = options?.errorFallback
+          ? createElement(options.errorFallback, { error: new Error("") })
+          : errorFallback;
+
+        const sectionId = section.key
+          .replace(/\//g, "-")
+          .replace(/\.tsx$/, "")
+          .replace(/^site-sections-/, "");
+
         return (
           <section
             key={`${section.key}-${index}`}
-            id={section.key
-              .replace(/\//g, "-")
-              .replace(/\.tsx$/, "")
-              .replace(/^site-sections-/, "")}
+            id={sectionId}
             data-manifest-key={section.key}
           >
-            <Suspense fallback={<SectionFallback />}>
-              <LazyComponent {...section.props} />
-            </Suspense>
+            <SectionErrorBoundary
+              sectionKey={section.key}
+              fallback={errFallback}
+            >
+              <Suspense fallback={fallback}>
+                <LazyComponent {...section.props} />
+              </Suspense>
+            </SectionErrorBoundary>
           </section>
         );
       })}
