@@ -474,7 +474,6 @@ export function createDecoWorkerEntry(
         status: 200,
         headers: {
           "Content-Type": "text/html; charset=utf-8",
-          "X-Deco-Handler": "admin-preview",
           ...admin.corsHeaders(request),
           ...ADMIN_NO_CACHE,
         },
