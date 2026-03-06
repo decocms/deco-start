@@ -4,16 +4,12 @@ import { getSection } from "../cms/registry";
 import { loadBlocks, withBlocksOverride } from "../cms/loader";
 import { resolveValue } from "../cms/resolve";
 import { LIVE_CONTROLS_SCRIPT } from "./liveControls";
+import { getRenderShellConfig } from "./setup";
 
-let cssHref: string | null = null;
-let fontHrefs: string[] = [];
-
-export function setRenderShell(opts: { css?: string; fonts?: string[] }) {
-  if (opts.css) cssHref = opts.css;
-  if (opts.fonts) fontHrefs = opts.fonts;
-}
+export { setRenderShell } from "./setup";
 
 function wrapInHtmlShell(sectionHtml: string): string {
+  const { cssHref, fontHrefs } = getRenderShellConfig();
   const stylesheets = [
     ...fontHrefs.map((href) => `<link rel="stylesheet" href="${href}" />`),
     cssHref ? `<link rel="stylesheet" href="${cssHref}" />` : "",

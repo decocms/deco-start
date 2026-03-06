@@ -71,7 +71,27 @@ export interface SegmentKey {
   flags?: string[];
 }
 
+/**
+ * Admin route handlers injected by the site's worker-entry.ts.
+ * Kept as a runtime option so the imports only exist in the SSR entry
+ * (not pulled into the client Vite build).
+ */
+export interface AdminHandlers {
+  handleMeta: (request: Request) => Response;
+  handleDecofileRead: () => Response;
+  handleDecofileReload: (request: Request) => Response | Promise<Response>;
+  handleRender: (request: Request) => Response | Promise<Response>;
+  corsHeaders: (request: Request) => Record<string, string>;
+}
+
 export interface DecoWorkerEntryOptions {
+  /**
+   * Admin route handlers (/live/_meta, /.decofile, /live/previews).
+   * Pass the handlers from `@decocms/start/admin` here.
+   * If not provided, admin routes are not handled.
+   */
+  admin?: AdminHandlers;
+
   /**
    * Override the default cache profile detection.
    * Return `null` to fall through to the built-in detector.
@@ -134,6 +154,12 @@ export interface DecoWorkerEntryOptions {
   extraBypassPaths?: string[];
 
   /**
+   * Custom HTML shell for the `/live/previews` iframe page.
+   * If not provided, a default shell with postMessage handling is used.
+   */
+  previewShell?: string;
+
+  /**
    * Regex for detecting fingerprinted static assets (content-hashed filenames).
    * Matched paths get `immutable, max-age=31536000`.
    * @default /\/_build\/assets\/.*-[a-zA-Z0-9]{8,}\.\w+$/
@@ -153,6 +179,37 @@ export interface DecoWorkerEntryOptions {
 // Constants
 // ---------------------------------------------------------------------------
 
+const DEFAULT_PREVIEW_SHELL = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Preview</title>
+  <script>
+  (function() {
+    if (window.__DECO_LIVE_CONTROLS__) return;
+    window.__DECO_LIVE_CONTROLS__ = true;
+    addEventListener("message", function(event) {
+      var data = event.data;
+      if (!data || typeof data !== "object") return;
+      switch (data.type) {
+        case "editor::inject":
+          if (data.args && data.args.script) {
+            try { eval(data.args.script); } catch(e) { console.error("[deco] inject error:", e); }
+          }
+          break;
+      }
+    });
+  })();
+  </script>
+</head>
+<body>
+  <div id="preview-root" style="display:flex;align-items:center;justify-content:center;min-height:100vh;font-family:system-ui;color:#666;">
+    Loading preview...
+  </div>
+</body>
+</html>`;
+
 const MOBILE_RE = /mobile|android|iphone|ipad|ipod/i;
 const ONE_YEAR = 31536000;
 
@@ -160,6 +217,8 @@ const DEFAULT_BYPASS_PATHS = [
   "/_server",
   "/_build",
   "/deco/",
+  "/live/",
+  "/.decofile",
 ];
 
 const FINGERPRINTED_ASSET_RE =
@@ -189,6 +248,7 @@ export function createDecoWorkerEntry(
   ): Promise<Response>;
 } {
   const {
+    admin,
     detectProfile: customDetect,
     deviceSpecificKeys = true,
     buildSegment,
@@ -197,6 +257,7 @@ export function createDecoWorkerEntry(
     extraBypassPaths = [],
     fingerprintedAssetPattern = FINGERPRINTED_ASSET_RE,
     stripTrackingParams: shouldStripTracking = true,
+    previewShell = DEFAULT_PREVIEW_SHELL,
   } = options;
 
   const allBypassPaths = [
@@ -338,6 +399,67 @@ export function createDecoWorkerEntry(
     return Response.json({ purged, total: purged.length });
   }
 
+  // -- Admin route handler ---------------------------------------------------
+
+  function addCors(response: Response, request: Request): Response {
+    if (!admin) return response;
+    const cors = admin.corsHeaders(request);
+    const resp = new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: new Headers(response.headers),
+    });
+    for (const [k, v] of Object.entries(cors)) {
+      resp.headers.set(k, v);
+    }
+    return resp;
+  }
+
+  async function tryAdminRoute(request: Request): Promise<Response | null> {
+    if (!admin) return null;
+
+    const url = new URL(request.url);
+    const { pathname } = url;
+    const method = request.method;
+
+    if (pathname === "/live/_meta") {
+      if (method === "OPTIONS") {
+        return new Response(null, { status: 204, headers: admin.corsHeaders(request) });
+      }
+      return addCors(admin.handleMeta(request), request);
+    }
+
+    if (pathname === "/.decofile") {
+      if (method === "OPTIONS") {
+        return new Response(null, { status: 204, headers: admin.corsHeaders(request) });
+      }
+      if (method === "POST") {
+        return addCors(await admin.handleDecofileReload(request), request);
+      }
+      return addCors(admin.handleDecofileRead(), request);
+    }
+
+    if (pathname === "/deco/_liveness") {
+      return new Response("OK", { status: 200, headers: { "Content-Type": "text/plain" } });
+    }
+
+    if (pathname === "/live/previews" && method === "GET") {
+      return new Response(previewShell, {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8", ...admin.corsHeaders(request) },
+      });
+    }
+
+    if (pathname.startsWith("/live/previews/")) {
+      if (method === "OPTIONS") {
+        return new Response(null, { status: 204, headers: admin.corsHeaders(request) });
+      }
+      return addCors(await admin.handleRender(request), request);
+    }
+
+    return null;
+  }
+
   // -- Main fetch handler -----------------------------------------------------
 
   return {
@@ -347,6 +469,10 @@ export function createDecoWorkerEntry(
       ctx: WorkerExecutionContext,
     ): Promise<Response> {
       const url = new URL(request.url);
+
+      // Admin routes (/_meta, /.decofile, /live/previews) — always handled first
+      const adminResponse = await tryAdminRoute(request);
+      if (adminResponse) return adminResponse;
 
       // Purge endpoint
       if (url.pathname === "/_cache/purge" && request.method === "POST") {

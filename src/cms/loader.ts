@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import * as asyncHooks from "node:async_hooks";
 
 export type Resolvable = {
   __resolveType?: string;
@@ -14,7 +14,18 @@ export type DecoPage = {
 
 let blockData: Record<string, unknown> = {};
 
-const blocksOverrideStorage = new AsyncLocalStorage<Record<string, unknown>>();
+interface ALSLike<T> {
+  getStore(): T | undefined;
+  run<R>(store: T, fn: () => R): R;
+}
+
+// AsyncLocalStorage might not be available in client builds (Vite replaces
+// node:async_hooks with an empty shim). The namespace import avoids Rollup's
+// named-export validation, and the runtime check prevents construction errors.
+const ALS = (asyncHooks as any).AsyncLocalStorage;
+const blocksOverrideStorage: ALSLike<Record<string, unknown>> = ALS
+  ? new ALS()
+  : { getStore: () => undefined, run: (_s: any, fn: any) => fn() };
 
 /**
  * Set the blocks data. Called by the site at startup with the generated blocks.

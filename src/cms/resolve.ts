@@ -218,6 +218,9 @@ export async function resolveValue(
     if (matcherCtx?.path) {
       (resolvedProps as Record<string, unknown>).__pagePath = matcherCtx.path;
     }
+    if (matcherCtx?.url) {
+      (resolvedProps as Record<string, unknown>).__pageUrl = matcherCtx.url;
+    }
     try {
       return await commerceLoader(resolvedProps);
     } catch (error) {
