@@ -42,7 +42,7 @@ export function buildDecoState(request: Request, site?: string): DecoState {
   const debug = url.searchParams.has("__d") || isAdmin;
 
   return {
-    site: site || process.env.DECO_SITE || "storefront",
+    site: site || (typeof globalThis.process !== "undefined" ? globalThis.process.env?.DECO_SITE : undefined) || "storefront",
     timings: createServerTimings(),
     flags: [],
     isAdmin,

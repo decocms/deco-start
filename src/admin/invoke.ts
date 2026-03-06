@@ -1,14 +1,20 @@
 /**
  * Handles /deco/invoke -- executes a loader or action by key.
  * Commerce loaders must be registered via registerCommerceLoader() before use.
+ *
+ * Loaders receive `(props, request)` so they can access cookies, headers,
+ * auth tokens, etc. from the original HTTP request.
  */
 
-// Access the commerce loaders that were registered by the site/apps
-let getRegisteredLoaders: () => Record<string, (props: any) => Promise<any>> = () => ({});
+export type InvokeLoader = (props: any, request: Request) => Promise<any>;
 
-export function setInvokeLoaders(getter: () => Record<string, (props: any) => Promise<any>>) {
+let getRegisteredLoaders: () => Record<string, InvokeLoader> = () => ({});
+
+export function setInvokeLoaders(getter: () => Record<string, InvokeLoader>) {
   getRegisteredLoaders = getter;
 }
+
+const JSON_HEADERS = { "Content-Type": "application/json" } as const;
 
 export async function handleInvoke(request: Request): Promise<Response> {
   const url = new URL(request.url);
@@ -32,20 +38,20 @@ export async function handleInvoke(request: Request): Promise<Response> {
     if (!loader) {
       return new Response(JSON.stringify({ error: `Unknown loader: ${invokeKey}` }), {
         status: 404,
-        headers: { "Content-Type": "application/json" },
+        headers: JSON_HEADERS,
       });
     }
 
     try {
-      const result = await loader(body);
+      const result = await loader(body, request);
       return new Response(JSON.stringify(result), {
         status: 200,
-        headers: { "Content-Type": "application/json" },
+        headers: JSON_HEADERS,
       });
     } catch (error) {
       return new Response(
         JSON.stringify({ error: (error as Error).message }),
-        { status: 500, headers: { "Content-Type": "application/json" } }
+        { status: 500, headers: JSON_HEADERS },
       );
     }
   }
@@ -60,7 +66,7 @@ export async function handleInvoke(request: Request): Promise<Response> {
 
       if (loader) {
         try {
-          results[key] = await loader(payload);
+          results[key] = await loader(payload, request);
         } catch (error) {
           results[key] = { error: (error as Error).message };
         }
@@ -71,12 +77,12 @@ export async function handleInvoke(request: Request): Promise<Response> {
 
     return new Response(JSON.stringify(results), {
       status: 200,
-      headers: { "Content-Type": "application/json" },
+      headers: JSON_HEADERS,
     });
   }
 
   return new Response(JSON.stringify({ error: "No invoke key specified" }), {
     status: 400,
-    headers: { "Content-Type": "application/json" },
+    headers: JSON_HEADERS,
   });
 }

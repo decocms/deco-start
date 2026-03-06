@@ -155,7 +155,7 @@ async function resolveProps(
   return Object.fromEntries(resolvedEntries);
 }
 
-async function resolveValue(
+export async function resolveValue(
   value: unknown,
   routeParams?: Record<string, string>,
   matcherCtx?: MatcherContext

@@ -1,5 +1,5 @@
-export { loadBlocks, setBlocks, findPageByPath, getAllPages } from "./loader";
-export { resolveDecoPage, registerCommerceLoader, registerCommerceLoaders, registerMatcher, onBeforeResolve } from "./resolve";
+export { loadBlocks, setBlocks, findPageByPath, getAllPages, withBlocksOverride } from "./loader";
+export { resolveDecoPage, resolveValue, registerCommerceLoader, registerCommerceLoaders, registerMatcher, onBeforeResolve } from "./resolve";
 export { getSection, getSectionOptions, registerSection, registerSections, listRegisteredSections, getSectionRegistry } from "./registry";
 export type { Resolvable, DecoPage } from "./loader";
 export type { ResolvedSection, CommerceLoader, MatcherContext } from "./resolve";

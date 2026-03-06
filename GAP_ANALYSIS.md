@@ -195,7 +195,14 @@
 @decocms/start
 ├── src/
 │   ├── cms/           # Block storage, page routing, resolution, registry
-│   ├── admin/         # Admin protocol endpoints (meta, decofile, invoke, render)
+│   ├── admin/         # Admin protocol endpoints (meta, decofile, invoke, render, schema composition)
+│   │   ├── meta.ts    # /deco/meta endpoint, setMetaData() calls composeMeta()
+│   │   ├── schema.ts  # MetaResponse type, composeMeta(), framework block schemas (pages)
+│   │   ├── render.ts  # /deco/render endpoint, section + page rendering
+│   │   ├── decofile.ts# /deco/decofile read/reload
+│   │   ├── invoke.ts  # /deco/invoke endpoint
+│   │   ├── cors.ts    # CORS + admin origin checks
+│   │   └── liveControls.ts # Admin iframe bridge script
 │   ├── hooks/         # DecoPageRenderer, SectionErrorBoundary, LiveControls
 │   ├── middleware/     # DecoState, liveness, Server-Timing, CORS, observability
 │   ├── matchers/      # PostHog feature flag bridge

@@ -31,6 +31,7 @@ import {
   detectCacheProfile,
   type CacheProfile,
 } from "./cacheHeaders";
+import { cleanPathForCacheKey } from "./urlUtils";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -53,6 +54,23 @@ interface ServerEntry {
   ): Response | Promise<Response>;
 }
 
+/**
+ * Segment dimensions used to differentiate cache entries.
+ *
+ * The workerEntry calls `buildSegment` (if provided) to extract these
+ * from the request. Two requests with the same SegmentKey share a
+ * cache entry; different segments get different cached responses.
+ */
+export interface SegmentKey {
+  device: "mobile" | "desktop";
+  /** Whether the user is logged in (e.g., has a valid auth cookie). */
+  loggedIn?: boolean;
+  /** Commerce sales channel / price list. */
+  salesChannel?: string;
+  /** Sorted list of active A/B flag names for cache cohort splitting. */
+  flags?: string[];
+}
+
 export interface DecoWorkerEntryOptions {
   /**
    * Override the default cache profile detection.
@@ -66,6 +84,34 @@ export interface DecoWorkerEntryOptions {
    * @default true
    */
   deviceSpecificKeys?: boolean;
+
+  /**
+   * Build a full segment key from the incoming request.
+   *
+   * When provided, the segment key replaces the simple device-only
+   * cache key with a richer key that differentiates by login state,
+   * sales channel, and A/B flags.
+   *
+   * Logged-in segments (`loggedIn: true`) automatically bypass the
+   * cache (the response is fetched fresh every time).
+   *
+   * @example
+   * ```ts
+   * import { extractVtexContext } from "@decocms/apps/vtex/middleware";
+   *
+   * createDecoWorkerEntry(serverEntry, {
+   *   buildSegment: (request) => {
+   *     const vtx = extractVtexContext(request);
+   *     return {
+   *       device: /mobile|android|iphone/i.test(request.headers.get("user-agent") ?? "") ? "mobile" : "desktop",
+   *       loggedIn: vtx.isLoggedIn,
+   *       salesChannel: vtx.salesChannel,
+   *     };
+   *   },
+   * });
+   * ```
+   */
+  buildSegment?: (request: Request) => SegmentKey;
 
   /**
    * Environment variable name holding the cache purge token.
@@ -93,6 +139,14 @@ export interface DecoWorkerEntryOptions {
    * @default /\/_build\/assets\/.*-[a-zA-Z0-9]{8,}\.\w+$/
    */
   fingerprintedAssetPattern?: RegExp;
+
+  /**
+   * Whether to strip UTM and tracking params from cache keys.
+   * Two requests differing only in utm_source, fbclid, etc.
+   * will share the same cache entry.
+   * @default true
+   */
+  stripTrackingParams?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -137,10 +191,12 @@ export function createDecoWorkerEntry(
   const {
     detectProfile: customDetect,
     deviceSpecificKeys = true,
+    buildSegment,
     purgeTokenEnv = "PURGE_TOKEN",
     bypassPaths,
     extraBypassPaths = [],
     fingerprintedAssetPattern = FINGERPRINTED_ASSET_RE,
+    stripTrackingParams: shouldStripTracking = true,
   } = options;
 
   const allBypassPaths = [
@@ -175,15 +231,37 @@ export function createDecoWorkerEntry(
     return detectCacheProfile(url);
   }
 
-  function buildCacheKey(request: Request): Request {
-    if (!deviceSpecificKeys) return request;
+  function hashSegment(seg: SegmentKey): string {
+    const parts: string[] = [seg.device];
+    if (seg.loggedIn) parts.push("auth");
+    if (seg.salesChannel) parts.push(`sc=${seg.salesChannel}`);
+    if (seg.flags?.length) parts.push(`f=${seg.flags.sort().join(",")}`);
+    return parts.join("|");
+  }
 
+  function buildCacheKey(request: Request): { key: Request; segment?: SegmentKey } {
     const url = new URL(request.url);
-    const device = MOBILE_RE.test(request.headers.get("user-agent") ?? "")
-      ? "mobile"
-      : "desktop";
-    url.searchParams.set("__cf_device", device);
-    return new Request(url.toString(), { method: "GET" });
+
+    if (shouldStripTracking) {
+      const cleanPath = cleanPathForCacheKey(url.toString());
+      const cleanUrl = new URL(cleanPath, url.origin);
+      url.search = cleanUrl.search;
+    }
+
+    if (buildSegment) {
+      const segment = buildSegment(request);
+      url.searchParams.set("__seg", hashSegment(segment));
+      return { key: new Request(url.toString(), { method: "GET" }), segment };
+    }
+
+    if (deviceSpecificKeys) {
+      const device = MOBILE_RE.test(request.headers.get("user-agent") ?? "")
+        ? "mobile"
+        : "desktop";
+      url.searchParams.set("__cf_device", device);
+    }
+
+    return { key: new Request(url.toString(), { method: "GET" }) };
   }
 
   // -- Purge handler ----------------------------------------------------------
@@ -220,17 +298,39 @@ export function createDecoWorkerEntry(
     const baseUrl = new URL(request.url).origin;
     const purged: string[] = [];
 
-    for (const p of paths) {
-      const devices = deviceSpecificKeys
-        ? (["mobile", "desktop"] as const)
-        : ([null] as const);
+    // If using segment-based keys, purge requires known segment combos.
+    // For simplicity, purge common combos: both devices, default sales channel.
+    const segments: SegmentKey[] = buildSegment
+      ? [
+          { device: "mobile" },
+          { device: "desktop" },
+          { device: "mobile", salesChannel: "1" },
+          { device: "desktop", salesChannel: "1" },
+        ]
+      : [];
 
-      for (const device of devices) {
-        const url = new URL(p, baseUrl);
-        if (device) url.searchParams.set("__cf_device", device);
-        const key = new Request(url.toString(), { method: "GET" });
-        if (await cache.delete(key)) {
-          purged.push(device ? `${p} (${device})` : p);
+    for (const p of paths) {
+      if (buildSegment && segments.length > 0) {
+        for (const seg of segments) {
+          const url = new URL(p, baseUrl);
+          url.searchParams.set("__seg", hashSegment(seg));
+          const key = new Request(url.toString(), { method: "GET" });
+          if (await cache.delete(key)) {
+            purged.push(`${p} (${hashSegment(seg)})`);
+          }
+        }
+      } else {
+        const devices = deviceSpecificKeys
+          ? (["mobile", "desktop"] as const)
+          : ([null] as const);
+
+        for (const device of devices) {
+          const url = new URL(p, baseUrl);
+          if (device) url.searchParams.set("__cf_device", device);
+          const key = new Request(url.toString(), { method: "GET" });
+          if (await cache.delete(key)) {
+            purged.push(device ? `${p} (${device})` : p);
+          }
         }
       }
     }
@@ -290,14 +390,30 @@ export function createDecoWorkerEntry(
         return origin;
       }
 
-      // Cacheable request — check Cache API
+      // Cacheable request — build segment-aware cache key
+      const { key: cacheKey, segment } = buildCacheKey(request);
+
+      // Logged-in users always bypass the cache (personalized content)
+      if (segment?.loggedIn) {
+        const origin = await serverEntry.fetch(request, env, ctx);
+        const resp = new Response(origin.body, origin);
+        resp.headers.set(
+          "Cache-Control",
+          "private, no-cache, no-store, must-revalidate",
+        );
+        resp.headers.set("X-Cache", "BYPASS");
+        resp.headers.set("X-Cache-Reason", "logged-in");
+        return resp;
+      }
+
+      // Check Cache API
       const cache = (caches as unknown as { default: Cache }).default;
-      const cacheKey = buildCacheKey(request);
 
       const cached = await cache.match(cacheKey);
       if (cached) {
         const hit = new Response(cached.body, cached);
         hit.headers.set("X-Cache", "HIT");
+        if (segment) hit.headers.set("X-Cache-Segment", hashSegment(segment));
         return hit;
       }
 
@@ -336,6 +452,7 @@ export function createDecoWorkerEntry(
       }
       toReturn.headers.set("X-Cache", "MISS");
       toReturn.headers.set("X-Cache-Profile", profile);
+      if (segment) toReturn.headers.set("X-Cache-Segment", hashSegment(segment));
 
       // For Cache API storage, use sMaxAge as max-age since the Cache API
       // ignores s-maxage and only respects max-age for TTL decisions.

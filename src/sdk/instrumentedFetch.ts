@@ -38,7 +38,7 @@ export interface FetchMetrics {
 }
 
 const isDev =
-  typeof process !== "undefined" && process.env.NODE_ENV === "development";
+  typeof globalThis.process !== "undefined" && globalThis.process.env?.NODE_ENV === "development";
 
 /**
  * Creates a fetch wrapper that instruments all requests for a given integration.

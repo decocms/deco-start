@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 export type Resolvable = {
   __resolveType?: string;
   [key: string]: unknown;
@@ -12,6 +14,8 @@ export type DecoPage = {
 
 let blockData: Record<string, unknown> = {};
 
+const blocksOverrideStorage = new AsyncLocalStorage<Record<string, unknown>>();
+
 /**
  * Set the blocks data. Called by the site at startup with the generated blocks.
  */
@@ -19,8 +23,31 @@ export function setBlocks(blocks: Record<string, unknown>) {
   blockData = blocks;
 }
 
+/**
+ * Load the current blocks. If running inside a `withBlocksOverride` scope
+ * (admin preview), the override is merged on top of the base blocks.
+ */
 export function loadBlocks(): Record<string, unknown> {
+  const override = blocksOverrideStorage.getStore();
+  if (override) {
+    return { ...blockData, ...override };
+  }
   return blockData;
+}
+
+/**
+ * Run a function with a temporary blocks overlay.
+ *
+ * Used by admin preview: the admin sends a partial decofile (only the
+ * blocks that changed), and `loadBlocks()` returns the merged result
+ * for the duration of the render. Other concurrent requests are not
+ * affected (AsyncLocalStorage is per-request scoped).
+ */
+export function withBlocksOverride<T>(
+  override: Record<string, unknown>,
+  fn: () => T,
+): T {
+  return blocksOverrideStorage.run(override, fn);
 }
 
 export function getAllPages(): Array<{ key: string; page: DecoPage }> {

@@ -1,0 +1,651 @@
+/**
+ * Framework-level schema definitions and runtime meta composition.
+ *
+ * The schema generator (scripts/generate-schema.ts) only produces section
+ * schemas from site TypeScript files. Framework-managed block types -- pages,
+ * loaders, matchers, flags -- have their schemas defined here and injected
+ * at runtime via composeMeta().
+ *
+ * This keeps the generator focused on site-specific concerns while the
+ * framework owns the schemas for its own block types.
+ */
+
+export interface MetaResponse {
+  major: number;
+  version: string;
+  namespace: string;
+  site: string;
+  manifest: {
+    blocks: Record<string, Record<string, { $ref: string; namespace?: string }>>;
+  };
+  schema: {
+    definitions: Record<string, any>;
+    root: Record<string, any>;
+  };
+  platform?: string;
+  cloudProvider?: string;
+  etag?: string;
+}
+
+/**
+ * Standard base64 encoding that matches the browser's btoa().
+ * The admin uses btoa(resolveType) in some code paths to construct
+ * definition refs, so our keys MUST include the = padding.
+ */
+function toBase64(str: string): string {
+  if (typeof btoa === "function") return btoa(str);
+  return Buffer.from(str).toString("base64");
+}
+
+// The admin's deRefUntil and ArrayFieldTemplate look for the LITERAL
+// string "Resolvable" (not base64-encoded). Both keys are needed:
+// - literal for admin detection
+// - base64 for backward compat with any code that does btoa("Resolvable")
+const RESOLVABLE_LITERAL_KEY = "Resolvable";
+const RESOLVABLE_B64_KEY = toBase64("Resolvable");
+
+function buildResolvableDefinition() {
+  return {
+    title: "Select from saved",
+    type: "object",
+    required: ["__resolveType"],
+    additionalProperties: true,
+    properties: { __resolveType: { type: "string" } },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Loader definitions
+// ---------------------------------------------------------------------------
+
+interface LoaderConfig {
+  key: string;
+  title: string;
+  namespace: string;
+  propsSchema: Record<string, any>;
+}
+
+const KNOWN_LOADERS: LoaderConfig[] = [
+  {
+    key: "vtex/loaders/intelligentSearch/productList.ts",
+    title: "VTEX Product List",
+    namespace: "vtex",
+    propsSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", title: "Search Query" },
+        count: { type: "number", title: "Count" },
+        sort: { type: "string", title: "Sort" },
+        collection: { type: "string", title: "Collection ID" },
+        hideUnavailableItems: { type: "boolean", title: "Hide Unavailable Items" },
+        similars: { type: "boolean", title: "Include Similars" },
+      },
+    },
+  },
+  {
+    key: "vtex/loaders/intelligentSearch/productListingPage.ts",
+    title: "VTEX Product Listing Page",
+    namespace: "vtex",
+    propsSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", title: "Query" },
+        count: { type: "number", title: "Count" },
+        page: { type: "number", title: "Page" },
+        sort: { type: "string", title: "Sort" },
+        slug: { type: "string", title: "Slug" },
+      },
+    },
+  },
+  {
+    key: "vtex/loaders/intelligentSearch/suggestions.ts",
+    title: "VTEX Suggestions",
+    namespace: "vtex",
+    propsSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", title: "Query" },
+        count: { type: "number", title: "Count" },
+      },
+    },
+  },
+  {
+    key: "vtex/loaders/legacy/productList.ts",
+    title: "VTEX Legacy Product List",
+    namespace: "vtex",
+    propsSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", title: "Query" },
+        count: { type: "number", title: "Count" },
+        collection: { type: "string", title: "Collection" },
+      },
+    },
+  },
+  {
+    key: "vtex/loaders/legacy/relatedProductsLoader.ts",
+    title: "VTEX Related Products",
+    namespace: "vtex",
+    propsSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", title: "Product ID" },
+        crossSelling: { type: "string", title: "Cross Selling Type" },
+      },
+    },
+  },
+  {
+    key: "vtex/loaders/intelligentSearch/productDetailsPage.ts",
+    title: "VTEX Product Details Page",
+    namespace: "vtex",
+    propsSchema: {
+      type: "object",
+      properties: {
+        slug: { type: "string", title: "Slug" },
+      },
+    },
+  },
+  {
+    key: "vtex/loaders/legacy/productDetailsPage.ts",
+    title: "VTEX Legacy Product Details Page",
+    namespace: "vtex",
+    propsSchema: {
+      type: "object",
+      properties: {
+        slug: { type: "string", title: "Slug" },
+      },
+    },
+  },
+  {
+    key: "vtex/loaders/workflow/products.ts",
+    title: "VTEX Workflow Products",
+    namespace: "vtex",
+    propsSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", title: "Query" },
+        count: { type: "number", title: "Count" },
+      },
+    },
+  },
+  {
+    key: "vtex/loaders/proxy.ts",
+    title: "VTEX Proxy",
+    namespace: "vtex",
+    propsSchema: {
+      type: "object",
+      properties: {},
+    },
+  },
+];
+
+// Loaders whose output is Product[] — used to inject specific loader refs
+// into section properties typed as Product arrays.
+const PRODUCT_LIST_LOADERS = [
+  "vtex/loaders/intelligentSearch/productList.ts",
+  "vtex/loaders/legacy/productList.ts",
+  "vtex/loaders/legacy/relatedProductsLoader.ts",
+  "vtex/loaders/workflow/products.ts",
+];
+
+function buildLoaderDefinitions() {
+  const definitions: Record<string, any> = {};
+  const manifestBlocks: Record<string, any> = {};
+  const loaderAnyOf: any[] = [
+    { $ref: `#/definitions/${RESOLVABLE_LITERAL_KEY}` },
+  ];
+
+  for (const loader of KNOWN_LOADERS) {
+    const defKey = toBase64(loader.key);
+
+    definitions[defKey] = {
+      title: loader.key,
+      type: "object",
+      required: ["__resolveType"],
+      properties: {
+        __resolveType: {
+          type: "string",
+          enum: [loader.key],
+          default: loader.key,
+        },
+        props: loader.propsSchema,
+      },
+    };
+
+    manifestBlocks[loader.key] = {
+      $ref: `#/definitions/${defKey}`,
+      namespace: loader.namespace,
+    };
+
+    loaderAnyOf.push({ $ref: `#/definitions/${defKey}` });
+  }
+
+  return { definitions, manifestBlocks, loaderAnyOf };
+}
+
+// ---------------------------------------------------------------------------
+// Matcher definitions
+// ---------------------------------------------------------------------------
+
+function buildMatcherDefinitions() {
+  const definitions: Record<string, any> = {};
+  const manifestBlocks: Record<string, any> = {};
+  const matcherAnyOf: any[] = [
+    { $ref: `#/definitions/${RESOLVABLE_LITERAL_KEY}` },
+  ];
+
+  const matchers = [
+    { key: "website/matchers/always.ts", title: "Always" },
+    { key: "website/matchers/never.ts", title: "Never" },
+  ];
+
+  for (const matcher of matchers) {
+    const defKey = toBase64(matcher.key);
+    definitions[defKey] = {
+      title: matcher.key,
+      type: "object",
+      required: ["__resolveType"],
+      properties: {
+        __resolveType: {
+          type: "string",
+          enum: [matcher.key],
+          default: matcher.key,
+        },
+      },
+    };
+    manifestBlocks[matcher.key] = {
+      $ref: `#/definitions/${defKey}`,
+      namespace: "website",
+    };
+    matcherAnyOf.push({ $ref: `#/definitions/${defKey}` });
+  }
+
+  return { definitions, manifestBlocks, matcherAnyOf };
+}
+
+// ---------------------------------------------------------------------------
+// Multivariate flag schema
+// ---------------------------------------------------------------------------
+
+function buildMultivariateFlagSchema(innerSchema: any) {
+  return {
+    type: "object",
+    required: ["__resolveType"],
+    properties: {
+      __resolveType: {
+        type: "string",
+        enum: [
+          "website/flags/multivariate.ts",
+          "website/flags/multivariate/section.ts",
+        ],
+      },
+      variants: {
+        type: "array",
+        title: "Variants",
+        items: {
+          type: "object",
+          properties: {
+            rule: {
+              title: "Rule",
+              type: "object",
+              required: ["__resolveType"],
+              properties: {
+                __resolveType: { type: "string" },
+              },
+              additionalProperties: true,
+            },
+            value: innerSchema,
+          },
+        },
+      },
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Page schema
+// ---------------------------------------------------------------------------
+
+function buildPageSchema(sectionAnyOf: any[]) {
+  const PAGE_TYPE = "website/pages/Page.tsx";
+  const defKey = toBase64(PAGE_TYPE);
+
+  const sectionsArraySchema = {
+    type: "array",
+    title: "Sections",
+    items: { anyOf: sectionAnyOf },
+  };
+
+  const sectionsMultivariateSchema = buildMultivariateFlagSchema(
+    sectionsArraySchema,
+  );
+
+  const definition = {
+    title: PAGE_TYPE,
+    type: "object",
+    required: ["__resolveType"],
+    properties: {
+      __resolveType: {
+        type: "string",
+        enum: [PAGE_TYPE],
+        default: PAGE_TYPE,
+      },
+      name: { type: "string", title: "Name" },
+      path: { type: "string", title: "Path" },
+      seo: { title: "SEO", anyOf: sectionAnyOf },
+      sections: {
+        title: "Sections",
+        anyOf: [sectionsArraySchema, sectionsMultivariateSchema],
+      },
+    },
+  };
+
+  return {
+    definitions: { [defKey]: definition },
+    manifestBlocks: {
+      [PAGE_TYPE]: {
+        $ref: `#/definitions/${defKey}`,
+        namespace: "website",
+      },
+    },
+    rootAnyOf: [
+      { $ref: `#/definitions/${RESOLVABLE_LITERAL_KEY}` },
+      { $ref: `#/definitions/${defKey}` },
+    ],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Framework sections
+// ---------------------------------------------------------------------------
+
+function buildFrameworkSections(sectionAnyOf: any[]) {
+  const definitions: Record<string, any> = {};
+  const manifestBlocks: Record<string, any> = {};
+  const extraAnyOf: any[] = [];
+
+  // --- website/sections/Rendering/Lazy.tsx ---
+  const LAZY_TYPE = "website/sections/Rendering/Lazy.tsx";
+  const lazyKey = toBase64(LAZY_TYPE);
+  definitions[lazyKey] = {
+    title: LAZY_TYPE,
+    type: "object",
+    required: ["__resolveType"],
+    properties: {
+      __resolveType: {
+        type: "string",
+        enum: [LAZY_TYPE],
+        default: LAZY_TYPE,
+      },
+      section: {
+        title: "Section",
+        anyOf: sectionAnyOf,
+      },
+    },
+  };
+  manifestBlocks[LAZY_TYPE] = {
+    $ref: `#/definitions/${lazyKey}`,
+    namespace: "website",
+  };
+  extraAnyOf.push({ $ref: `#/definitions/${lazyKey}` });
+
+  // --- website/sections/Seo/Seo.tsx ---
+  const SEO_TYPE = "website/sections/Seo/Seo.tsx";
+  const seoKey = toBase64(SEO_TYPE);
+  definitions[seoKey] = {
+    title: SEO_TYPE,
+    type: "object",
+    required: ["__resolveType"],
+    properties: {
+      __resolveType: {
+        type: "string",
+        enum: [SEO_TYPE],
+        default: SEO_TYPE,
+      },
+      title: { type: "string", title: "Title" },
+      description: { type: "string", title: "Description" },
+      canonical: { type: "string", title: "Canonical URL" },
+      favicon: { type: "string", title: "Favicon", format: "image-uri" },
+      noIndexing: { type: "boolean", title: "No Indexing" },
+      titleTemplate: { type: "string", title: "Title Template" },
+      descriptionTemplate: { type: "string", title: "Description Template" },
+      type: { type: "string", title: "Page Type" },
+      image: { type: "string", title: "OG Image", format: "image-uri" },
+      themeColor: { type: "string", title: "Theme Color", format: "color" },
+    },
+  };
+  manifestBlocks[SEO_TYPE] = {
+    $ref: `#/definitions/${seoKey}`,
+    namespace: "website",
+  };
+  extraAnyOf.push({ $ref: `#/definitions/${seoKey}` });
+
+  // --- website/flags/multivariate/section.ts ---
+  const MV_SECTION_TYPE = "website/flags/multivariate/section.ts";
+  const mvSectionKey = toBase64(MV_SECTION_TYPE);
+  definitions[mvSectionKey] = {
+    title: MV_SECTION_TYPE,
+    type: "object",
+    required: ["__resolveType"],
+    properties: {
+      __resolveType: {
+        type: "string",
+        enum: [MV_SECTION_TYPE],
+        default: MV_SECTION_TYPE,
+      },
+      variants: {
+        type: "array",
+        title: "Variants",
+        items: {
+          type: "object",
+          properties: {
+            rule: {
+              title: "Rule",
+              type: "object",
+              required: ["__resolveType"],
+              properties: { __resolveType: { type: "string" } },
+              additionalProperties: true,
+            },
+            value: {
+              title: "Section",
+              anyOf: sectionAnyOf,
+            },
+          },
+        },
+      },
+    },
+  };
+  manifestBlocks[MV_SECTION_TYPE] = {
+    $ref: `#/definitions/${mvSectionKey}`,
+    namespace: "website",
+  };
+  extraAnyOf.push({ $ref: `#/definitions/${mvSectionKey}` });
+
+  return { definitions, manifestBlocks, extraAnyOf };
+}
+
+// ---------------------------------------------------------------------------
+// Post-processing: wrap complex properties with Resolvable anyOf
+// ---------------------------------------------------------------------------
+
+/**
+ * Walk all @Props definitions and wrap complex array/object properties
+ * with anyOf [Resolvable, original, ...matchingLoaders].
+ *
+ * In the deco CMS, ANY complex property can be replaced by a loader
+ * reference ({ __resolveType: "some/loader.ts", props: {...} }).
+ * This function ensures the schema accepts both inline data and
+ * loader references for all such properties.
+ */
+function wrapResolvableProperties(
+  definitions: Record<string, any>,
+  loaderDefinitions: Record<string, any>,
+) {
+  const resolvableRef = { $ref: `#/definitions/${RESOLVABLE_LITERAL_KEY}` };
+
+  const productLoaderRefs = PRODUCT_LIST_LOADERS.map((key) => ({
+    $ref: `#/definitions/${toBase64(key)}`,
+  }));
+
+  for (const [defKey, def] of Object.entries(definitions)) {
+    if (!defKey.endsWith("@Props")) continue;
+    if (!def || !def.properties) continue;
+
+    for (const [propName, propSchema] of Object.entries(
+      def.properties as Record<string, any>,
+    )) {
+      if (!propSchema || typeof propSchema !== "object") continue;
+      if (propSchema.anyOf || propSchema.$ref) continue;
+
+      const shouldWrap = isLoaderCompatibleProperty(propSchema);
+      if (!shouldWrap) continue;
+
+      const { nullable, title, hide, ...rest } = propSchema;
+
+      // Determine which loader refs to include based on property type
+      const loaderRefs = isProductArrayProperty(propSchema)
+        ? productLoaderRefs
+        : [];
+
+      const wrapped: any = {
+        anyOf: [resolvableRef, { ...rest, title: title || "Inline data" }, ...loaderRefs],
+      };
+      if (nullable) wrapped.nullable = true;
+      if (title) wrapped.title = title;
+      if (hide) wrapped.hide = hide;
+
+      def.properties[propName] = wrapped;
+    }
+
+    // Also walk nested object properties (e.g., Tab.products inside tabs array items)
+    wrapNestedProperties(def, resolvableRef, productLoaderRefs);
+  }
+}
+
+function isLoaderCompatibleProperty(schema: any): boolean {
+  if (schema.type === "array" && schema.items?.type === "object") {
+    const propCount = Object.keys(schema.items.properties || {}).length;
+    return propCount > 3;
+  }
+  return false;
+}
+
+function isProductArrayProperty(schema: any): boolean {
+  if (schema.type !== "array" || !schema.items?.properties) return false;
+  const itemProps = schema.items.properties;
+  return !!(itemProps.productID || itemProps.name || itemProps.offers || itemProps.brand);
+}
+
+/**
+ * Recursively walk nested object/array schemas to wrap deeply nested
+ * loader-compatible properties. Handles cases like Tab.products where
+ * the products field is inside an array item's object schema.
+ */
+function wrapNestedProperties(
+  schema: any,
+  resolvableRef: any,
+  productLoaderRefs: any[],
+  depth = 0,
+) {
+  if (depth > 5 || !schema || typeof schema !== "object") return;
+
+  if (schema.type === "array" && schema.items?.type === "object" && schema.items.properties) {
+    for (const [propName, propSchema] of Object.entries(
+      schema.items.properties as Record<string, any>,
+    )) {
+      if (!propSchema || typeof propSchema !== "object") continue;
+      if (propSchema.anyOf || propSchema.$ref) continue;
+
+      if (isLoaderCompatibleProperty(propSchema)) {
+        const { nullable, title, hide, ...rest } = propSchema;
+        const loaderRefs = isProductArrayProperty(propSchema) ? productLoaderRefs : [];
+        const wrapped: any = {
+          anyOf: [resolvableRef, { ...rest, title: title || "Inline data" }, ...loaderRefs],
+        };
+        if (nullable) wrapped.nullable = true;
+        if (title) wrapped.title = title;
+        if (hide) wrapped.hide = hide;
+        schema.items.properties[propName] = wrapped;
+      }
+
+      wrapNestedProperties(propSchema, resolvableRef, productLoaderRefs, depth + 1);
+    }
+  }
+
+  if (schema.properties) {
+    for (const propSchema of Object.values(schema.properties)) {
+      wrapNestedProperties(propSchema as any, resolvableRef, productLoaderRefs, depth + 1);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// composeMeta
+// ---------------------------------------------------------------------------
+
+const SECTION_REF_DEF_KEY = "__SECTION_REF__";
+
+export function composeMeta(siteMeta: MetaResponse): MetaResponse {
+  const siteAnyOf = siteMeta.schema?.root?.sections?.anyOf || [];
+
+  // Build all framework components
+  const fwSections = buildFrameworkSections(siteAnyOf);
+  const fullSectionAnyOf = [...siteAnyOf, ...fwSections.extraAnyOf];
+  const page = buildPageSchema(fullSectionAnyOf);
+  const loaders = buildLoaderDefinitions();
+  const matchers = buildMatcherDefinitions();
+
+  const sectionRefDef = { title: "Section", anyOf: fullSectionAnyOf };
+
+  const resolvableDef = buildResolvableDefinition();
+
+  // Merge all definitions
+  const allDefinitions: Record<string, any> = {
+    ...(siteMeta.schema?.definitions || {}),
+    ...fwSections.definitions,
+    ...page.definitions,
+    ...loaders.definitions,
+    ...matchers.definitions,
+    [SECTION_REF_DEF_KEY]: sectionRefDef,
+    [RESOLVABLE_LITERAL_KEY]: resolvableDef,
+    [RESOLVABLE_B64_KEY]: resolvableDef,
+  };
+
+  // Post-process: wrap complex section properties with Resolvable anyOf
+  wrapResolvableProperties(allDefinitions, loaders.definitions);
+
+  return {
+    ...siteMeta,
+    manifest: {
+      blocks: {
+        ...(siteMeta.manifest?.blocks || {}),
+        sections: {
+          ...(siteMeta.manifest?.blocks?.sections || {}),
+          ...fwSections.manifestBlocks,
+        },
+        pages: {
+          ...(siteMeta.manifest?.blocks?.pages || {}),
+          ...page.manifestBlocks,
+        },
+        loaders: {
+          ...(siteMeta.manifest?.blocks?.loaders || {}),
+          ...loaders.manifestBlocks,
+        },
+        matchers: {
+          ...(siteMeta.manifest?.blocks?.matchers || {}),
+          ...matchers.manifestBlocks,
+        },
+      },
+    },
+    schema: {
+      definitions: allDefinitions,
+      root: {
+        ...(siteMeta.schema?.root || {}),
+        sections: { anyOf: fullSectionAnyOf },
+        pages: { anyOf: page.rootAnyOf },
+        loaders: { anyOf: loaders.loaderAnyOf },
+        matchers: { anyOf: matchers.matcherAnyOf },
+      },
+    },
+  };
+}

@@ -74,7 +74,7 @@ export function logRequest(
 ) {
   const url = new URL(request.url);
   const isDev =
-    typeof process !== "undefined" && process.env.NODE_ENV === "development";
+    typeof globalThis.process !== "undefined" && globalThis.process.env?.NODE_ENV === "development";
 
   if (isDev) {
     const color = status >= 500 ? "\x1b[31m" : status >= 400 ? "\x1b[33m" : "\x1b[32m";

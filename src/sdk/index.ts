@@ -10,3 +10,9 @@ export { cacheHeaders, getCacheProfileConfig, routeCacheDefaults, detectCachePro
 export { createDecoWorkerEntry, type DecoWorkerEntryOptions } from "./workerEntry";
 export { createInvokeProxy, batchInvoke, invokeQueryOptions, type InvokeProxy } from "./invoke";
 export { createInstrumentedFetch, instrumentFetch, type FetchInstrumentationOptions, type FetchMetrics } from "./instrumentedFetch";
+export { loadRedirects, matchRedirect, parseRedirectsCsv, addRedirects, type Redirect, type RedirectMap } from "./redirects";
+export { wrapCaughtErrors, isWrappedError, unwrapError, type WrappedError } from "./wrapCaughtErrors";
+export { setCSPHeaders, buildCSPHeaderValue, type CSPOptions } from "./csp";
+export { stripTrackingParams, cleanPathForCacheKey, canonicalUrl, hasTrackingParams } from "./urlUtils";
+export { mergeCacheControl, createCacheControlCollector } from "./mergeCacheControl";
+export { RequestContext, type RequestContextData } from "./requestContext";
