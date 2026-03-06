@@ -38,7 +38,7 @@ export interface CacheHeadersConfig {
 
 const PROFILES: Record<CacheProfile, CacheHeadersConfig> = {
   static: {
-    maxAge: 3600,
+    maxAge: 120,
     sMaxAge: 86400,
     staleWhileRevalidate: 86400,
     isPublic: true,

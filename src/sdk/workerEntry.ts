@@ -241,7 +241,7 @@ const DEFAULT_BYPASS_PATHS = [
 ];
 
 const FINGERPRINTED_ASSET_RE =
-  /\/_build\/assets\/.*-[a-zA-Z0-9]{8,}\.\w+$/;
+  /(?:\/_build)?\/assets\/.*-[a-zA-Z0-9]{8,}\.\w+$/;
 
 const IMMUTABLE_HEADERS: Record<string, string> = {
   "Cache-Control": `public, max-age=${ONE_YEAR}, immutable`,
@@ -513,6 +513,10 @@ export function createDecoWorkerEntry(
       if (isStaticAsset(url.pathname)) {
         const origin = await serverEntry.fetch(request, env, ctx);
         if (origin.status === 200) {
+          const ct = origin.headers.get("content-type") ?? "";
+          if (ct.includes("text/html")) {
+            return new Response("Not Found", { status: 404 });
+          }
           const resp = new Response(origin.body, origin);
           for (const [k, v] of Object.entries(IMMUTABLE_HEADERS)) {
             resp.headers.set(k, v);
