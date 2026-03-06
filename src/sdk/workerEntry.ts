@@ -472,7 +472,12 @@ export function createDecoWorkerEntry(
       const shell = customPreviewShell ?? buildPreviewShell();
       return new Response(shell, {
         status: 200,
-        headers: { "Content-Type": "text/html; charset=utf-8", ...admin.corsHeaders(request), ...ADMIN_NO_CACHE },
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "X-Deco-Handler": "admin-preview",
+          ...admin.corsHeaders(request),
+          ...ADMIN_NO_CACHE,
+        },
       });
     }
 
