@@ -32,6 +32,7 @@ import {
   type CacheProfile,
 } from "./cacheHeaders";
 import { cleanPathForCacheKey } from "./urlUtils";
+import { getRenderShellConfig } from "../admin/setup";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -155,7 +156,8 @@ export interface DecoWorkerEntryOptions {
 
   /**
    * Custom HTML shell for the `/live/previews` iframe page.
-   * If not provided, a default shell with postMessage handling is used.
+   * If not provided, a shell is generated from the render config
+   * (theme, CSS, fonts) set via setRenderShell().
    */
   previewShell?: string;
 
@@ -179,14 +181,7 @@ export interface DecoWorkerEntryOptions {
 // Constants
 // ---------------------------------------------------------------------------
 
-const DEFAULT_PREVIEW_SHELL = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Preview</title>
-  <script>
-  (function() {
+const PREVIEW_SHELL_SCRIPT = `(function() {
     if (window.__DECO_LIVE_CONTROLS__) return;
     window.__DECO_LIVE_CONTROLS__ = true;
     addEventListener("message", function(event) {
@@ -200,15 +195,39 @@ const DEFAULT_PREVIEW_SHELL = `<!DOCTYPE html>
           break;
       }
     });
-  })();
-  </script>
+  })();`;
+
+function buildPreviewShell(): string {
+  const { cssHref, fontHrefs, themeName, bodyClass, htmlLang } =
+    getRenderShellConfig();
+
+  const themeAttr = themeName ? ` data-theme="${themeName}"` : "";
+  const langAttr = htmlLang ? ` lang="${htmlLang}"` : "";
+  const bodyAttr = bodyClass ? ` class="${bodyClass}"` : "";
+
+  const stylesheets = [
+    ...fontHrefs.map((href) => `<link rel="stylesheet" href="${href}" />`),
+    cssHref ? `<link rel="stylesheet" href="${cssHref}" />` : "",
+  ]
+    .filter(Boolean)
+    .join("\n    ");
+
+  return `<!DOCTYPE html>
+<html${langAttr}${themeAttr}>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Preview</title>
+    ${stylesheets}
+    <script>${PREVIEW_SHELL_SCRIPT}</script>
 </head>
-<body>
-  <div id="preview-root" style="display:flex;align-items:center;justify-content:center;min-height:100vh;font-family:system-ui;color:#666;">
-    Loading preview...
-  </div>
+<body${bodyAttr}>
+    <div id="preview-root" style="display:flex;align-items:center;justify-content:center;min-height:100vh;font-family:system-ui;color:#666;">
+        Loading preview...
+    </div>
 </body>
 </html>`;
+}
 
 const MOBILE_RE = /mobile|android|iphone|ipad|ipod/i;
 const ONE_YEAR = 31536000;
@@ -257,7 +276,7 @@ export function createDecoWorkerEntry(
     extraBypassPaths = [],
     fingerprintedAssetPattern = FINGERPRINTED_ASSET_RE,
     stripTrackingParams: shouldStripTracking = true,
-    previewShell = DEFAULT_PREVIEW_SHELL,
+    previewShell: customPreviewShell,
   } = options;
 
   const allBypassPaths = [
@@ -401,6 +420,12 @@ export function createDecoWorkerEntry(
 
   // -- Admin route handler ---------------------------------------------------
 
+  const ADMIN_NO_CACHE: Record<string, string> = {
+    "Cache-Control": "no-store, no-cache, must-revalidate",
+    "CDN-Cache-Control": "no-store",
+    "Surrogate-Control": "no-store",
+  };
+
   function addCors(response: Response, request: Request): Response {
     if (!admin) return response;
     const cors = admin.corsHeaders(request);
@@ -409,7 +434,7 @@ export function createDecoWorkerEntry(
       statusText: response.statusText,
       headers: new Headers(response.headers),
     });
-    for (const [k, v] of Object.entries(cors)) {
+    for (const [k, v] of Object.entries({ ...cors, ...ADMIN_NO_CACHE })) {
       resp.headers.set(k, v);
     }
     return resp;
@@ -424,14 +449,14 @@ export function createDecoWorkerEntry(
 
     if (pathname === "/live/_meta") {
       if (method === "OPTIONS") {
-        return new Response(null, { status: 204, headers: admin.corsHeaders(request) });
+        return new Response(null, { status: 204, headers: { ...admin.corsHeaders(request), ...ADMIN_NO_CACHE } });
       }
       return addCors(admin.handleMeta(request), request);
     }
 
     if (pathname === "/.decofile") {
       if (method === "OPTIONS") {
-        return new Response(null, { status: 204, headers: admin.corsHeaders(request) });
+        return new Response(null, { status: 204, headers: { ...admin.corsHeaders(request), ...ADMIN_NO_CACHE } });
       }
       if (method === "POST") {
         return addCors(await admin.handleDecofileReload(request), request);
@@ -440,19 +465,20 @@ export function createDecoWorkerEntry(
     }
 
     if (pathname === "/deco/_liveness") {
-      return new Response("OK", { status: 200, headers: { "Content-Type": "text/plain" } });
+      return new Response("OK", { status: 200, headers: { "Content-Type": "text/plain", ...ADMIN_NO_CACHE } });
     }
 
-    if (pathname === "/live/previews" && method === "GET") {
-      return new Response(previewShell, {
+    if ((pathname === "/live/previews" || pathname === "/live/previews/") && method === "GET") {
+      const shell = customPreviewShell ?? buildPreviewShell();
+      return new Response(shell, {
         status: 200,
-        headers: { "Content-Type": "text/html; charset=utf-8", ...admin.corsHeaders(request) },
+        headers: { "Content-Type": "text/html; charset=utf-8", ...admin.corsHeaders(request), ...ADMIN_NO_CACHE },
       });
     }
 
-    if (pathname.startsWith("/live/previews/")) {
+    if (pathname.startsWith("/live/previews/") && pathname !== "/live/previews/") {
       if (method === "OPTIONS") {
-        return new Response(null, { status: 204, headers: admin.corsHeaders(request) });
+        return new Response(null, { status: 204, headers: { ...admin.corsHeaders(request), ...ADMIN_NO_CACHE } });
       }
       return addCors(await admin.handleRender(request), request);
     }

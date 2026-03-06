@@ -9,21 +9,26 @@ import { getRenderShellConfig } from "./setup";
 export { setRenderShell } from "./setup";
 
 function wrapInHtmlShell(sectionHtml: string): string {
-  const { cssHref, fontHrefs } = getRenderShellConfig();
+  const { cssHref, fontHrefs, themeName, bodyClass, htmlLang } =
+    getRenderShellConfig();
   const stylesheets = [
     ...fontHrefs.map((href) => `<link rel="stylesheet" href="${href}" />`),
     cssHref ? `<link rel="stylesheet" href="${cssHref}" />` : "",
   ].join("\n    ");
 
+  const themeAttr = themeName ? ` data-theme="${themeName}"` : "";
+  const langAttr = htmlLang ? ` lang="${htmlLang}"` : "";
+  const bodyAttr = bodyClass ? ` class="${bodyClass}"` : "";
+
   return `<!DOCTYPE html>
-<html>
+<html${langAttr}${themeAttr}>
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     ${stylesheets}
     <script>${LIVE_CONTROLS_SCRIPT}</script>
 </head>
-<body>
+<body${bodyAttr}>
 ${sectionHtml}
 </body>
 </html>`;

@@ -12,12 +12,24 @@ export { setInvokeLoaders, type InvokeLoader } from "./invoke";
 
 let cssHref: string | null = null;
 let fontHrefs: string[] = [];
+let themeName = "light";
+let bodyClass = "bg-base-100 text-base-content";
+let htmlLang = "pt-BR";
 
-export function setRenderShell(opts: { css?: string; fonts?: string[] }) {
+export function setRenderShell(opts: {
+  css?: string;
+  fonts?: string[];
+  theme?: string;
+  bodyClass?: string;
+  lang?: string;
+}) {
   if (opts.css) cssHref = opts.css;
   if (opts.fonts) fontHrefs = opts.fonts;
+  if (opts.theme !== undefined) themeName = opts.theme;
+  if (opts.bodyClass !== undefined) bodyClass = opts.bodyClass;
+  if (opts.lang !== undefined) htmlLang = opts.lang;
 }
 
 export function getRenderShellConfig() {
-  return { cssHref, fontHrefs };
+  return { cssHref, fontHrefs, themeName, bodyClass, htmlLang };
 }
