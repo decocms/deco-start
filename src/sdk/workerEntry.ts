@@ -241,7 +241,7 @@ const DEFAULT_BYPASS_PATHS = [
 ];
 
 const FINGERPRINTED_ASSET_RE =
-  /(?:\/_build)?\/assets\/.*-[a-zA-Z0-9]{8,}\.\w+$/;
+  /(?:\/_build)?\/assets\/.*-[a-zA-Z0-9_-]{8,}\.\w+$/;
 
 const IMMUTABLE_HEADERS: Record<string, string> = {
   "Cache-Control": `public, max-age=${ONE_YEAR}, immutable`,
