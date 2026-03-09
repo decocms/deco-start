@@ -1,16 +1,16 @@
 interface LiveControlsProps {
   site?: string;
-  page?: any;
+  page?: { id?: string; pathTemplate?: string };
   flags?: any[];
 }
 
 /**
  * LiveControls bridges the deco admin (parent window) with the storefront (iframe).
  *
- * It:
+ * Mirrors production behavior (apps/website/components/_Controls.tsx):
  * 1. Injects __DECO_STATE for the admin to read
- * 2. Listens for postMessage events from the admin (scroll, inspect, rerender)
- * 3. Provides the Ctrl+Shift+E shortcut to open the editor
+ * 2. Listens for postMessage events from the admin (inject scripts, scroll, rerender)
+ * 3. "." opens admin in same tab, Ctrl/Cmd+"." opens in new tab, Ctrl+Shift+E also works
  */
 export function LiveControls({ site, page, flags }: LiveControlsProps) {
   return (
@@ -21,7 +21,7 @@ export function LiveControls({ site, page, flags }: LiveControlsProps) {
         dangerouslySetInnerHTML={{
           __html: JSON.stringify({
             page: page || {},
-            site: site || "storefront",
+            site: { name: site || "storefront" },
             flags: flags || [],
           }),
         }}
@@ -34,15 +34,23 @@ export function LiveControls({ site, page, flags }: LiveControlsProps) {
 function LiveControlsScript() {
   const script = `
     (function() {
-      var LIVE = JSON.parse(document.getElementById("__DECO_STATE")?.textContent || "{}");
-      window.LIVE = LIVE;
+      if (window.__DECO_LIVE_CONTROLS__) return;
+      window.__DECO_LIVE_CONTROLS__ = true;
 
-      // Listen for admin postMessage events
+      var LIVE = JSON.parse(document.getElementById("__DECO_STATE")?.textContent || "{}");
+      window.LIVE = { ...window.LIVE, ...LIVE };
+
       window.addEventListener("message", function(event) {
         var data = event.data;
         if (!data || typeof data !== "object") return;
 
         switch (data.type) {
+          case "editor::inject":
+            if (data.args && data.args.script) {
+              try { eval(data.args.script); } catch(e) { console.error("[deco] inject error:", e); }
+            }
+            break;
+
           case "scrollToComponent":
             var el = document.querySelector('[data-manifest-key="' + data.args?.id + '"]');
             if (!el) el = document.getElementById(data.args?.id);
@@ -50,7 +58,6 @@ function LiveControlsScript() {
             break;
 
           case "DOMInspector":
-            // Toggle DOM inspector overlay (future implementation)
             break;
 
           case "editor::rerender":
@@ -61,13 +68,34 @@ function LiveControlsScript() {
         }
       });
 
-      // Ctrl+Shift+E or "." key shortcut to open editor
       if (window.self === window.top) {
-        document.addEventListener("keydown", function(e) {
-          if ((e.ctrlKey && e.shiftKey && e.key === "E") || (e.key === "." && !e.target.closest("input,textarea,[contenteditable]"))) {
-            var site = LIVE.site || "storefront";
-            var domain = window.location.hostname;
-            window.location.href = "https://deco.cx/choose-editor?site=" + site + "&domain=" + domain;
+        document.body.addEventListener("keydown", function(e) {
+          if (e.target !== document.body) return;
+          if (e.defaultPrevented) return;
+
+          if (
+            (e.ctrlKey && e.shiftKey && e.key === "E") ||
+            e.key === "."
+          ) {
+            e.preventDefault();
+            e.stopPropagation();
+
+            var siteName = (window.LIVE.site && window.LIVE.site.name) || window.LIVE.site || "storefront";
+            var pageId = (window.LIVE.page && window.LIVE.page.id) || "";
+            var pathTemplate = (window.LIVE.page && window.LIVE.page.pathTemplate) || "/*";
+
+            var href = new URL("/choose-editor", "https://admin.deco.cx");
+            href.searchParams.set("site", siteName);
+            href.searchParams.set("domain", window.location.origin);
+            if (pageId) href.searchParams.set("pageId", pageId);
+            href.searchParams.set("path", encodeURIComponent(window.location.pathname + window.location.search));
+            href.searchParams.set("pathTemplate", encodeURIComponent(pathTemplate));
+
+            if ((e.ctrlKey || e.metaKey) && e.key === ".") {
+              window.open(href.toString(), "_blank");
+              return;
+            }
+            window.location.href = href.toString();
           }
         });
       }
