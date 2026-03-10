@@ -30,23 +30,20 @@
  * ```
  */
 
-export { handleLiveness } from "./liveness";
 export { buildDecoState, type DecoState } from "./decoState";
+export { handleLiveness } from "./liveness";
 export {
   configureTracer,
   getTracer,
-  withTracing,
   logRequest,
   type TracerAdapter,
+  withTracing,
 } from "./observability";
 
 /**
  * Appends Server-Timing header to a response from the accumulated timings.
  */
-export function applyServerTiming(
-  response: Response,
-  state: { timings: { toHeader(): string } },
-) {
+export function applyServerTiming(response: Response, state: { timings: { toHeader(): string } }) {
   const header = state.timings.toHeader();
   if (header) {
     response.headers.append("Server-Timing", header);

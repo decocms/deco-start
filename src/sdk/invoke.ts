@@ -28,9 +28,9 @@ export type InvokeProxy<TLoaders extends Record<string, (props: any) => Promise<
 /**
  * Creates a proxy that turns loader key access into fetch calls to `/deco/invoke/:key`.
  */
-export function createInvokeProxy<
-  TLoaders extends Record<string, (props: any) => Promise<any>>,
->(basePath = "/deco/invoke"): InvokeProxy<TLoaders> {
+export function createInvokeProxy<TLoaders extends Record<string, (props: any) => Promise<any>>>(
+  basePath = "/deco/invoke",
+): InvokeProxy<TLoaders> {
   return new Proxy({} as InvokeProxy<TLoaders>, {
     get(_target, prop: string) {
       return async (props: unknown) => {

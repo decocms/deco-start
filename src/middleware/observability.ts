@@ -67,11 +67,7 @@ export async function withTracing<T>(
  * Structured request log entry for server-side logging.
  * Outputs JSON in production, human-readable in development.
  */
-export function logRequest(
-  request: Request,
-  status: number,
-  durationMs: number,
-) {
+export function logRequest(request: Request, status: number, durationMs: number) {
   const url = new URL(request.url);
   const isDev =
     typeof globalThis.process !== "undefined" && globalThis.process.env?.NODE_ENV === "development";

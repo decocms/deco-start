@@ -53,7 +53,8 @@ export interface RequestContextData {
 const storage = new AsyncLocalStorage<RequestContextData>();
 
 const MOBILE_RE = /mobile|android|iphone|ipad|ipod|webos|blackberry|opera mini|iemobile/i;
-const BOT_RE = /bot|crawl|spider|slurp|bingpreview|facebookexternalhit|linkedinbot|twitterbot|whatsapp|telegram|googlebot|yandex|baidu|duckduck/i;
+const BOT_RE =
+  /bot|crawl|spider|slurp|bingpreview|facebookexternalhit|linkedinbot|twitterbot|whatsapp|telegram|googlebot|yandex|baidu|duckduck/i;
 
 // -------------------------------------------------------------------------
 // Public API
@@ -74,7 +75,9 @@ export const RequestContext = {
       if (request.signal.aborted) {
         controller.abort(request.signal.reason);
       } else {
-        request.signal.addEventListener("abort", () => controller.abort(request.signal.reason), { once: true });
+        request.signal.addEventListener("abort", () => controller.abort(request.signal.reason), {
+          once: true,
+        });
       }
     }
 

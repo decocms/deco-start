@@ -16,7 +16,7 @@
  * ```
  */
 
-import { useState, useEffect, useRef, type ReactNode } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 export interface LazySectionProps {
   children: ReactNode;

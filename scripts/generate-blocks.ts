@@ -64,4 +64,6 @@ const output = `// Auto-generated from .deco/blocks/*.json\n// Do not edit manua
 
 fs.mkdirSync(path.dirname(outFile), { recursive: true });
 fs.writeFileSync(outFile, output);
-console.log(`Generated ${Object.keys(blocks).length} blocks → ${path.relative(process.cwd(), outFile)}`);
+console.log(
+  `Generated ${Object.keys(blocks).length} blocks → ${path.relative(process.cwd(), outFile)}`,
+);

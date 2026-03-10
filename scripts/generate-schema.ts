@@ -1,4 +1,6 @@
 #!/usr/bin/env tsx
+import fs from "node:fs";
+import path from "node:path";
 /**
  * Schema Generator for deco admin compatibility.
  *
@@ -17,9 +19,7 @@
  *   --out         Output file        (default: "src/server/admin/meta.gen.json")
  *   --platform    Platform name      (default: "cloudflare")
  */
-import { Project, Type, Symbol as MorphSymbol, Node, SyntaxKind } from "ts-morph";
-import fs from "node:fs";
-import path from "node:path";
+import { type Symbol as MorphSymbol, Node, Project, SyntaxKind, type Type } from "ts-morph";
 
 // ---------------------------------------------------------------------------
 // CLI arg parsing
@@ -67,37 +67,71 @@ function toBase64(str: string): string {
  * Matches the original deco-cx/deco parseJSDocAttribute behaviour.
  */
 const NUMERIC_TAGS = new Set([
-  "maximum", "minimum", "exclusiveMaximum", "exclusiveMinimum", "multipleOf",
-  "maxLength", "minLength", "maxItems", "minItems", "maxProperties", "minProperties",
+  "maximum",
+  "minimum",
+  "exclusiveMaximum",
+  "exclusiveMinimum",
+  "multipleOf",
+  "maxLength",
+  "minLength",
+  "maxItems",
+  "minItems",
+  "maxProperties",
+  "minProperties",
 ]);
-const BOOLEAN_TAGS = new Set([
-  "readOnly", "writeOnly", "deprecated", "uniqueItems", "ignore",
-]);
+const BOOLEAN_TAGS = new Set(["readOnly", "writeOnly", "deprecated", "uniqueItems", "ignore"]);
 
 function applyJsDocToSchema(schema: any, tags: Record<string, string>): void {
   for (const [tag, value] of Object.entries(tags)) {
     if (tag === "ignore") continue;
 
     // Tags with special coercion
-    if (tag === "hide") { schema.hide = "true"; continue; }
+    if (tag === "hide") {
+      schema.hide = "true";
+      continue;
+    }
 
     if (tag === "default") {
       if (value === "true") schema.default = true;
       else if (value === "false") schema.default = false;
       else if (value === "null") schema.default = null;
       else if (!isNaN(Number(value)) && value.trim() !== "") schema.default = Number(value);
-      else { try { schema.default = JSON.parse(value); } catch { schema.default = value; } }
+      else {
+        try {
+          schema.default = JSON.parse(value);
+        } catch {
+          schema.default = value;
+        }
+      }
       continue;
     }
 
     if (tag === "examples") {
-      const lines = value.split("\n").map((l) => l.trim()).filter(Boolean);
-      schema.examples = lines.length > 1 ? lines : (function() { try { return JSON.parse(value); } catch { return [value]; } })();
+      const lines = value
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+      schema.examples =
+        lines.length > 1
+          ? lines
+          : (() => {
+              try {
+                return JSON.parse(value);
+              } catch {
+                return [value];
+              }
+            })();
       continue;
     }
 
-    if (NUMERIC_TAGS.has(tag)) { schema[tag] = Number(value); continue; }
-    if (BOOLEAN_TAGS.has(tag)) { schema[tag] = value === "true"; continue; }
+    if (NUMERIC_TAGS.has(tag)) {
+      schema[tag] = Number(value);
+      continue;
+    }
+    if (BOOLEAN_TAGS.has(tag)) {
+      schema[tag] = value === "true";
+      continue;
+    }
 
     // Everything else: pass through as-is (matching original deco behaviour)
     // Covers: title, description, format, widget, icon, titleBy, mode,
@@ -107,15 +141,15 @@ function applyJsDocToSchema(schema: any, tags: Record<string, string>): void {
 }
 
 const WIDGET_TYPE_FORMATS: Record<string, string> = {
-  "ImageWidget": "image-uri",
-  "VideoWidget": "video-uri",
-  "HTMLWidget": "html",
-  "RichText": "rich-text",
-  "Color": "color",
-  "Secret": "password",
-  "TextArea": "textarea",
-  "Code": "code",
-  "DateTimeWidget": "date-time",
+  ImageWidget: "image-uri",
+  VideoWidget: "video-uri",
+  HTMLWidget: "html",
+  RichText: "rich-text",
+  Color: "color",
+  Secret: "password",
+  TextArea: "textarea",
+  Code: "code",
+  DateTimeWidget: "date-time",
 };
 
 /**
@@ -138,7 +172,7 @@ function applyWidgetDetection(schema: any, typeText: string): void {
  */
 function applyWidgetFormat(schema: any, typeHint: string): void {
   const matchedFormat = Object.entries(WIDGET_TYPE_FORMATS).find(
-    ([wt]) => typeHint === wt || typeHint.includes(wt)
+    ([wt]) => typeHint === wt || typeHint.includes(wt),
   )?.[1];
 
   if (!matchedFormat) {
@@ -147,8 +181,6 @@ function applyWidgetFormat(schema: any, typeHint: string): void {
   }
 
   if (schema.type === "string" && !schema.format) {
-    schema.format = matchedFormat;
-  } else if (schema.nullable && schema.type === "string" && !schema.format) {
     schema.format = matchedFormat;
   } else if (schema.type === "array" && schema.items) {
     if (schema.items.type === "string" && !schema.items.format) {
@@ -170,9 +202,14 @@ const SECTION_REF_DEF_KEY = "__SECTION_REF__";
 // Do NOT include "children", "type", or "props" — those are commonly used
 // as legitimate section property names.
 const REACT_INTERNAL_PROPS = new Set([
-  "key", "ref",
-  "then", "catch", "finally",
-  "$$typeof", "_owner", "_store",
+  "key",
+  "ref",
+  "then",
+  "catch",
+  "finally",
+  "$$typeof",
+  "_owner",
+  "_store",
 ]);
 
 function typeToJsonSchema(type: Type, visited = new Set<string>()): any {
@@ -185,7 +222,11 @@ function typeToJsonSchema(type: Type, visited = new Set<string>()): any {
     if (type.isAny() || type.isUnknown()) return {};
 
     // ReactNode, JSX.Element, VNode → hide from form
-    if (/\bReactNode\b|\bJSX\.Element\b|\bReactElement\b|\bVNode\b|\bComponentChildren\b/.test(typeText)) {
+    if (
+      /\bReactNode\b|\bJSX\.Element\b|\bReactElement\b|\bVNode\b|\bComponentChildren\b/.test(
+        typeText,
+      )
+    ) {
       return { type: "object", hide: "true" };
     }
 
@@ -247,7 +288,10 @@ function typeToJsonSchema(type: Type, visited = new Set<string>()): any {
           // Fallback: use a const discriminator field value as title
           if (!schema.title && schema.properties) {
             for (const v of Object.values(schema.properties) as any[]) {
-              if (v?.const !== undefined) { schema.title = String(v.const); break; }
+              if (v?.const !== undefined) {
+                schema.title = String(v.const);
+                break;
+              }
             }
           }
         }
@@ -265,7 +309,10 @@ function typeToJsonSchema(type: Type, visited = new Set<string>()): any {
       const numberIdx = type.getNumberIndexType();
       if ((stringIdx || numberIdx) && type.getProperties().length === 0) {
         const valType = (stringIdx || numberIdx)!;
-        return { type: "object", additionalProperties: typeToJsonSchema(valType, new Set(visited)) };
+        return {
+          type: "object",
+          additionalProperties: typeToJsonSchema(valType, new Set(visited)),
+        };
       }
 
       const properties: Record<string, any> = {};
@@ -285,8 +332,9 @@ function typeToJsonSchema(type: Type, visited = new Set<string>()): any {
 
         // Get AST type-annotation text before resolving
         let typeHint = propType.getText();
-        const typeNode = decl.getChildrenOfKind(SyntaxKind.TypeReference)[0]
-          ?? decl.getChildAtIndex(decl.getChildCount() - 1);
+        const typeNode =
+          decl.getChildrenOfKind(SyntaxKind.TypeReference)[0] ??
+          decl.getChildAtIndex(decl.getChildCount() - 1);
         if (typeNode && Node.isTypeReference(typeNode)) {
           typeHint = typeNode.getText();
         } else if (Node.isPropertySignature(decl) || Node.isPropertyDeclaration(decl)) {
@@ -299,8 +347,15 @@ function typeToJsonSchema(type: Type, visited = new Set<string>()): any {
         if (baseHint === "Section" || baseHint === "Section[]" || baseHint === "Section[] | null") {
           const isArray = baseHint.includes("[]");
           const sectionSchema: any = isArray
-            ? { type: "array", items: { $ref: `#/definitions/${SECTION_REF_DEF_KEY}` }, title: name.charAt(0).toUpperCase() + name.slice(1) }
-            : { $ref: `#/definitions/${SECTION_REF_DEF_KEY}`, title: name.charAt(0).toUpperCase() + name.slice(1) };
+            ? {
+                type: "array",
+                items: { $ref: `#/definitions/${SECTION_REF_DEF_KEY}` },
+                title: name.charAt(0).toUpperCase() + name.slice(1),
+              }
+            : {
+                $ref: `#/definitions/${SECTION_REF_DEF_KEY}`,
+                title: name.charAt(0).toUpperCase() + name.slice(1),
+              };
           if (prop.isOptional() || typeHint.includes("null") || typeHint.includes("undefined")) {
             sectionSchema.nullable = true;
           }
@@ -372,7 +427,11 @@ function extractDefaultExportPropsType(sourceFile: import("ts-morph").SourceFile
 /**
  * Resolve a module specifier to an absolute file path.
  */
-function resolveModulePath(moduleSpec: string, fromFile: string, projectRoot: string): string | null {
+function resolveModulePath(
+  moduleSpec: string,
+  fromFile: string,
+  projectRoot: string,
+): string | null {
   let target = moduleSpec;
   if (target.startsWith("~/")) {
     target = path.resolve(projectRoot, "src", target.slice(2));
@@ -429,7 +488,13 @@ function resolvePropsViaReExport(
       if (propsType) return typeToJsonSchema(propsType);
 
       // Recurse: target might also re-export from another file
-      const deeper = resolvePropsViaReExport(project, targetFile, targetPath, projectRoot, maxDepth - 1);
+      const deeper = resolvePropsViaReExport(
+        project,
+        targetFile,
+        targetPath,
+        projectRoot,
+        maxDepth - 1,
+      );
       if (deeper) return deeper;
     } catch {
       // Target file couldn't be parsed
@@ -537,8 +602,14 @@ function generateMeta(): MetaResponse {
         },
       };
 
-      sectionBlocks[blockKey] = { $ref: `#/definitions/${sectionDefKey}`, namespace: SITE_NAMESPACE };
-      sectionRootAnyOf.push({ $ref: `#/definitions/${sectionDefKey}`, inputSchema: `#/definitions/${propsDefKey}` });
+      sectionBlocks[blockKey] = {
+        $ref: `#/definitions/${sectionDefKey}`,
+        namespace: SITE_NAMESPACE,
+      };
+      sectionRootAnyOf.push({
+        $ref: `#/definitions/${sectionDefKey}`,
+        inputSchema: `#/definitions/${propsDefKey}`,
+      });
 
       console.log(`  ${propCount > 0 ? "✓" : "○"} ${blockKey} (${propCount} props)`);
     } catch (e) {
@@ -581,4 +652,6 @@ fs.writeFileSync(outPath, JSON.stringify(meta, null, 2));
 
 const defCount = Object.keys(meta.schema.definitions).length;
 const secCount = Object.keys(meta.manifest.blocks.sections || {}).length;
-console.log(`\nGenerated schema: ${defCount} definitions, ${secCount} sections → ${path.relative(process.cwd(), outPath)}`);
+console.log(
+  `\nGenerated schema: ${defCount} definitions, ${secCount} sections → ${path.relative(process.cwd(), outPath)}`,
+);

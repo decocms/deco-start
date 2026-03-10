@@ -1,7 +1,7 @@
-import { renderToString } from "react-dom/server";
 import { createElement } from "react";
-import { getSection } from "../cms/registry";
+import { renderToString } from "react-dom/server";
 import { loadBlocks, withBlocksOverride } from "../cms/loader";
+import { getSection } from "../cms/registry";
 import { resolveValue } from "../cms/resolve";
 import { LIVE_CONTROLS_SCRIPT } from "./liveControls";
 import { getRenderShellConfig } from "./setup";
@@ -9,8 +9,7 @@ import { getRenderShellConfig } from "./setup";
 export { setRenderShell } from "./setup";
 
 function wrapInHtmlShell(sectionHtml: string): string {
-  const { cssHref, fontHrefs, themeName, bodyClass, htmlLang } =
-    getRenderShellConfig();
+  const { cssHref, fontHrefs, themeName, bodyClass, htmlLang } = getRenderShellConfig();
   const stylesheets = [
     ...fontHrefs.map((href) => `<link rel="stylesheet" href="${href}" />`),
     cssHref ? `<link rel="stylesheet" href="${cssHref}" />` : "",
@@ -38,9 +37,7 @@ ${sectionHtml}
  * Render a single resolved section object to an HTML string.
  * Returns empty string for unknown or SEO-only sections.
  */
-async function renderOneSection(
-  section: Record<string, unknown>,
-): Promise<string> {
+async function renderOneSection(section: Record<string, unknown>): Promise<string> {
   const resolveType = section.__resolveType as string | undefined;
   if (!resolveType) return "";
 
@@ -181,10 +178,7 @@ export async function handleRender(request: Request): Promise<Response> {
     }
 
     try {
-      const resolvedProps = (await resolveValue(props)) as Record<
-        string,
-        unknown
-      >;
+      const resolvedProps = (await resolveValue(props)) as Record<string, unknown>;
       const { __resolveType: _, ...cleanProps } = resolvedProps;
       const mod = await sectionLoader();
       const sectionHtml = renderToString(createElement(mod.default, cleanProps));

@@ -172,10 +172,7 @@ export function addRedirects(map: RedirectMap, redirects: Redirect[]): void {
  * Checks exact matches first (O(1)), then glob patterns (O(n), but
  * typically few patterns exist).
  */
-export function matchRedirect(
-  pathname: string,
-  map: RedirectMap,
-): Redirect | null {
+export function matchRedirect(pathname: string, map: RedirectMap): Redirect | null {
   const normalized = normalizePath(pathname);
 
   const exactMatch = map.exact.get(normalized);
@@ -184,9 +181,7 @@ export function matchRedirect(
   for (const { prefix, redirect } of map.patterns) {
     if (normalized.startsWith(prefix)) {
       const suffix = normalized.slice(prefix.length);
-      const to = redirect.to.includes("*")
-        ? redirect.to.replace("*", suffix)
-        : redirect.to;
+      const to = redirect.to.includes("*") ? redirect.to.replace("*", suffix) : redirect.to;
       return { ...redirect, to };
     }
   }

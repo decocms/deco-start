@@ -67,7 +67,9 @@ export function configurePostHogMatcher(ph: PostHogAdapter) {
 export function createPostHogMatcher() {
   return (rule: Record<string, unknown>, _ctx: MatcherContext): boolean => {
     if (!adapter) {
-      console.warn("[PostHog Matcher] No adapter configured. Call configurePostHogMatcher() first.");
+      console.warn(
+        "[PostHog Matcher] No adapter configured. Call configurePostHogMatcher() first.",
+      );
       return false;
     }
 
@@ -109,7 +111,10 @@ export function createPostHogMatcher() {
 export function createServerPostHogAdapter(
   client: {
     isFeatureEnabled: (key: string, distinctId: string) => Promise<boolean> | boolean;
-    getFeatureFlag: (key: string, distinctId: string) => Promise<string | boolean | undefined> | string | boolean | undefined;
+    getFeatureFlag: (
+      key: string,
+      distinctId: string,
+    ) => Promise<string | boolean | undefined> | string | boolean | undefined;
   },
   distinctId: string,
 ): PostHogAdapter {
@@ -123,7 +128,9 @@ export function createServerPostHogAdapter(
       // Synchronous path — pre-warm the cache in middleware before resolution
       const result = client.isFeatureEnabled(key, distinctId);
       if (result instanceof Promise) {
-        console.warn("[PostHog] Async flag evaluation used synchronously. Pre-warm flags in middleware.");
+        console.warn(
+          "[PostHog] Async flag evaluation used synchronously. Pre-warm flags in middleware.",
+        );
         return false;
       }
       flagCache.set(key, result);
@@ -135,7 +142,9 @@ export function createServerPostHogAdapter(
 
       const result = client.getFeatureFlag(key, distinctId);
       if (result instanceof Promise) {
-        console.warn("[PostHog] Async variant evaluation used synchronously. Pre-warm flags in middleware.");
+        console.warn(
+          "[PostHog] Async variant evaluation used synchronously. Pre-warm flags in middleware.",
+        );
         return undefined;
       }
       variantCache.set(key, result);

@@ -1,3 +1,5 @@
+import React from "react";
+
 interface LiveControlsProps {
   site?: string;
   page?: { id?: string; pathTemplate?: string };
@@ -102,10 +104,5 @@ function LiveControlsScript() {
     })();
   `;
 
-  return (
-    <script
-      type="module"
-      dangerouslySetInnerHTML={{ __html: script }}
-    />
-  );
+  return <script type="module" dangerouslySetInnerHTML={{ __html: script }} />;
 }

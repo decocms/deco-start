@@ -54,10 +54,7 @@ export function loadBlocks(): Record<string, unknown> {
  * for the duration of the render. Other concurrent requests are not
  * affected (AsyncLocalStorage is per-request scoped).
  */
-export function withBlocksOverride<T>(
-  override: Record<string, unknown>,
-  fn: () => T,
-): T {
+export function withBlocksOverride<T>(override: Record<string, unknown>, fn: () => T): T {
   return blocksOverrideStorage.run(override, fn);
 }
 
@@ -84,10 +81,7 @@ export function getAllPages(): Array<{ key: string; page: DecoPage }> {
     .map(({ key, page }) => ({ key, page }));
 }
 
-function matchPath(
-  pattern: string,
-  urlPath: string
-): Record<string, string> | null {
+function matchPath(pattern: string, urlPath: string): Record<string, string> | null {
   if (pattern === "/*") return { _splat: urlPath };
 
   const patternParts = pattern.split("/").filter(Boolean);
@@ -107,7 +101,7 @@ function matchPath(
 }
 
 export function findPageByPath(
-  targetPath: string
+  targetPath: string,
 ): { page: DecoPage; params: Record<string, string> } | null {
   const allPages = getAllPages();
 

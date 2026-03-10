@@ -1,4 +1,4 @@
-import { loadBlocks, findPageByPath, type Resolvable } from "./loader";
+import { findPageByPath, loadBlocks, type Resolvable } from "./loader";
 import { getSection } from "./registry";
 
 export type ResolvedSection = {
@@ -49,14 +49,17 @@ export function registerCommerceLoaders(loaders: Record<string, CommerceLoader>)
   Object.assign(commerceLoaders, loaders);
 }
 
-const customMatchers: Record<string, (rule: Record<string, unknown>, ctx: MatcherContext) => boolean> = {};
+const customMatchers: Record<
+  string,
+  (rule: Record<string, unknown>, ctx: MatcherContext) => boolean
+> = {};
 
 /**
  * Register custom site-level matchers (e.g. "site/matchers/utm.ts").
  */
 export function registerMatcher(
   key: string,
-  fn: (rule: Record<string, unknown>, ctx: MatcherContext) => boolean
+  fn: (rule: Record<string, unknown>, ctx: MatcherContext) => boolean,
 ) {
   customMatchers[key] = fn;
 }
@@ -79,10 +82,7 @@ function ensureInitialized() {
  * Evaluate a matcher rule object against the current request context.
  * Returns true if the variant should be selected.
  */
-function evaluateMatcher(
-  rule: Record<string, unknown> | undefined,
-  ctx: MatcherContext
-): boolean {
+function evaluateMatcher(rule: Record<string, unknown> | undefined, ctx: MatcherContext): boolean {
   if (!rule) return true;
 
   const resolveType = rule.__resolveType as string | undefined;
@@ -93,7 +93,10 @@ function evaluateMatcher(
   // If the rule references a named block (e.g. "Mobile", "Desktop"), resolve it first
   if (blocks[resolveType]) {
     const resolvedRule = blocks[resolveType] as Record<string, unknown>;
-    return evaluateMatcher({ ...resolvedRule, ...rule, __resolveType: resolvedRule.__resolveType as string }, ctx);
+    return evaluateMatcher(
+      { ...resolvedRule, ...rule, __resolveType: resolvedRule.__resolveType as string },
+      ctx,
+    );
   }
 
   switch (resolveType) {
@@ -105,7 +108,9 @@ function evaluateMatcher(
 
     case "website/matchers/device.ts": {
       const ua = (ctx.userAgent || "").toLowerCase();
-      const isMobile = /mobile|android|iphone|ipad|ipod|webos|blackberry|opera mini|iemobile/i.test(ua);
+      const isMobile = /mobile|android|iphone|ipad|ipod|webos|blackberry|opera mini|iemobile/i.test(
+        ua,
+      );
       if (rule.mobile) return isMobile;
       if (rule.desktop) return !isMobile;
       return true;
@@ -122,9 +127,7 @@ function evaluateMatcher(
       if (!conditions || conditions.length === 0) return false;
       const currentPath = ctx.path || "";
       const currentUrl = ctx.url || "";
-      return conditions.some(
-        (c) => currentPath === c || currentUrl.includes(c)
-      );
+      return conditions.some((c) => currentPath === c || currentUrl.includes(c));
     }
 
     default: {
@@ -146,11 +149,11 @@ function evaluateMatcher(
 async function resolveProps(
   obj: Record<string, unknown>,
   routeParams?: Record<string, string>,
-  matcherCtx?: MatcherContext
+  matcherCtx?: MatcherContext,
 ): Promise<Record<string, unknown>> {
   const entries = Object.entries(obj);
   const resolvedEntries = await Promise.all(
-    entries.map(async ([k, v]) => [k, await resolveValue(v, routeParams, matcherCtx)] as const)
+    entries.map(async ([k, v]) => [k, await resolveValue(v, routeParams, matcherCtx)] as const),
   );
   return Object.fromEntries(resolvedEntries);
 }
@@ -158,7 +161,7 @@ async function resolveProps(
 export async function resolveValue(
   value: unknown,
   routeParams?: Record<string, string>,
-  matcherCtx?: MatcherContext
+  matcherCtx?: MatcherContext,
 ): Promise<unknown> {
   if (!value || typeof value !== "object") return value;
   if (Array.isArray(value)) {
@@ -248,7 +251,7 @@ export async function resolveValue(
 
 export async function resolveDecoPage(
   targetPath: string,
-  matcherCtx?: MatcherContext
+  matcherCtx?: MatcherContext,
 ): Promise<{
   name: string;
   path: string;
@@ -266,9 +269,7 @@ export async function resolveDecoPage(
   const { page, params } = match;
   const ctx: MatcherContext = { ...matcherCtx, path: targetPath };
 
-  console.log(
-    `[CMS] Matched "${page.name}" (pattern: ${page.path}) for path: ${targetPath}`
-  );
+  console.log(`[CMS] Matched "${page.name}" (pattern: ${page.path}) for path: ${targetPath}`);
 
   let rawSections: unknown[];
   if (Array.isArray(page.sections)) {
@@ -312,14 +313,12 @@ export async function resolveDecoPage(
         console.error(`[CMS] Error resolving section:`, e);
         return [];
       }
-    })
+    }),
   );
 
   const resolvedSections = sectionResults.flat();
 
-  console.log(
-    `[CMS] Resolved ${resolvedSections.length} sections for "${page.name}"`
-  );
+  console.log(`[CMS] Resolved ${resolvedSections.length} sections for "${page.name}"`);
 
   return {
     name: page.name,

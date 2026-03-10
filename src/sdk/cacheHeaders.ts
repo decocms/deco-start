@@ -90,10 +90,7 @@ const PROFILES: Record<CacheProfile, CacheHeadersConfig> = {
 export function cacheHeaders(
   profileOrConfig: CacheProfile | CacheHeadersConfig,
 ): Record<string, string> {
-  const config =
-    typeof profileOrConfig === "string"
-      ? PROFILES[profileOrConfig]
-      : profileOrConfig;
+  const config = typeof profileOrConfig === "string" ? PROFILES[profileOrConfig] : profileOrConfig;
 
   if (!config.isPublic || (config.sMaxAge === 0 && config.maxAge === 0)) {
     return {
@@ -119,7 +116,7 @@ export function cacheHeaders(
 
   return {
     "Cache-Control": parts.join(", "),
-    "Vary": "Accept-Encoding",
+    Vary: "Accept-Encoding",
   };
 }
 
@@ -143,13 +140,13 @@ interface RouteCacheDefaults {
 }
 
 const ROUTE_CACHE: Record<CacheProfile, RouteCacheDefaults> = {
-  static:  { staleTime: 5 * 60_000,  gcTime: 30 * 60_000 },
-  product: { staleTime: 60_000,       gcTime: 5 * 60_000  },
-  listing: { staleTime: 60_000,       gcTime: 5 * 60_000  },
-  search:  { staleTime: 30_000,       gcTime: 2 * 60_000  },
-  cart:    { staleTime: 0,            gcTime: 0            },
-  private: { staleTime: 0,            gcTime: 0            },
-  none:    { staleTime: 0,            gcTime: 0            },
+  static: { staleTime: 5 * 60_000, gcTime: 30 * 60_000 },
+  product: { staleTime: 60_000, gcTime: 5 * 60_000 },
+  listing: { staleTime: 60_000, gcTime: 5 * 60_000 },
+  search: { staleTime: 30_000, gcTime: 2 * 60_000 },
+  cart: { staleTime: 0, gcTime: 0 },
+  private: { staleTime: 0, gcTime: 0 },
+  none: { staleTime: 0, gcTime: 0 },
 };
 
 /**
@@ -165,9 +162,7 @@ const ROUTE_CACHE: Record<CacheProfile, RouteCacheDefaults> = {
  * });
  * ```
  */
-export function routeCacheDefaults(
-  profile: CacheProfile,
-): RouteCacheDefaults {
+export function routeCacheDefaults(profile: CacheProfile): RouteCacheDefaults {
   return ROUTE_CACHE[profile];
 }
 
@@ -240,23 +235,16 @@ export function registerCachePattern(pattern: CachePattern): void {
  * Evaluates custom patterns first, then built-in patterns.
  * Falls back to "listing" (conservative public cache) for unmatched paths.
  */
-export function detectCacheProfile(
-  pathnameOrUrl: string | URL,
-): CacheProfile {
+export function detectCacheProfile(pathnameOrUrl: string | URL): CacheProfile {
   let pathname: string;
   let searchParams: URLSearchParams;
 
   if (typeof pathnameOrUrl === "string" && !pathnameOrUrl.startsWith("http")) {
     const qIdx = pathnameOrUrl.indexOf("?");
     pathname = qIdx >= 0 ? pathnameOrUrl.slice(0, qIdx) : pathnameOrUrl;
-    searchParams = new URLSearchParams(
-      qIdx >= 0 ? pathnameOrUrl.slice(qIdx) : "",
-    );
+    searchParams = new URLSearchParams(qIdx >= 0 ? pathnameOrUrl.slice(qIdx) : "");
   } else {
-    const url =
-      pathnameOrUrl instanceof URL
-        ? pathnameOrUrl
-        : new URL(pathnameOrUrl);
+    const url = pathnameOrUrl instanceof URL ? pathnameOrUrl : new URL(pathnameOrUrl);
     pathname = url.pathname;
     searchParams = url.searchParams;
   }

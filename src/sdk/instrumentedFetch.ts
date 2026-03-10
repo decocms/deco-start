@@ -47,14 +47,13 @@ export function createInstrumentedFetch(
   nameOrOptions: string | FetchInstrumentationOptions,
 ): typeof fetch {
   const options: FetchInstrumentationOptions =
-    typeof nameOrOptions === "string"
-      ? { name: nameOrOptions }
-      : nameOrOptions;
+    typeof nameOrOptions === "string" ? { name: nameOrOptions } : nameOrOptions;
 
   const { name, logging = isDev, tracing = true, onComplete } = options;
 
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url =
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const method = init?.method || "GET";
     const startTime = performance.now();
 
@@ -120,10 +119,7 @@ function truncateUrl(url: string, maxLen = 120): string {
  * Wraps an existing commerce client's fetch calls by monkey-patching
  * the fetch function it uses. For clients that expose `fetch` as a param.
  */
-export function instrumentFetch(
-  originalFetch: typeof fetch,
-  name: string,
-): typeof fetch {
+export function instrumentFetch(originalFetch: typeof fetch, name: string): typeof fetch {
   const instrumented = createInstrumentedFetch(name);
   return ((input: RequestInfo | URL, init?: RequestInit) => {
     return instrumented(input, init);
