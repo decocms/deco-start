@@ -1,16 +1,21 @@
 /**
- * Liveness probe handler.
+ * Liveness and readiness probe handlers.
  *
- * Responds to `/_liveness` with a 200 OK so load balancers and
- * orchestrators (K8s, Cloudflare health checks) know the instance is alive.
+ * - `/_liveness` — simple 200 OK for load balancers (K8s, Cloudflare)
+ * - `/deco/_health` — detailed JSON health metrics (delegated to healthMetrics)
  */
+
+import { handleHealthCheck } from "./healthMetrics";
+
 export function handleLiveness(request: Request): Response | null {
   const url = new URL(request.url);
-  if (url.pathname === "/_liveness") {
+
+  if (url.pathname === "/_liveness" || url.pathname === "/deco/_liveness") {
     return new Response("OK", {
       status: 200,
       headers: { "Content-Type": "text/plain", "Cache-Control": "no-store" },
     });
   }
-  return null;
+
+  return handleHealthCheck(request);
 }

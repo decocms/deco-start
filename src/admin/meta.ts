@@ -1,7 +1,14 @@
+import { onChange } from "../cms/loader";
 import { composeMeta, type MetaResponse } from "./schema";
 
 let metaData: MetaResponse | null = null;
 let cachedEtag: string | null = null;
+
+// Auto-invalidate the cached ETag when the decofile changes.
+// This ensures the admin re-fetches meta after a hot-reload.
+onChange(() => {
+  cachedEtag = null;
+});
 
 /**
  * Set the schema metadata that /deco/meta will return.

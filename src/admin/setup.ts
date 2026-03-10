@@ -8,8 +8,16 @@
  * import from "@decocms/start/admin" instead.
  */
 
-export { type InvokeLoader, setInvokeLoaders } from "./invoke";
+export { type InvokeAction, type InvokeLoader, setInvokeActions, setInvokeLoaders } from "./invoke";
 export { setMetaData } from "./meta";
+export {
+  type LoaderConfig,
+  type MatcherConfig,
+  registerLoaderSchema,
+  registerLoaderSchemas,
+  registerMatcherSchema,
+  registerMatcherSchemas,
+} from "./schema";
 
 let cssHref: string | null = null;
 let fontHrefs: string[] = [];

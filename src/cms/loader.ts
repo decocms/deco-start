@@ -13,6 +13,7 @@ export type DecoPage = {
 };
 
 let blockData: Record<string, unknown> = {};
+let revision: string | null = null;
 
 interface ALSLike<T> {
   getStore(): T | undefined;
@@ -27,11 +28,55 @@ const blocksOverrideStorage: ALSLike<Record<string, unknown>> = ALS
   ? new ALS()
   : { getStore: () => undefined, run: (_s: any, fn: any) => fn() };
 
+// ---------------------------------------------------------------------------
+// Change listeners
+// ---------------------------------------------------------------------------
+
+type ChangeListener = (blocks: Record<string, unknown>, revision: string) => void;
+const changeListeners: ChangeListener[] = [];
+
+/** Register a callback invoked whenever setBlocks() changes the decofile. */
+export function onChange(listener: ChangeListener) {
+  changeListeners.push(listener);
+  return () => {
+    const idx = changeListeners.indexOf(listener);
+    if (idx >= 0) changeListeners.splice(idx, 1);
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Revision hashing
+// ---------------------------------------------------------------------------
+
+function computeRevision(blocks: Record<string, unknown>): string {
+  const str = JSON.stringify(blocks);
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash + str.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(36);
+}
+
+// ---------------------------------------------------------------------------
+// Block management
+// ---------------------------------------------------------------------------
+
 /**
- * Set the blocks data. Called by the site at startup with the generated blocks.
+ * Set the blocks data. Called at startup with generated blocks,
+ * and by the admin on hot-reload.
+ * Notifies all onChange listeners and updates the revision.
  */
 export function setBlocks(blocks: Record<string, unknown>) {
   blockData = blocks;
+  revision = computeRevision(blocks);
+
+  for (const listener of changeListeners) {
+    try {
+      listener(blocks, revision);
+    } catch (e) {
+      console.error("[CMS] onChange listener error:", e);
+    }
+  }
 }
 
 /**
@@ -44,6 +89,11 @@ export function loadBlocks(): Record<string, unknown> {
     return { ...blockData, ...override };
   }
   return blockData;
+}
+
+/** Get the current decofile revision hash. Changes on each setBlocks(). */
+export function getRevision(): string | null {
+  return revision;
 }
 
 /**

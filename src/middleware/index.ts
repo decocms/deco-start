@@ -31,11 +31,26 @@
  */
 
 export { buildDecoState, type DecoState } from "./decoState";
+export {
+  getHealthMetrics,
+  type HealthMetrics,
+  handleHealthCheck,
+  trackRequest,
+} from "./healthMetrics";
 export { handleLiveness } from "./liveness";
 export {
+  configureMeter,
   configureTracer,
+  getActiveSpan,
+  getMeter,
   getTracer,
   logRequest,
+  type MeterAdapter,
+  MetricNames,
+  recordCacheMetric,
+  recordRequestMetric,
+  type Span,
+  setSpanAttribute,
   type TracerAdapter,
   withTracing,
 } from "./observability";

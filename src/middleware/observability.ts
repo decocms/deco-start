@@ -1,49 +1,67 @@
 /**
  * Observability utilities for deco middleware.
  *
- * These are thin wrappers that storefronts compose into their own
- * `createMiddleware()` chain. They work with any tracing backend
- * (Sentry, OpenTelemetry, Datadog) through a pluggable adapter.
+ * Pluggable adapters for tracing (spans) and metrics (counters, gauges,
+ * histograms). Works with any backend: OpenTelemetry, Sentry, Datadog, etc.
  *
  * @example
  * ```ts
- * import { createMiddleware } from "@tanstack/react-start";
- * import { requestLogger, configureTracer } from "@decocms/start/middleware/observability";
+ * import { configureTracer, configureMeter } from "@decocms/start/middleware";
+ * import { trace, metrics } from "@opentelemetry/api";
  *
- * // Optional: plug in OTel
- * import { trace } from "@opentelemetry/api";
  * configureTracer({
  *   startSpan: (name, attrs) => {
  *     const span = trace.getTracer("deco").startSpan(name, { attributes: attrs });
- *     return { end: () => span.end(), setError: (e) => span.recordException(e) };
+ *     return {
+ *       end: () => span.end(),
+ *       setError: (e) => span.recordException(e),
+ *       setAttribute: (k, v) => span.setAttribute(k, v),
+ *     };
  *   },
+ * });
+ *
+ * configureMeter({
+ *   counterInc: (name, value, labels) => metrics.getMeter("deco").createCounter(name).add(value, labels),
+ *   histogramRecord: (name, value, labels) => metrics.getMeter("deco").createHistogram(name).record(value, labels),
  * });
  * ```
  */
 
+// ---------------------------------------------------------------------------
+// Tracer
+// ---------------------------------------------------------------------------
+
+export interface Span {
+  end(): void;
+  setError?(error: unknown): void;
+  setAttribute?(key: string, value: string | number | boolean): void;
+}
+
 export interface TracerAdapter {
-  startSpan(
-    name: string,
-    attributes?: Record<string, string | number | boolean>,
-  ): { end(): void; setError?(error: unknown): void };
+  startSpan(name: string, attributes?: Record<string, string | number | boolean>): Span;
 }
 
 let tracer: TracerAdapter | null = null;
+let activeSpan: Span | null = null;
 
-/** Configure a tracer adapter (OTel, Sentry, etc.). */
 export function configureTracer(t: TracerAdapter) {
   tracer = t;
 }
 
-/** Get the configured tracer, if any. */
 export function getTracer(): TracerAdapter | null {
   return tracer;
 }
 
-/**
- * Wraps a function with tracing (if a tracer is configured).
- * Falls back to just calling the function if no tracer is set.
- */
+/** Get the currently active span, if any. */
+export function getActiveSpan(): Span | null {
+  return activeSpan;
+}
+
+/** Set an attribute on the active span, if one exists. */
+export function setSpanAttribute(key: string, value: string | number | boolean) {
+  activeSpan?.setAttribute?.(key, value);
+}
+
 export async function withTracing<T>(
   name: string,
   fn: () => Promise<T>,
@@ -51,7 +69,10 @@ export async function withTracing<T>(
 ): Promise<T> {
   if (!tracer) return fn();
 
+  const parentSpan = activeSpan;
   const span = tracer.startSpan(name, attributes);
+  activeSpan = span;
+
   try {
     const result = await fn();
     span.end();
@@ -60,22 +81,105 @@ export async function withTracing<T>(
     span.setError?.(error);
     span.end();
     throw error;
+  } finally {
+    activeSpan = parentSpan;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Meter
+// ---------------------------------------------------------------------------
+
+type Labels = Record<string, string | number | boolean>;
+
+export interface MeterAdapter {
+  counterInc(name: string, value?: number, labels?: Labels): void;
+  gaugeSet?(name: string, value: number, labels?: Labels): void;
+  histogramRecord?(name: string, value: number, labels?: Labels): void;
+}
+
+let meter: MeterAdapter | null = null;
+
+export function configureMeter(m: MeterAdapter) {
+  meter = m;
+}
+
+export function getMeter(): MeterAdapter | null {
+  return meter;
+}
+
+/** Pre-defined metric names for consistency. */
+export const MetricNames = {
+  HTTP_REQUESTS_TOTAL: "http_requests_total",
+  HTTP_REQUEST_DURATION_MS: "http_request_duration_ms",
+  HTTP_REQUEST_ERRORS: "http_request_errors_total",
+  CACHE_HIT: "cache_hit_total",
+  CACHE_MISS: "cache_miss_total",
+  RESOLVE_DURATION_MS: "resolve_duration_ms",
+  FETCH_DURATION_MS: "fetch_duration_ms",
+} as const;
+
+/**
+ * Record an HTTP request metric.
+ * Call in middleware after the response is produced.
+ */
+export function recordRequestMetric(
+  method: string,
+  path: string,
+  status: number,
+  durationMs: number,
+) {
+  if (!meter) return;
+  const labels: Labels = { method, path: normalizePath(path), status };
+  meter.counterInc(MetricNames.HTTP_REQUESTS_TOTAL, 1, labels);
+  meter.histogramRecord?.(MetricNames.HTTP_REQUEST_DURATION_MS, durationMs, labels);
+  if (status >= 500) {
+    meter.counterInc(MetricNames.HTTP_REQUEST_ERRORS, 1, labels);
   }
 }
 
 /**
- * Structured request log entry for server-side logging.
- * Outputs JSON in production, human-readable in development.
+ * Record a cache hit/miss metric.
  */
-export function logRequest(request: Request, status: number, durationMs: number) {
+export function recordCacheMetric(hit: boolean, profile?: string) {
+  if (!meter) return;
+  const labels: Labels = profile ? { profile } : {};
+  meter.counterInc(hit ? MetricNames.CACHE_HIT : MetricNames.CACHE_MISS, 1, labels);
+}
+
+function normalizePath(path: string): string {
+  // Collapse dynamic segments to reduce cardinality
+  return path
+    .replace(/\/[0-9a-f]{8,}/gi, "/:id")
+    .replace(/\/\d+/g, "/:id")
+    .replace(/\/p$/, "/:slug/p");
+}
+
+// ---------------------------------------------------------------------------
+// Request logging
+// ---------------------------------------------------------------------------
+
+const isDev =
+  typeof globalThis.process !== "undefined" && globalThis.process.env?.NODE_ENV === "development";
+
+/**
+ * Structured request log entry.
+ * JSON in production, colorized in development.
+ * Includes traceId when available.
+ */
+export function logRequest(
+  request: Request,
+  status: number,
+  durationMs: number,
+  extra?: Record<string, unknown>,
+) {
   const url = new URL(request.url);
-  const isDev =
-    typeof globalThis.process !== "undefined" && globalThis.process.env?.NODE_ENV === "development";
 
   if (isDev) {
     const color = status >= 500 ? "\x1b[31m" : status >= 400 ? "\x1b[33m" : "\x1b[32m";
+    const extraStr = extra ? ` ${JSON.stringify(extra)}` : "";
     console.log(
-      `${color}${request.method}\x1b[0m ${url.pathname} ${status} ${durationMs.toFixed(0)}ms`,
+      `${color}${request.method}\x1b[0m ${url.pathname} ${status} ${durationMs.toFixed(0)}ms${extraStr}`,
     );
   } else {
     console.log(
@@ -86,6 +190,7 @@ export function logRequest(request: Request, status: number, durationMs: number)
         status,
         durationMs: Math.round(durationMs),
         timestamp: new Date().toISOString(),
+        ...extra,
       }),
     );
   }

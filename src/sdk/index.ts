@@ -43,6 +43,14 @@ export {
   hasTrackingParams,
   stripTrackingParams,
 } from "./urlUtils";
+export {
+  checkDesktop,
+  checkMobile,
+  checkTablet,
+  type Device,
+  detectDevice,
+  useDevice,
+} from "./useDevice";
 export { useId } from "./useId";
 export { usePartialSection, useScript, useScriptAsDataURI, useSection } from "./useScript";
 export { createDecoWorkerEntry, type DecoWorkerEntryOptions } from "./workerEntry";
