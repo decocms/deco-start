@@ -1,0 +1,5 @@
+{
+  "project": ["src/**/*.{ts,tsx}", "scripts/**/*.ts"],
+  "ignoreBinaries": ["semantic-release"],
+  "ignore": ["src/admin/setup.ts"]
+}
