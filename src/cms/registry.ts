@@ -16,20 +16,28 @@ export interface SectionOptions {
   errorFallback?: ComponentType<{ error: Error }>;
 }
 
-const registry: Record<string, RegistryEntry> = {};
-const sectionOptions: Record<string, SectionOptions> = {};
+// globalThis-backed: server function split modules need access to the registry
+const G = globalThis as any;
+if (!G.__deco) G.__deco = {};
+if (!G.__deco.sectionRegistry) G.__deco.sectionRegistry = {};
+if (!G.__deco.sectionOptions) G.__deco.sectionOptions = {};
+if (!G.__deco.resolvedComponents) G.__deco.resolvedComponents = {};
+if (!G.__deco.syncComponents) G.__deco.syncComponents = {};
+
+const registry: Record<string, RegistryEntry> = G.__deco.sectionRegistry;
+const sectionOptions: Record<string, SectionOptions> = G.__deco.sectionOptions;
 
 // Cache of already-resolved component references.
 // When a module is loaded (server-side or after first client import),
 // the default export is stored here so subsequent renders can use
 // the component directly WITHOUT React.lazy/Suspense — preventing
 // hydration flash on SSR'd content.
-const resolvedComponents: Record<string, ComponentType<any>> = {};
+const resolvedComponents: Record<string, ComponentType<any>> = G.__deco.resolvedComponents;
 
 // Static sync registry — components that were statically imported and
 // are guaranteed available on BOTH server and client without any async import.
 // These never need React.lazy/Suspense and render identically on SSR and hydration.
-const syncComponents: Record<string, ComponentType<any>> = {};
+const syncComponents: Record<string, ComponentType<any>> = G.__deco.syncComponents;
 
 export function registerSection(key: string, loader: RegistryEntry, options?: SectionOptions) {
   registry[key] = loader;

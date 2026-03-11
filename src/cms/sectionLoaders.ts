@@ -15,7 +15,14 @@ export type SectionLoaderFn = (
   req: Request,
 ) => Promise<Record<string, unknown>> | Record<string, unknown>;
 
-const loaderRegistry = new Map<string, SectionLoaderFn>();
+// globalThis-backed: server function split modules need access
+const G = globalThis as any;
+if (!G.__deco) G.__deco = {};
+if (!G.__deco.sectionLoaderRegistry) G.__deco.sectionLoaderRegistry = new Map();
+if (!G.__deco.layoutSections) G.__deco.layoutSections = new Set();
+if (!G.__deco.cacheableSections) G.__deco.cacheableSections = new Map();
+
+const loaderRegistry: Map<string, SectionLoaderFn> = G.__deco.sectionLoaderRegistry;
 
 // ---------------------------------------------------------------------------
 // Cacheable section loaders — SWR cache for section loader results
@@ -25,7 +32,7 @@ interface CacheableSectionConfig {
   maxAge: number;
 }
 
-const cacheableSections = new Map<string, CacheableSectionConfig>();
+const cacheableSections: Map<string, CacheableSectionConfig> = G.__deco.cacheableSections;
 
 interface SectionCacheEntry {
   section: ResolvedSection;
@@ -152,7 +159,7 @@ export function registerSectionLoaders(loaders: Record<string, SectionLoaderFn>)
 // layout section concurrently, the second shares the first's Promise.
 // ---------------------------------------------------------------------------
 
-const layoutSections = new Set<string>();
+const layoutSections: Set<string> = G.__deco.layoutSections;
 
 const LAYOUT_CACHE_TTL = 5 * 60_000; // 5 minutes
 

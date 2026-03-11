@@ -2,11 +2,19 @@ import { findPageByPath, loadBlocks } from "./loader";
 import { getSection } from "./registry";
 import { isLayoutSection } from "./sectionLoaders";
 
+// globalThis-backed: share state across Vite server function split modules
+const G = globalThis as any;
+if (!G.__deco) G.__deco = {};
+if (!G.__deco.commerceLoaders) G.__deco.commerceLoaders = {};
+if (!G.__deco.customMatchers) G.__deco.customMatchers = {};
+
 export type ResolvedSection = {
   component: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   props: Record<string, any>;
   key: string;
+  /** Original position in the raw section list (used by mergeSections). */
+  index?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -47,7 +55,10 @@ export interface AsyncRenderingConfig {
   alwaysEager: Set<string>;
 }
 
-let asyncConfig: AsyncRenderingConfig | null = null;
+// Always read from globalThis so split-module copies see updates
+function getAsyncConfig(): AsyncRenderingConfig | null {
+  return G.__deco.asyncConfig ?? null;
+}
 
 /**
  * Enable async section rendering.
@@ -66,7 +77,7 @@ export function setAsyncRenderingConfig(config?: {
   alwaysEager?: string[];
   respectCmsLazy?: boolean;
 }): void {
-  asyncConfig = {
+  G.__deco.asyncConfig = {
     respectCmsLazy: config?.respectCmsLazy ?? true,
     foldThreshold: config?.foldThreshold ?? Infinity,
     alwaysEager: new Set(config?.alwaysEager ?? []),
@@ -75,7 +86,7 @@ export function setAsyncRenderingConfig(config?: {
 
 /** Read-only access to the current config (null when disabled). */
 export function getAsyncRenderingConfig(): AsyncRenderingConfig | null {
-  return asyncConfig;
+  return getAsyncConfig();
 }
 
 // ---------------------------------------------------------------------------
@@ -150,7 +161,7 @@ const MAX_RESOLVE_DEPTH = 20;
 // Commerce loaders
 // ---------------------------------------------------------------------------
 
-const commerceLoaders: Record<string, CommerceLoader> = {};
+const commerceLoaders: Record<string, CommerceLoader> = G.__deco.commerceLoaders;
 
 export function registerCommerceLoader(key: string, loader: CommerceLoader) {
   commerceLoaders[key] = loader;
@@ -167,7 +178,7 @@ export function registerCommerceLoaders(loaders: Record<string, CommerceLoader>)
 const customMatchers: Record<
   string,
   (rule: Record<string, unknown>, ctx: MatcherContext) => boolean
-> = {};
+> = G.__deco.customMatchers;
 
 export function registerMatcher(
   key: string,
@@ -211,17 +222,14 @@ export function setDanglingReferenceHandler(handler: DanglingReferenceHandler) {
 // Init hook
 // ---------------------------------------------------------------------------
 
-let initCallback: (() => void) | null = null;
-let initialized = false;
-
 export function onBeforeResolve(callback: () => void) {
-  initCallback = callback;
+  G.__deco.initCallback = callback;
 }
 
 function ensureInitialized() {
-  if (!initialized && initCallback) {
-    initCallback();
-    initialized = true;
+  if (!G.__deco.initialized && G.__deco.initCallback) {
+    G.__deco.initCallback();
+    G.__deco.initialized = true;
   }
 }
 
@@ -815,7 +823,8 @@ export async function resolveDecoPage(
   }
 
   const isBotReq = isBot(matcherCtx?.userAgent);
-  const useAsync = asyncConfig !== null && !isBotReq;
+  const currentAsyncConfig = getAsyncConfig();
+  const useAsync = currentAsyncConfig !== null && !isBotReq;
 
   const eagerResults: (ResolvedSection[] | Promise<ResolvedSection[]>)[] = [];
   const deferredSections: DeferredSection[] = [];
@@ -825,7 +834,7 @@ export async function resolveDecoPage(
     const currentFlatIndex = flatIndex;
 
     const shouldDefer =
-      useAsync && shouldDeferSection(section, currentFlatIndex, asyncConfig!, isBotReq);
+      useAsync && shouldDeferSection(section, currentFlatIndex, currentAsyncConfig!, isBotReq);
 
     if (shouldDefer) {
       try {

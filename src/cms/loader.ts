@@ -12,8 +12,13 @@ export type DecoPage = {
   seo?: Record<string, unknown>;
 };
 
-let blockData: Record<string, unknown> = {};
-let revision: string | null = null;
+// globalThis-backed storage: TanStack Start server function split modules
+// may get isolated module instances. globalThis ensures shared state.
+const G = globalThis as any;
+if (!G.__deco) G.__deco = {};
+
+let blockData: Record<string, unknown> = G.__deco.blockData ?? {};
+let revision: string | null = G.__deco.revision ?? null;
 
 interface ALSLike<T> {
   getStore(): T | undefined;
@@ -70,6 +75,10 @@ export function setBlocks(blocks: Record<string, unknown>) {
   blockData = blocks;
   revision = computeRevision(blocks);
 
+  // Persist to globalThis so other module instances see them
+  G.__deco.blockData = blockData;
+  G.__deco.revision = revision;
+
   for (const listener of [...changeListeners]) {
     try {
       listener(blocks, revision);
@@ -84,6 +93,12 @@ export function setBlocks(blocks: Record<string, unknown>) {
  * (admin preview), the override is merged on top of the base blocks.
  */
 export function loadBlocks(): Record<string, unknown> {
+  // Re-sync from globalThis in case setBlocks was called in another module instance
+  if (G.__deco.blockData && G.__deco.blockData !== blockData) {
+    blockData = G.__deco.blockData;
+    revision = G.__deco.revision ?? null;
+  }
+
   const override = blocksOverrideStorage.getStore();
   if (override) {
     return { ...blockData, ...override };

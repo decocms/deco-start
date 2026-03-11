@@ -137,7 +137,7 @@ export const loadCmsHomePage = createServerFn({ method: "GET" }).handler(async (
 // Deferred section loader — resolves + enriches a single section on demand
 // ---------------------------------------------------------------------------
 
-export const loadDeferredSection = createServerFn({ method: "GET" })
+export const loadDeferredSection = createServerFn({ method: "POST" })
   .inputValidator(
     (data: unknown) =>
       data as { component: string; rawProps: Record<string, any>; pagePath: string },
