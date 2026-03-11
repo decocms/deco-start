@@ -276,6 +276,13 @@ function evaluateMatcher(rule: Record<string, unknown> | undefined, ctx: Matcher
       return Math.random() < traffic;
     }
 
+    case "website/matchers/date.ts": {
+      const now = Date.now();
+      const start = typeof rule.start === "string" ? new Date(rule.start).getTime() : 0;
+      const end = typeof rule.end === "string" ? new Date(rule.end).getTime() : Infinity;
+      return now >= start && now <= end;
+    }
+
     default: {
       const customMatcher = customMatchers[resolveType];
       if (customMatcher) {
