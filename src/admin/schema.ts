@@ -130,6 +130,114 @@ export function getRegisteredMatchers(): MatcherConfig[] {
 registerMatcherSchemas([
   { key: "website/matchers/always.ts", title: "Always", namespace: "website" },
   { key: "website/matchers/never.ts", title: "Never", namespace: "website" },
+  {
+    key: "website/matchers/device.ts",
+    title: "Device",
+    namespace: "website",
+    propsSchema: {
+      type: "object",
+      properties: {
+        mobile: { type: "boolean", title: "Mobile" },
+        desktop: { type: "boolean", title: "Desktop" },
+      },
+    },
+  },
+  {
+    key: "website/matchers/date.ts",
+    title: "Date Range",
+    namespace: "website",
+    propsSchema: {
+      type: "object",
+      properties: {
+        start: { type: "string", title: "Start Date", format: "date-time" },
+        end: { type: "string", title: "End Date", format: "date-time" },
+      },
+    },
+  },
+  {
+    key: "website/matchers/cron.ts",
+    title: "Time Window (Cron)",
+    namespace: "website",
+    propsSchema: {
+      type: "object",
+      properties: {
+        start: { type: "string", title: "Start", format: "date-time" },
+        end: { type: "string", title: "End", format: "date-time" },
+      },
+    },
+  },
+  {
+    key: "website/matchers/cookie.ts",
+    title: "Cookie",
+    namespace: "website",
+    propsSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", title: "Cookie Name" },
+        value: { type: "string", title: "Cookie Value" },
+      },
+    },
+  },
+  {
+    key: "website/matchers/host.ts",
+    title: "Hostname",
+    namespace: "website",
+    propsSchema: {
+      type: "object",
+      properties: {
+        host: { type: "string", title: "Hostname" },
+      },
+    },
+  },
+  {
+    key: "website/matchers/pathname.ts",
+    title: "Pathname",
+    namespace: "website",
+    propsSchema: {
+      type: "object",
+      properties: {
+        pattern: { type: "string", title: "Regex Pattern" },
+        includes: {
+          type: "array",
+          title: "Includes",
+          items: { type: "string" },
+        },
+        excludes: {
+          type: "array",
+          title: "Excludes",
+          items: { type: "string" },
+        },
+      },
+    },
+  },
+  {
+    key: "website/matchers/queryString.ts",
+    title: "Query String",
+    namespace: "website",
+    propsSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string", title: "Parameter Name" },
+        value: { type: "string", title: "Parameter Value" },
+      },
+    },
+  },
+  {
+    key: "website/matchers/random.ts",
+    title: "Random (A/B Test)",
+    namespace: "website",
+    propsSchema: {
+      type: "object",
+      properties: {
+        traffic: {
+          type: "number",
+          title: "Traffic Percentage (0\u20131)",
+          minimum: 0,
+          maximum: 1,
+        },
+      },
+    },
+  },
 ]);
 
 function buildLoaderDefinitions() {

@@ -280,11 +280,205 @@ npm run dev
 
 ## Key Principles
 
-1. **No compat layers** — replace, don't wrap
-2. **Types from the library, UI from the site** — `Product` from `@decocms/apps`, `<Image>` is local
-3. **One Vite alias** — `"~"` → `"src/"` only
-4. **`import "./setup"` first** — in both `server.ts` and `worker-entry.ts`
-5. **globalThis for split modules** — Vite server function split modules need `globalThis.__deco` to share state
+1. **No compat layer anywhere** -- not in `@decocms/start`, not in `@decocms/apps`, not in the site repo
+2. **Replace, don't wrap** -- change the import to the real thing, don't create a pass-through
+3. **Types from the library, UI from the site** -- `Product` type comes from `@decocms/apps/commerce/types`, but the `<Image>` component is site-local
+4. **One Vite alias maximum** -- `"~"` -> `"src/"` is the only acceptable alias in a finished migration
+5. **`tsconfig.json` mirrors `vite.config.ts`** -- only `"~/*": ["./src/*"]` in paths
+6. **Signals don't auto-subscribe in React** -- reading `signal.value` in render creates NO subscription; use `useStore(signal.store)` from `@tanstack/react-store`
+7. **Commerce loaders need request context** -- `resolve.ts` must pass URL/path to PLP/PDP loaders for search, categories, sort, and pagination to work
+8. **`wrangler.jsonc` main must be a custom worker-entry** -- TanStack Start ignores `export default` in `server.ts`; create a separate `worker-entry.ts` and point wrangler to it
+9. **Copy components faithfully, never rewrite** -- `cp` the original file, then only change: `class` → `className`, `for` → `htmlFor`, import paths (`apps/` → `~/`, `$store/` → `~/`), `preact` → `react`. NEVER regenerate, "clean up", or "improve" the component. AI-rewritten components are the #1 source of visual regressions -- the layout, grid classes, responsive variants, and conditional logic must be byte-identical to the original except for the mechanical migration changes
+10. **Tailwind v4 logical property hazard** -- mixed `px-*` + `pl-*/pr-*` on the same element breaks the cascade. Replace mixed patterns with consistent longhand (`pl-X pr-X` instead of `px-X`) on those elements only
+11. **oklch CSS variables need triplets, not hex** -- sites using `oklch(var(--x))` must store variables as oklch triplets (`100% 0.00 0deg`), not hex values. `oklch(#FFF)` is invalid CSS
+12. **Verify ALL imports resolve at runtime, not just build** -- Vite tree-shakes dead imports, so `npm run build` passes even with missing modules. But `registerSections` lazy imports execute at runtime, killing entire sections silently
+13. **`import "./setup"` first** — in both `server.ts` and `worker-entry.ts`
+14. **globalThis for split modules** — Vite server function split modules need `globalThis.__deco` to share state
+
+## Worker Entry Architecture
+
+The Cloudflare Worker entry point has a strict layering. Admin routes MUST be handled in `createDecoWorkerEntry` (the outermost wrapper), NOT inside TanStack's `createServerEntry`. TanStack Start's Vite build strips custom logic from `createServerEntry` callbacks in production.
+
+```
+Request
+  └─> createDecoWorkerEntry(serverEntry, { admin: { ... } })
+        ├─> tryAdminRoute()             ← FIRST: /live/_meta, /.decofile, /live/previews/*
+        ├─> cache purge check            ← __deco_purge_cache
+        ├─> static asset bypass          ← /assets/*, favicon, sprites
+        ├─> Cloudflare cache (caches.open)
+        └─> serverEntry.fetch()          ← TanStack Start handles everything else
+```
+
+### Site worker-entry.ts Pattern
+
+```typescript
+import "./setup";
+import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
+import { createDecoWorkerEntry } from "@decocms/start/sdk/workerEntry";
+import {
+  handleMeta, handleDecofileRead, handleDecofileReload,
+  handleRender, corsHeaders,
+} from "@decocms/start/admin";
+
+const serverEntry = createServerEntry({
+  async fetch(request) {
+    return await handler.fetch(request);
+  },
+});
+
+export default createDecoWorkerEntry(serverEntry, {
+  admin: { handleMeta, handleDecofileRead, handleDecofileReload, handleRender, corsHeaders },
+});
+```
+
+Key rules:
+- `./setup` MUST be imported first (registers sections, loaders, meta, render shell)
+- Admin handlers are passed as options, NOT imported inside `createDecoWorkerEntry`
+- `/live/` and `/.decofile` are in `DEFAULT_BYPASS_PATHS` -- never cached by the edge
+
+### Admin Preview HTML Shell
+
+The preview at `/live/previews/*` renders sections into an HTML shell. This shell MUST match the production `<html>` attributes for CSS frameworks to work:
+
+```typescript
+// In setup.ts
+setRenderShell({
+  css: appCss,          // Vite ?url import of app.css
+  fonts: ["https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap"],
+  theme: "light",       // -> <html data-theme="light"> (required for DaisyUI v4)
+  bodyClass: "bg-base-100 text-base-content",
+  lang: "pt-BR",
+});
+```
+
+Without `data-theme="light"`, DaisyUI v4 theme variables (`--color-primary`, etc.) won't activate in the preview iframe, causing color mismatches vs production.
+
+### Client-Safe vs Server-Only Imports
+
+`@decocms/start` has two admin entry points:
+- **`@decocms/start/admin`** -- server-only handlers (handleMeta, handleRender, etc.) -- these may transitively import `node:async_hooks`
+- **`@decocms/start/admin/setup`** (re-exported from `@decocms/start/admin`) -- client-safe setup functions (setMetaData, setInvokeLoaders, setRenderShell) -- NO node: imports
+
+The site's `setup.ts` can safely import from `@decocms/start/admin` because it only uses the setup functions. But the barrel export must be structured so Vite tree-shaking doesn't pull server modules into client bundles.
+
+## Admin Self-Hosting Architecture
+
+When a site is self-hosted (deployed to its own Cloudflare Worker), the admin communicates with the storefront via the `productionUrl`:
+
+```
+admin.deco.cx
+  └─> createContentSiteSDK (when env.platform === "content" OR devContentUrl is set)
+        ├─> fetch(productionUrl + "/live/_meta")     ← schema + manifest
+        ├─> fetch(productionUrl + "/.decofile")      ← content blocks
+        └─> iframe src = productionUrl + "/live/previews/*"  ← section preview
+```
+
+### Content URL Resolution Priority
+
+1. `devContentUrl` URL param → saved to `localStorage[deco::devContentUrl::${site}]` → used by Content SDK
+2. `devContentUrl` from localStorage → used by Content SDK
+3. `site.metadata.selfHosting.productionUrl` (Supabase) → used by Content SDK
+4. `https://${site}.deco.site` → fallback
+
+### Environment Platform Gate
+
+The admin only uses `createContentSiteSDK` when:
+- `devContentUrl` is set (localStorage or URL param), OR
+- The current environment has `platform: "content"`
+
+Setting `productionUrl` in Supabase alone is NOT sufficient. The environment must be "content" platform. This happens when `connectSelfHosting` is called with a `productionUrl` -- it deletes/recreates the staging environment as `platform: "content"`.
+
+For local dev, use the URL param shortcut:
+```
+https://admin.deco.cx/sites/YOUR_SITE/spaces/...?devContentUrl=http://localhost:5181
+```
+
+## Admin / CMS Schema Architecture
+
+The deco admin (deco-cx/deco) communicates with the storefront via:
+- `GET /live/_meta` -- returns full JSON Schema + manifest of block types
+- `GET /.decofile` -- returns the site's content blocks
+- `POST /deco/render` -- renders a section/page with given props in an iframe
+- `POST /deco/invoke` -- calls a loader/action and returns JSON
+
+### Schema Composition (`composeMeta`)
+
+The schema generator (`scripts/generate-schema.ts`) only produces section schemas from site TypeScript files. Framework-managed block types (pages) are defined in `src/admin/schema.ts` and injected at runtime via `composeMeta()`.
+
+```
+[generate-schema.ts] --> meta.gen.json (sections only, pages: empty)
+[setup.ts] --> imports meta.gen.json --> calls setMetaData(metaData)
+[setMetaData] --> calls composeMeta() --> injects page schema + merges definitions
+[/live/_meta] --> returns composed schema with content-hash ETag
+```
+
+Key rules:
+- `toBase64()` MUST produce padded Base64 (matching `btoa()`) -- admin uses `btoa()` to construct definition refs
+- Page schema uses flat properties (no allOf + @Props indirection) to minimize RJSF resolution steps
+- ETag is a content-based DJB2 hash, not string length, for reliable cache invalidation
+- The etag is also included in the JSON response body for admin's `metaInfo.value?.etag` cache check
+
+### Admin Local Development
+
+To use the deco admin with a local storefront:
+1. Start admin: `cd admin && deno task play` (port 4200)
+2. Start storefront: `bun run dev` (port 5181 or wherever it lands)
+3. Set `devContentUrl` in admin's browser console: `localStorage.setItem('deco::devContentUrl::YOUR_SITE_NAME', 'http://localhost:PORT')`
+4. Navigate to `http://localhost:4200/sites/YOUR_SITE_NAME/spaces/pages`
+5. After schema changes: clear admin cache (`localStorage.removeItem('meta::YOUR_SITE_NAME')`) and hard-refresh
+
+## Conductor / AI Bulk Migration Workflow
+
+For sites with 100+ sections and 200+ components, manual file-by-file migration is impractical. The proven workflow:
+
+### Phase 1: Scaffold + Copy (human)
+1. Scaffold TanStack Start project
+2. `cp -r` the entire `src/` from the original site
+3. Set up `vite.config.ts`, `tsconfig.json`, `wrangler.jsonc`, `package.json`
+4. Install dependencies
+
+### Phase 2: Mechanical Rewrites (AI/conductor)
+Let AI tackle the bulk TypeScript errors in a single pass:
+
+1. **Import rewrites** (safe for bulk `sed`):
+   - `from "preact"` → `from "react"`
+   - `from "preact/hooks"` → `from "react"`
+   - `from "preact/compat"` → `from "react"`
+   - `from "@preact/signals"` → `from "~/sdk/signal"`
+   - `from "apps/commerce/types"` → `from "@decocms/apps/commerce/types"`
+   - `from "$store/"` → `from "~/"`
+
+2. **JSX attribute rewrites** (safe for bulk):
+   - `class=` → `className=` (in JSX context)
+   - `for=` → `htmlFor=` (on `<label>` elements)
+   - `stroke-width` → `strokeWidth`, `fill-rule` → `fillRule` (SVG)
+   - Remove `data-fresh-disable-lock`
+
+3. **Type rewrites** (per-file, AI-assisted):
+   - `JSX.TargetedEvent<HTMLInputElement>` → `React.ChangeEvent<HTMLInputElement>`
+   - `JSX.TargetedMouseEvent` → `React.MouseEvent`
+   - `ComponentChildren` → `ReactNode`
+   - `SVGAttributes<SVGSVGElement>` → `React.SVGProps<SVGSVGElement>`
+   - Create consolidated type files (`~/types/vtex.ts`, `~/types/widgets.ts`)
+
+4. **Signal-to-state** (per-file, needs judgment):
+   - `useSignal(x)` → `useState(x)` with setter
+   - `.value` reads → direct variable reads
+   - `.value =` writes → `setState()` calls
+   - Toggle: `x.value = !x.value` → `setX(prev => !prev)`
+
+### Phase 3: Verify (human + AI)
+1. `npx tsc --noEmit` — catches remaining type errors
+2. `npm run build` — catches import resolution errors
+3. `bun run dev` + browser test — catches runtime errors
+4. Visual comparison with production — catches layout regressions
+
+### Phase 4: Fix Runtime Issues (human-guided)
+This is where gotchas 1-45 apply. The mechanical rewrite gets you to "builds clean" but runtime issues require understanding the architectural differences.
+
+### Key Insight: Never Rewrite, Only Port
+
+The conductor approach that worked (836 errors → 0 across 213 files) treated every file as: **copy the original, apply mechanical changes only**. The failed approach was: "look at the original and rewrite it in React" — this produced components that looked similar in code but rendered completely differently because of subtle grid/flex/responsive differences.
 
 ## Reference Index
 
@@ -297,7 +491,8 @@ npm run dev
 | Platform hooks (VTEX) | `references/platform-hooks/` |
 | Vite configuration | `references/vite-config/` |
 | Automation commands | `references/codemod-commands.md` |
-| Common gotchas (27) | `references/gotchas.md` |
+| Admin schema composition | `src/admin/schema.ts` in `@decocms/start` |
+| Common gotchas (45 items) | `references/gotchas.md` |
 | setup.ts template | `templates/setup-ts.md` |
 | vite.config.ts template | `templates/vite-config.md` |
 | worker-entry template | `templates/worker-entry.md` |
