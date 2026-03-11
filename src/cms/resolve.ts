@@ -608,10 +608,14 @@ function isRawSectionLayout(section: unknown): string | null {
 }
 
 /**
- * Resolve the final section component key by walking block references
- * and unwrapping Lazy wrappers. Returns null if not determinable.
+ * Resolve the final section component key by walking block references,
+ * unwrapping Lazy wrappers, and evaluating multivariate flags.
+ * Returns null if not determinable.
  */
-function resolveFinalSectionKey(section: unknown): string | null {
+function resolveFinalSectionKey(
+  section: unknown,
+  matcherCtx?: MatcherContext,
+): string | null {
   if (!section || typeof section !== "object") return null;
 
   const blocks = loadBlocks();
@@ -625,6 +629,28 @@ function resolveFinalSectionKey(section: unknown): string | null {
       const inner = current.section;
       if (!inner || typeof inner !== "object") return null;
       current = inner as Record<string, unknown>;
+      continue;
+    }
+
+    if (
+      rt === "website/flags/multivariate.ts" ||
+      rt === "website/flags/multivariate/section.ts"
+    ) {
+      const variants = current.variants as
+        | Array<{ value: unknown; rule?: unknown }>
+        | undefined;
+      if (!variants?.length) return null;
+
+      let matched: unknown = null;
+      for (const variant of variants) {
+        const rule = variant.rule as Record<string, unknown> | undefined;
+        if (evaluateMatcher(rule, matcherCtx ?? {})) {
+          matched = variant.value;
+          break;
+        }
+      }
+      if (!matched || typeof matched !== "object") return null;
+      current = matched as Record<string, unknown>;
       continue;
     }
 
@@ -667,6 +693,7 @@ function shouldDeferSection(
   flatIndex: number,
   cfg: AsyncRenderingConfig,
   isBotReq: boolean,
+  matcherCtx?: MatcherContext,
 ): boolean {
   if (isBotReq) return false;
 
@@ -675,12 +702,12 @@ function shouldDeferSection(
   const rt = obj.__resolveType as string | undefined;
   if (!rt) return false;
 
-  // Flags require runtime evaluation — keep eager for safety
+  // Top-level flags (not wrapped in Lazy) — keep eager for safety
   if (rt === "website/flags/multivariate.ts" || rt === "website/flags/multivariate/section.ts") {
     return false;
   }
 
-  const finalKey = resolveFinalSectionKey(section);
+  const finalKey = resolveFinalSectionKey(section, matcherCtx);
   if (!finalKey) return false;
 
   if (cfg.alwaysEager.has(finalKey)) return false;
@@ -698,9 +725,12 @@ function shouldDeferSection(
 /**
  * Follow the block reference chain to find the final section component
  * and collect the CMS props WITHOUT running commerce loaders.
- * Only resolves named block references and lazy wrappers.
+ * Resolves named block references, lazy wrappers, and multivariate flags.
  */
-function resolveSectionShallow(section: unknown): DeferredSection | null {
+function resolveSectionShallow(
+  section: unknown,
+  matcherCtx?: MatcherContext,
+): DeferredSection | null {
   if (!section || typeof section !== "object") return null;
 
   const blocks = loadBlocks();
@@ -718,6 +748,29 @@ function resolveSectionShallow(section: unknown): DeferredSection | null {
       const inner = current.section;
       if (!inner || typeof inner !== "object") return null;
       current = inner as Record<string, unknown>;
+      continue;
+    }
+
+    // Multivariate flags — evaluate matchers and continue with matched variant
+    if (
+      rt === "website/flags/multivariate.ts" ||
+      rt === "website/flags/multivariate/section.ts"
+    ) {
+      const variants = current.variants as
+        | Array<{ value: unknown; rule?: unknown }>
+        | undefined;
+      if (!variants?.length) return null;
+
+      let matched: unknown = null;
+      for (const variant of variants) {
+        const rule = variant.rule as Record<string, unknown> | undefined;
+        if (evaluateMatcher(rule, matcherCtx ?? {})) {
+          matched = variant.value;
+          break;
+        }
+      }
+      if (!matched || typeof matched !== "object") return null;
+      current = matched as Record<string, unknown>;
       continue;
     }
 
@@ -841,17 +894,30 @@ export async function resolveDecoPage(
     const currentFlatIndex = flatIndex;
 
     const shouldDefer =
-      useAsync && shouldDeferSection(section, currentFlatIndex, currentAsyncConfig!, isBotReq);
+      useAsync && shouldDeferSection(section, currentFlatIndex, currentAsyncConfig!, isBotReq, ctx);
 
     if (shouldDefer) {
+      let deferredOk = false;
       try {
-        const deferred = resolveSectionShallow(section);
+        const deferred = resolveSectionShallow(section, ctx);
         if (deferred) {
           deferred.index = currentFlatIndex;
           deferredSections.push(deferred);
+          deferredOk = true;
         }
       } catch (e) {
         onResolveError(e, "section", "Deferred section resolution");
+      }
+
+      if (!deferredOk) {
+        // Shallow resolution failed — fall back to eager resolution
+        const idx = currentFlatIndex;
+        eagerResults.push(
+          resolveRawSection(section, rctx).then((sections) => {
+            for (const s of sections) s.index = idx;
+            return sections;
+          }),
+        );
       }
       flatIndex++;
     } else {
