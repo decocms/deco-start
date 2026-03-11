@@ -94,7 +94,7 @@ export function setBlocks(blocks: Record<string, unknown>) {
  */
 export function loadBlocks(): Record<string, unknown> {
   // Re-sync from globalThis in case setBlocks was called in another module instance
-  if (Object.keys(blockData).length === 0 && G.__deco.blockData && Object.keys(G.__deco.blockData).length > 0) {
+  if (G.__deco.blockData && G.__deco.blockData !== blockData) {
     blockData = G.__deco.blockData;
     revision = G.__deco.revision ?? null;
   }

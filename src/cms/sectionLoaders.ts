@@ -20,6 +20,7 @@ const G = globalThis as any;
 if (!G.__deco) G.__deco = {};
 if (!G.__deco.sectionLoaderRegistry) G.__deco.sectionLoaderRegistry = new Map();
 if (!G.__deco.layoutSections) G.__deco.layoutSections = new Set();
+if (!G.__deco.cacheableSections) G.__deco.cacheableSections = new Map();
 
 const loaderRegistry: Map<string, SectionLoaderFn> = G.__deco.sectionLoaderRegistry;
 
@@ -31,7 +32,7 @@ interface CacheableSectionConfig {
   maxAge: number;
 }
 
-const cacheableSections = new Map<string, CacheableSectionConfig>();
+const cacheableSections: Map<string, CacheableSectionConfig> = G.__deco.cacheableSections;
 
 interface SectionCacheEntry {
   section: ResolvedSection;

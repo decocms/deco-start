@@ -13,6 +13,8 @@ export type ResolvedSection = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   props: Record<string, any>;
   key: string;
+  /** Original position in the raw section list (used by mergeSections). */
+  index?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -53,7 +55,10 @@ export interface AsyncRenderingConfig {
   alwaysEager: Set<string>;
 }
 
-let asyncConfig: AsyncRenderingConfig | null = G.__deco.asyncConfig ?? null;
+// Always read from globalThis so split-module copies see updates
+function getAsyncConfig(): AsyncRenderingConfig | null {
+  return G.__deco.asyncConfig ?? null;
+}
 
 /**
  * Enable async section rendering.
@@ -72,17 +77,16 @@ export function setAsyncRenderingConfig(config?: {
   alwaysEager?: string[];
   respectCmsLazy?: boolean;
 }): void {
-  asyncConfig = {
+  G.__deco.asyncConfig = {
     respectCmsLazy: config?.respectCmsLazy ?? true,
     foldThreshold: config?.foldThreshold ?? Infinity,
     alwaysEager: new Set(config?.alwaysEager ?? []),
   };
-  G.__deco.asyncConfig = asyncConfig;
 }
 
 /** Read-only access to the current config (null when disabled). */
 export function getAsyncRenderingConfig(): AsyncRenderingConfig | null {
-  return asyncConfig;
+  return getAsyncConfig();
 }
 
 // ---------------------------------------------------------------------------
@@ -218,24 +222,14 @@ export function setDanglingReferenceHandler(handler: DanglingReferenceHandler) {
 // Init hook
 // ---------------------------------------------------------------------------
 
-let initCallback: (() => void) | null = G.__deco.initCallback ?? null;
-let initialized = G.__deco.initialized ?? false;
-
 export function onBeforeResolve(callback: () => void) {
-  initCallback = callback;
   G.__deco.initCallback = callback;
 }
 
 function ensureInitialized() {
-  if (!initCallback && G.__deco.initCallback) {
-    initCallback = G.__deco.initCallback;
-  }
-  if (!initialized && !G.__deco.initialized && initCallback) {
-    initCallback();
-    initialized = true;
+  if (!G.__deco.initialized && G.__deco.initCallback) {
+    G.__deco.initCallback();
     G.__deco.initialized = true;
-  } else if (G.__deco.initialized) {
-    initialized = true;
   }
 }
 
@@ -829,7 +823,8 @@ export async function resolveDecoPage(
   }
 
   const isBotReq = isBot(matcherCtx?.userAgent);
-  const useAsync = asyncConfig !== null && !isBotReq;
+  const currentAsyncConfig = getAsyncConfig();
+  const useAsync = currentAsyncConfig !== null && !isBotReq;
 
   const eagerResults: (ResolvedSection[] | Promise<ResolvedSection[]>)[] = [];
   const deferredSections: DeferredSection[] = [];
@@ -839,7 +834,7 @@ export async function resolveDecoPage(
     const currentFlatIndex = flatIndex;
 
     const shouldDefer =
-      useAsync && shouldDeferSection(section, currentFlatIndex, asyncConfig!, isBotReq);
+      useAsync && shouldDeferSection(section, currentFlatIndex, currentAsyncConfig!, isBotReq);
 
     if (shouldDefer) {
       try {
