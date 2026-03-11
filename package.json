@@ -75,8 +75,6 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.6",
-    "@tanstack/react-router": "^1.166.7",
-    "@tanstack/react-start": "^1.166.7",
     "@tanstack/store": "^0.9.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
