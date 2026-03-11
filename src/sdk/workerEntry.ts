@@ -202,6 +202,25 @@ export interface DecoWorkerEntryOptions {
    * ```
    */
   proxyHandler?: (request: Request, url: URL) => Promise<Response | null> | Response | null;
+
+  /**
+   * Environment variable name holding a build version string.
+   * The value is appended to every cache key so each deploy gets its own
+   * cache namespace — old entries become orphaned and expire naturally,
+   * preventing stale HTML that references old CSS/JS fingerprinted filenames.
+   *
+   * Set to `false` to disable. When the env var is missing or empty,
+   * cache keys remain unversioned (backward-compatible).
+   *
+   * @default "BUILD_HASH"
+   *
+   * @example
+   * ```yaml
+   * # CI: pass git hash to wrangler
+   * - run: npx wrangler deploy --var BUILD_HASH:$(git rev-parse --short HEAD)
+   * ```
+   */
+  cacheVersionEnv?: string | false;
 }
 
 // ---------------------------------------------------------------------------
@@ -296,6 +315,7 @@ export function createDecoWorkerEntry(
     fingerprintedAssetPattern = FINGERPRINTED_ASSET_RE,
     stripTrackingParams: shouldStripTracking = true,
     previewShell: customPreviewShell,
+    cacheVersionEnv = "BUILD_HASH",
   } = options;
 
   const allBypassPaths = [...(bypassPaths ?? DEFAULT_BYPASS_PATHS), ...extraBypassPaths];
@@ -335,13 +355,20 @@ export function createDecoWorkerEntry(
     return parts.join("|");
   }
 
-  function buildCacheKey(request: Request): { key: Request; segment?: SegmentKey } {
+  function buildCacheKey(request: Request, env: Record<string, unknown>): { key: Request; segment?: SegmentKey } {
     const url = new URL(request.url);
 
     if (shouldStripTracking) {
       const cleanPath = cleanPathForCacheKey(url.toString());
       const cleanUrl = new URL(cleanPath, url.origin);
       url.search = cleanUrl.search;
+    }
+
+    if (cacheVersionEnv !== false) {
+      const version = (env[cacheVersionEnv] as string) || "";
+      if (version) {
+        url.searchParams.set("__v", version);
+      }
     }
 
     if (buildSegment) {
@@ -584,7 +611,7 @@ export function createDecoWorkerEntry(
       }
 
       // Cacheable request — build segment-aware cache key
-      const { key: cacheKey, segment } = buildCacheKey(request);
+      const { key: cacheKey, segment } = buildCacheKey(request, env);
 
       // Logged-in users always bypass the cache (personalized content)
       if (segment?.loggedIn) {
@@ -609,6 +636,10 @@ export function createDecoWorkerEntry(
             const hit = new Response(cached.body, cached);
             hit.headers.set("X-Cache", "HIT");
             if (segment) hit.headers.set("X-Cache-Segment", hashSegment(segment));
+            if (cacheVersionEnv !== false) {
+              const v = (env[cacheVersionEnv] as string) || "";
+              if (v) hit.headers.set("X-Cache-Version", v);
+            }
             return hit;
           }
         } catch {
@@ -649,6 +680,10 @@ export function createDecoWorkerEntry(
       toReturn.headers.set("X-Cache", "MISS");
       toReturn.headers.set("X-Cache-Profile", profile);
       if (segment) toReturn.headers.set("X-Cache-Segment", hashSegment(segment));
+      if (cacheVersionEnv !== false) {
+        const v = (env[cacheVersionEnv] as string) || "";
+        if (v) toReturn.headers.set("X-Cache-Version", v);
+      }
 
       // For Cache API storage, use sMaxAge as max-age since the Cache API
       // ignores s-maxage and only respects max-age for TTL decisions.
