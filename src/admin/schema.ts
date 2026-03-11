@@ -191,9 +191,7 @@ const PRODUCT_LIST_LOADERS = [
 function buildLoaderDefinitions() {
   const definitions: Record<string, any> = {};
   const manifestBlocks: Record<string, any> = {};
-  const loaderAnyOf: any[] = [
-    { $ref: `#/definitions/${RESOLVABLE_LITERAL_KEY}` },
-  ];
+  const loaderAnyOf: any[] = [{ $ref: `#/definitions/${RESOLVABLE_LITERAL_KEY}` }];
 
   for (const loader of KNOWN_LOADERS) {
     const defKey = toBase64(loader.key);
@@ -230,9 +228,7 @@ function buildLoaderDefinitions() {
 function buildMatcherDefinitions() {
   const definitions: Record<string, any> = {};
   const manifestBlocks: Record<string, any> = {};
-  const matcherAnyOf: any[] = [
-    { $ref: `#/definitions/${RESOLVABLE_LITERAL_KEY}` },
-  ];
+  const matcherAnyOf: any[] = [{ $ref: `#/definitions/${RESOLVABLE_LITERAL_KEY}` }];
 
   const matchers = [
     { key: "website/matchers/always.ts", title: "Always" },
@@ -274,10 +270,7 @@ function buildMultivariateFlagSchema(innerSchema: any) {
     properties: {
       __resolveType: {
         type: "string",
-        enum: [
-          "website/flags/multivariate.ts",
-          "website/flags/multivariate/section.ts",
-        ],
+        enum: ["website/flags/multivariate.ts", "website/flags/multivariate/section.ts"],
       },
       variants: {
         type: "array",
@@ -316,9 +309,7 @@ function buildPageSchema(sectionAnyOf: any[]) {
     items: { anyOf: sectionAnyOf },
   };
 
-  const sectionsMultivariateSchema = buildMultivariateFlagSchema(
-    sectionsArraySchema,
-  );
+  const sectionsMultivariateSchema = buildMultivariateFlagSchema(sectionsArraySchema);
 
   const definition = {
     title: PAGE_TYPE,
@@ -491,9 +482,7 @@ function wrapResolvableProperties(
     if (!defKey.endsWith("@Props")) continue;
     if (!def || !def.properties) continue;
 
-    for (const [propName, propSchema] of Object.entries(
-      def.properties as Record<string, any>,
-    )) {
+    for (const [propName, propSchema] of Object.entries(def.properties as Record<string, any>)) {
       if (!propSchema || typeof propSchema !== "object") continue;
       if (propSchema.anyOf || propSchema.$ref) continue;
 
@@ -503,9 +492,7 @@ function wrapResolvableProperties(
       const { nullable, title, hide, ...rest } = propSchema;
 
       // Determine which loader refs to include based on property type
-      const loaderRefs = isProductArrayProperty(propSchema)
-        ? productLoaderRefs
-        : [];
+      const loaderRefs = isProductArrayProperty(propSchema) ? productLoaderRefs : [];
 
       const wrapped: any = {
         anyOf: [resolvableRef, { ...rest, title: title || "Inline data" }, ...loaderRefs],

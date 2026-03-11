@@ -38,9 +38,7 @@ function safeParseInt(value: string | undefined): number | undefined {
 }
 
 function parse(header: string): ParsedCacheControl {
-  const directives = header
-    .split(",")
-    .map((d) => d.trim().toLowerCase());
+  const directives = header.split(",").map((d) => d.trim().toLowerCase());
 
   const result: ParsedCacheControl = {
     isPublic: false,

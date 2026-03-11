@@ -19,11 +19,7 @@ export interface SectionOptions {
 const registry: Record<string, RegistryEntry> = {};
 const sectionOptions: Record<string, SectionOptions> = {};
 
-export function registerSection(
-  key: string,
-  loader: RegistryEntry,
-  options?: SectionOptions,
-) {
+export function registerSection(key: string, loader: RegistryEntry, options?: SectionOptions) {
   registry[key] = loader;
   if (options) sectionOptions[key] = options;
 }

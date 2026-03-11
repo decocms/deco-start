@@ -1,8 +1,10 @@
 export function getCookie(name: string): string {
-  return globalThis.window?.document?.cookie?.split("; ").reduce((r, v) => {
-    const parts = v.split("=");
-    return parts[0] === name ? decodeURIComponent(parts[1]) : r;
-  }, "") ?? "";
+  return (
+    globalThis.window?.document?.cookie?.split("; ").reduce((r, v) => {
+      const parts = v.split("=");
+      return parts[0] === name ? decodeURIComponent(parts[1]) : r;
+    }, "") ?? ""
+  );
 }
 
 export function setCookie(name: string, value: string, days: number) {
@@ -15,8 +17,7 @@ export function setCookie(name: string, value: string, days: number) {
 
 export function deleteCookie(name: string) {
   if (globalThis?.window?.document) {
-    globalThis.window.document.cookie =
-      name + "=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
+    globalThis.window.document.cookie = name + "=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
   }
 }
 

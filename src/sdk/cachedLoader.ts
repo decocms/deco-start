@@ -31,9 +31,7 @@ const cache = new Map<string, CacheEntry>();
 
 function evictIfNeeded() {
   if (cache.size <= MAX_CACHE_ENTRIES) return;
-  const oldest = [...cache.entries()].sort(
-    (a, b) => a[1].createdAt - b[1].createdAt,
-  );
+  const oldest = [...cache.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt);
   const toDelete = oldest.slice(0, cache.size - MAX_CACHE_ENTRIES);
   for (const [key] of toDelete) cache.delete(key);
 }

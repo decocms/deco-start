@@ -7,8 +7,9 @@
  * For server-only handlers (handleMeta, handleRender, etc.),
  * import from "@decocms/start/admin" instead.
  */
+
+export { type InvokeLoader, setInvokeLoaders } from "./invoke";
 export { setMetaData } from "./meta";
-export { setInvokeLoaders, type InvokeLoader } from "./invoke";
 
 let cssHref: string | null = null;
 let fontHrefs: string[] = [];

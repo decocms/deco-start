@@ -25,14 +25,14 @@
  * ```
  */
 
+import { getRenderShellConfig } from "../admin/setup";
 import {
-  cacheHeaders,
-  getCacheProfileConfig,
-  detectCacheProfile,
   type CacheProfile,
+  cacheHeaders,
+  detectCacheProfile,
+  getCacheProfileConfig,
 } from "./cacheHeaders";
 import { cleanPathForCacheKey } from "./urlUtils";
-import { getRenderShellConfig } from "../admin/setup";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -217,8 +217,7 @@ const PREVIEW_SHELL_SCRIPT = `(function() {
   })();`;
 
 function buildPreviewShell(): string {
-  const { cssHref, fontHrefs, themeName, bodyClass, htmlLang } =
-    getRenderShellConfig();
+  const { cssHref, fontHrefs, themeName, bodyClass, htmlLang } = getRenderShellConfig();
 
   const themeAttr = themeName ? ` data-theme="${themeName}"` : "";
   const langAttr = htmlLang ? ` lang="${htmlLang}"` : "";
@@ -251,20 +250,13 @@ function buildPreviewShell(): string {
 const MOBILE_RE = /mobile|android|iphone|ipad|ipod/i;
 const ONE_YEAR = 31536000;
 
-const DEFAULT_BYPASS_PATHS = [
-  "/_server",
-  "/_build",
-  "/deco/",
-  "/live/",
-  "/.decofile",
-];
+const DEFAULT_BYPASS_PATHS = ["/_server", "/_build", "/deco/", "/live/", "/.decofile"];
 
-const FINGERPRINTED_ASSET_RE =
-  /(?:\/_build)?\/assets\/.*-[a-zA-Z0-9_-]{8,}\.\w+$/;
+const FINGERPRINTED_ASSET_RE = /(?:\/_build)?\/assets\/.*-[a-zA-Z0-9_-]{8,}\.\w+$/;
 
 const IMMUTABLE_HEADERS: Record<string, string> = {
   "Cache-Control": `public, max-age=${ONE_YEAR}, immutable`,
-  "Vary": "Accept-Encoding",
+  Vary: "Accept-Encoding",
 };
 
 // ---------------------------------------------------------------------------
@@ -299,10 +291,7 @@ export function createDecoWorkerEntry(
     cacheVersionEnv = "BUILD_HASH",
   } = options;
 
-  const allBypassPaths = [
-    ...(bypassPaths ?? DEFAULT_BYPASS_PATHS),
-    ...extraBypassPaths,
-  ];
+  const allBypassPaths = [...(bypassPaths ?? DEFAULT_BYPASS_PATHS), ...extraBypassPaths];
 
   // -- Helpers ----------------------------------------------------------------
 
@@ -362,9 +351,7 @@ export function createDecoWorkerEntry(
     }
 
     if (deviceSpecificKeys) {
-      const device = MOBILE_RE.test(request.headers.get("user-agent") ?? "")
-        ? "mobile"
-        : "desktop";
+      const device = MOBILE_RE.test(request.headers.get("user-agent") ?? "") ? "mobile" : "desktop";
       url.searchParams.set("__cf_device", device);
     }
 
@@ -373,10 +360,7 @@ export function createDecoWorkerEntry(
 
   // -- Purge handler ----------------------------------------------------------
 
-  async function handlePurge(
-    request: Request,
-    env: Record<string, unknown>,
-  ): Promise<Response> {
+  async function handlePurge(request: Request, env: Record<string, unknown>): Promise<Response> {
     if (purgeTokenEnv === false) {
       return new Response("Purge disabled", { status: 404 });
     }
@@ -395,10 +379,7 @@ export function createDecoWorkerEntry(
 
     const paths = body.paths;
     if (!Array.isArray(paths) || paths.length === 0) {
-      return new Response(
-        'Body must include "paths": ["/", "/page"]',
-        { status: 400 },
-      );
+      return new Response('Body must include "paths": ["/", "/page"]', { status: 400 });
     }
 
     const cache = (caches as unknown as { default: Cache }).default;
@@ -427,9 +408,7 @@ export function createDecoWorkerEntry(
           }
         }
       } else {
-        const devices = deviceSpecificKeys
-          ? (["mobile", "desktop"] as const)
-          : ([null] as const);
+        const devices = deviceSpecificKeys ? (["mobile", "desktop"] as const) : ([null] as const);
 
         for (const device of devices) {
           const url = new URL(p, baseUrl);
@@ -476,14 +455,20 @@ export function createDecoWorkerEntry(
 
     if (pathname === "/live/_meta") {
       if (method === "OPTIONS") {
-        return new Response(null, { status: 204, headers: { ...admin.corsHeaders(request), ...ADMIN_NO_CACHE } });
+        return new Response(null, {
+          status: 204,
+          headers: { ...admin.corsHeaders(request), ...ADMIN_NO_CACHE },
+        });
       }
       return addCors(admin.handleMeta(request), request);
     }
 
     if (pathname === "/.decofile") {
       if (method === "OPTIONS") {
-        return new Response(null, { status: 204, headers: { ...admin.corsHeaders(request), ...ADMIN_NO_CACHE } });
+        return new Response(null, {
+          status: 204,
+          headers: { ...admin.corsHeaders(request), ...ADMIN_NO_CACHE },
+        });
       }
       if (method === "POST") {
         return addCors(await admin.handleDecofileReload(request), request);
@@ -492,7 +477,10 @@ export function createDecoWorkerEntry(
     }
 
     if (pathname === "/deco/_liveness") {
-      return new Response("OK", { status: 200, headers: { "Content-Type": "text/plain", ...ADMIN_NO_CACHE } });
+      return new Response("OK", {
+        status: 200,
+        headers: { "Content-Type": "text/plain", ...ADMIN_NO_CACHE },
+      });
     }
 
     if ((pathname === "/live/previews" || pathname === "/live/previews/") && method === "GET") {
@@ -509,7 +497,10 @@ export function createDecoWorkerEntry(
 
     if (pathname.startsWith("/live/previews/") && pathname !== "/live/previews/") {
       if (method === "OPTIONS") {
-        return new Response(null, { status: 204, headers: { ...admin.corsHeaders(request), ...ADMIN_NO_CACHE } });
+        return new Response(null, {
+          status: 204,
+          headers: { ...admin.corsHeaders(request), ...ADMIN_NO_CACHE },
+        });
       }
       return addCors(await admin.handleRender(request), request);
     }
@@ -560,16 +551,9 @@ export function createDecoWorkerEntry(
 
         // If the profile is private/none/cart, strip any public cache headers
         // the route may have set (prevents the search caching bug)
-        if (
-          profile === "private" ||
-          profile === "none" ||
-          profile === "cart"
-        ) {
+        if (profile === "private" || profile === "none" || profile === "cart") {
           const resp = new Response(origin.body, origin);
-          resp.headers.set(
-            "Cache-Control",
-            "private, no-cache, no-store, must-revalidate",
-          );
+          resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
           resp.headers.delete("CDN-Cache-Control");
           return resp;
         }
@@ -584,10 +568,7 @@ export function createDecoWorkerEntry(
       if (segment?.loggedIn) {
         const origin = await serverEntry.fetch(request, env, ctx);
         const resp = new Response(origin.body, origin);
-        resp.headers.set(
-          "Cache-Control",
-          "private, no-cache, no-store, must-revalidate",
-        );
+        resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
         resp.headers.set("X-Cache", "BYPASS");
         resp.headers.set("X-Cache-Reason", "logged-in");
         return resp;
@@ -622,10 +603,7 @@ export function createDecoWorkerEntry(
       // Don't cache non-public profiles
       if (!profileConfig.isPublic || profileConfig.sMaxAge === 0) {
         const resp = new Response(origin.body, origin);
-        resp.headers.set(
-          "Cache-Control",
-          "private, no-cache, no-store, must-revalidate",
-        );
+        resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
         return resp;
       }
 
@@ -652,10 +630,7 @@ export function createDecoWorkerEntry(
       // For Cache API storage, use sMaxAge as max-age since the Cache API
       // ignores s-maxage and only respects max-age for TTL decisions.
       const toStore = toReturn.clone();
-      toStore.headers.set(
-        "Cache-Control",
-        `public, max-age=${profileConfig.sMaxAge}`,
-      );
+      toStore.headers.set("Cache-Control", `public, max-age=${profileConfig.sMaxAge}`);
       ctx.waitUntil(cache.put(cacheKey, toStore));
 
       return toReturn;

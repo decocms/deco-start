@@ -49,10 +49,10 @@ export async function handleInvoke(request: Request): Promise<Response> {
         headers: JSON_HEADERS,
       });
     } catch (error) {
-      return new Response(
-        JSON.stringify({ error: (error as Error).message }),
-        { status: 500, headers: JSON_HEADERS },
-      );
+      return new Response(JSON.stringify({ error: (error as Error).message }), {
+        status: 500,
+        headers: JSON_HEADERS,
+      });
     }
   }
 

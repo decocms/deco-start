@@ -1,6 +1,6 @@
-import { Suspense, lazy, createElement, type ComponentType, type ReactNode } from "react";
+import { type ComponentType, createElement, lazy, type ReactNode, Suspense } from "react";
+import { getSectionOptions, getSectionRegistry } from "../cms/registry";
 import type { ResolvedSection } from "../cms/resolve";
-import { getSectionRegistry, getSectionOptions } from "../cms/registry";
 import { SectionErrorBoundary } from "./SectionErrorFallback";
 
 type LazyComponent = ReturnType<typeof lazy>;
@@ -40,7 +40,7 @@ export function DecoPageRenderer({ sections, loadingFallback, errorFallback }: P
         const options = getSectionOptions(section.component);
         const fallback = options?.loadingFallback
           ? createElement(options.loadingFallback)
-          : loadingFallback ?? <DefaultSectionFallback />;
+          : (loadingFallback ?? <DefaultSectionFallback />);
 
         const errFallback = options?.errorFallback
           ? createElement(options.errorFallback, { error: new Error("") })
@@ -52,15 +52,8 @@ export function DecoPageRenderer({ sections, loadingFallback, errorFallback }: P
           .replace(/^site-sections-/, "");
 
         return (
-          <section
-            key={`${section.key}-${index}`}
-            id={sectionId}
-            data-manifest-key={section.key}
-          >
-            <SectionErrorBoundary
-              sectionKey={section.key}
-              fallback={errFallback}
-            >
+          <section key={`${section.key}-${index}`} id={sectionId} data-manifest-key={section.key}>
+            <SectionErrorBoundary sectionKey={section.key} fallback={errFallback}>
               <Suspense fallback={fallback}>
                 <LazyComponent {...section.props} />
               </Suspense>

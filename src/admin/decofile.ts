@@ -12,11 +12,16 @@ export function handleDecofileRead(): Response {
   });
 }
 
-export async function handleDecofileReload(request: Request, env?: Record<string, unknown>): Promise<Response> {
+export async function handleDecofileReload(
+  request: Request,
+  env?: Record<string, unknown>,
+): Promise<Response> {
   const authHeader = request.headers.get("authorization") || "";
   const expectedToken =
     (env?.DECO_RELOAD_TOKEN as string | undefined) ??
-    (typeof globalThis.process !== "undefined" ? globalThis.process.env?.DECO_RELOAD_TOKEN : undefined);
+    (typeof globalThis.process !== "undefined"
+      ? globalThis.process.env?.DECO_RELOAD_TOKEN
+      : undefined);
 
   if (expectedToken && !authHeader.includes(expectedToken)) {
     return new Response("Unauthorized", { status: 401 });

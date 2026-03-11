@@ -33,11 +33,7 @@ export interface WrappedError {
  */
 export function isWrappedError(value: unknown): value is WrappedError {
   try {
-    return (
-      value != null &&
-      typeof value === "object" &&
-      (value as any)[ERROR_MARKER] === true
-    );
+    return value != null && typeof value === "object" && (value as any)[ERROR_MARKER] === true;
   } catch {
     return true;
   }
@@ -54,8 +50,7 @@ export function unwrapError(value: unknown): unknown {
 }
 
 function createErrorProxy(error: unknown): any {
-  const message =
-    error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : String(error);
 
   const target = {
     [ERROR_MARKER]: true,
@@ -96,7 +91,9 @@ export function wrapCaughtErrors<TArgs extends unknown[], TReturn>(
     } catch (error) {
       onError?.(error, args);
 
-      const isDev = typeof globalThis.process !== "undefined" && globalThis.process.env?.NODE_ENV === "development";
+      const isDev =
+        typeof globalThis.process !== "undefined" &&
+        globalThis.process.env?.NODE_ENV === "development";
       if (isDev) {
         console.error(
           `[wrapCaughtErrors] Loader failed:`,

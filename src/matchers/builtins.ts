@@ -21,10 +21,7 @@ import { registerMatcher } from "../cms/resolve";
 // Cookie matcher
 // -------------------------------------------------------------------------
 
-function cookieMatcher(
-  rule: Record<string, unknown>,
-  ctx: MatcherContext,
-): boolean {
+function cookieMatcher(rule: Record<string, unknown>, ctx: MatcherContext): boolean {
   const name = rule.name as string | undefined;
   const value = rule.value as string | undefined;
   if (!name) return false;
@@ -41,10 +38,7 @@ function cookieMatcher(
 // Cron matcher
 // -------------------------------------------------------------------------
 
-function cronMatcher(
-  rule: Record<string, unknown>,
-  _ctx: MatcherContext,
-): boolean {
+function cronMatcher(rule: Record<string, unknown>, _ctx: MatcherContext): boolean {
   const start = rule.start as string | undefined;
   const end = rule.end as string | undefined;
 
@@ -69,10 +63,7 @@ function cronMatcher(
 // Host matcher
 // -------------------------------------------------------------------------
 
-function hostMatcher(
-  rule: Record<string, unknown>,
-  ctx: MatcherContext,
-): boolean {
+function hostMatcher(rule: Record<string, unknown>, ctx: MatcherContext): boolean {
   const hostToMatch = rule.host as string | undefined;
   if (!hostToMatch) return false;
 
@@ -100,10 +91,7 @@ function isSafePattern(pattern: string): boolean {
   return true;
 }
 
-function pathnameMatcher(
-  rule: Record<string, unknown>,
-  ctx: MatcherContext,
-): boolean {
+function pathnameMatcher(rule: Record<string, unknown>, ctx: MatcherContext): boolean {
   const pattern = rule.pattern as string | undefined;
   const includes = rule.includes as string[] | undefined;
   const excludes = rule.excludes as string[] | undefined;
@@ -112,7 +100,9 @@ function pathnameMatcher(
 
   if (pattern) {
     if (!isSafePattern(pattern)) {
-      console.warn(`[pathnameMatcher] Rejected potentially unsafe pattern: ${pattern.slice(0, 80)}`);
+      console.warn(
+        `[pathnameMatcher] Rejected potentially unsafe pattern: ${pattern.slice(0, 80)}`,
+      );
       return false;
     }
     try {
@@ -152,10 +142,7 @@ function pathnameMatcher(
 // Query string matcher
 // -------------------------------------------------------------------------
 
-function queryStringMatcher(
-  rule: Record<string, unknown>,
-  ctx: MatcherContext,
-): boolean {
+function queryStringMatcher(rule: Record<string, unknown>, ctx: MatcherContext): boolean {
   const key = (rule.key ?? rule.param) as string | undefined;
   const value = rule.value as string | undefined;
 

@@ -5,11 +5,7 @@
  * storefront in an iframe for live preview.
  */
 
-const DEFAULT_ADMIN_ORIGINS = [
-  "https://admin.deco.cx",
-  "https://deco.cx",
-  "https://localhost:*",
-];
+const DEFAULT_ADMIN_ORIGINS = ["https://admin.deco.cx", "https://deco.cx", "https://localhost:*"];
 
 export interface CSPOptions {
   /** Additional origins allowed to frame the storefront. */
@@ -37,20 +33,14 @@ export interface CSPOptions {
  * return response;
  * ```
  */
-export function setCSPHeaders(
-  response: Response,
-  options?: CSPOptions,
-): void {
+export function setCSPHeaders(response: Response, options?: CSPOptions): void {
   const origins = [
     "'self'",
     ...(options?.adminOrigins ?? DEFAULT_ADMIN_ORIGINS),
     ...(options?.extraOrigins ?? []),
   ];
 
-  response.headers.set(
-    "Content-Security-Policy",
-    `frame-ancestors ${origins.join(" ")}`,
-  );
+  response.headers.set("Content-Security-Policy", `frame-ancestors ${origins.join(" ")}`);
 
   response.headers.delete("X-Frame-Options");
 }

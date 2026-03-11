@@ -29,7 +29,7 @@
  * ```
  */
 
-import { loadBlocks, getAllPages } from "../cms/loader";
+import { getAllPages, loadBlocks } from "../cms/loader";
 
 // -------------------------------------------------------------------------
 // Types
@@ -95,10 +95,7 @@ function escapeXml(str: string): string {
 /**
  * Generate a sitemap XML string from entries.
  */
-export function generateSitemapXml(
-  entries: SitemapEntry[],
-  options?: SitemapOptions,
-): string {
+export function generateSitemapXml(entries: SitemapEntry[], options?: SitemapOptions): string {
   const max = options?.maxEntries ?? 50000;
   const limited = entries.slice(0, max);
 

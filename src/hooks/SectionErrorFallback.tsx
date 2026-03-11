@@ -17,10 +17,7 @@ interface ErrorBoundaryState {
  * In development, shows the error message + stack trace.
  * In production, renders a silent empty placeholder.
  */
-export class SectionErrorBoundary extends Component<
-  ErrorBoundaryProps,
-  ErrorBoundaryState
-> {
+export class SectionErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = { error: null };
@@ -31,31 +28,22 @@ export class SectionErrorBoundary extends Component<
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error(
-      `[CMS] Section "${this.props.sectionKey}" crashed:`,
-      error,
-      info.componentStack,
-    );
+    console.error(`[CMS] Section "${this.props.sectionKey}" crashed:`, error, info.componentStack);
   }
 
   render() {
     if (this.state.error) {
       if (this.props.fallback) return this.props.fallback;
-      return <DefaultSectionErrorFallback error={this.state.error} sectionKey={this.props.sectionKey} />;
+      return (
+        <DefaultSectionErrorFallback error={this.state.error} sectionKey={this.props.sectionKey} />
+      );
     }
     return this.props.children;
   }
 }
 
-function DefaultSectionErrorFallback({
-  error,
-  sectionKey,
-}: {
-  error: Error;
-  sectionKey: string;
-}) {
-  const isDev =
-    typeof process !== "undefined" && process.env.NODE_ENV === "development";
+function DefaultSectionErrorFallback({ error, sectionKey }: { error: Error; sectionKey: string }) {
+  const isDev = typeof process !== "undefined" && process.env.NODE_ENV === "development";
 
   if (!isDev) {
     return <div data-section-error={sectionKey} className="hidden" />;
