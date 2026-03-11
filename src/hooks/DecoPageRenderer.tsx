@@ -82,11 +82,8 @@ import { isDevMode } from "../sdk/env";
 const isDev = isDevMode();
 
 const DEFERRED_FADE_CSS = `@keyframes decoFadeIn{from{opacity:0}to{opacity:1}}`;
-let fadeStyleInjected = false;
 
 function FadeInStyle() {
-  if (fadeStyleInjected) return null;
-  fadeStyleInjected = true;
   return <style dangerouslySetInnerHTML={{ __html: DEFERRED_FADE_CSS }} />;
 }
 
