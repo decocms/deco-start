@@ -876,9 +876,11 @@ export async function resolveDecoPage(
         }
       })();
 
-      eagerResults.push(promise);
-      // Count how many resolved sections this raw section produces
-      // For flat index tracking, assume 1 per raw section (most common case)
+      const idx = currentFlatIndex;
+      eagerResults.push(promise.then((sections) => {
+        for (const s of sections) s.index = idx;
+        return sections;
+      }));
       flatIndex++;
     }
   }

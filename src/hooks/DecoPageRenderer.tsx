@@ -324,30 +324,20 @@ function mergeSections(resolved: ResolvedSection[], deferred: DeferredSection[])
     return resolved.map((s, i) => ({ type: "eager", section: s, originalIndex: i }));
   }
 
-  const items: PageItem[] = [];
+  // Use the `index` property stamped by resolveDecoPage to sort all
+  // sections (eager + deferred) back into their original CMS order.
+  const items: (PageItem & { _sort: number })[] = [];
 
-  const deferredByIndex = new Map<number, DeferredSection>();
+  for (let i = 0; i < resolved.length; i++) {
+    const s = resolved[i];
+    items.push({ type: "eager", section: s, originalIndex: i, _sort: s.index ?? i });
+  }
+
   for (const d of deferred) {
-    deferredByIndex.set(d.index, d);
+    items.push({ type: "deferred", deferred: d, _sort: d.index } as PageItem & { _sort: number });
   }
 
-  const totalSlots = resolved.length + deferred.length;
-  let eagerIdx = 0;
-
-  for (let slot = 0; slot < totalSlots; slot++) {
-    const deferredItem = deferredByIndex.get(slot);
-    if (deferredItem) {
-      items.push({ type: "deferred", deferred: deferredItem });
-    } else if (eagerIdx < resolved.length) {
-      items.push({ type: "eager", section: resolved[eagerIdx], originalIndex: eagerIdx });
-      eagerIdx++;
-    }
-  }
-
-  while (eagerIdx < resolved.length) {
-    items.push({ type: "eager", section: resolved[eagerIdx], originalIndex: eagerIdx });
-    eagerIdx++;
-  }
+  items.sort((a, b) => a._sort - b._sort);
 
   return items;
 }
