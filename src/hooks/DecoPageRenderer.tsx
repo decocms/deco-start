@@ -1,18 +1,70 @@
-import { type ComponentType, createElement, lazy, type ReactNode, Suspense } from "react";
-import { getSectionOptions, getSectionRegistry } from "../cms/registry";
-import type { ResolvedSection } from "../cms/resolve";
+import {
+  type ComponentType,
+  createElement,
+  lazy,
+  type ReactNode,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import type { SectionOptions } from "../cms/registry";
+import {
+  getResolvedComponent,
+  getSectionOptions,
+  getSectionRegistry,
+  getSyncComponent,
+  preloadSectionModule,
+  setResolvedComponent,
+} from "../cms/registry";
+import type { DeferredSection, ResolvedSection } from "../cms/resolve";
 import { SectionErrorBoundary } from "./SectionErrorFallback";
 
 type LazyComponent = ReturnType<typeof lazy>;
 
 const lazyCache = new Map<string, LazyComponent>();
 
+/**
+ * Create a React.lazy-compatible thenable that is already fulfilled.
+ * React internally checks `thenable.status === "fulfilled"` and reads
+ * `thenable.value` synchronously — no Suspense activation, no microtask.
+ */
+function syncThenable(mod: {
+  default: ComponentType<any>;
+}): Promise<{ default: ComponentType<any> }> {
+  const t = Promise.resolve(mod);
+  // React uses these internal properties to detect sync-resolved thenables
+  (t as any).status = "fulfilled";
+  (t as any).value = mod;
+  return t;
+}
+
 function getLazyComponent(key: string) {
   if (!lazyCache.has(key)) {
     const registry = getSectionRegistry();
     const loader = registry[key];
     if (!loader) return null;
-    lazyCache.set(key, lazy(loader as () => Promise<{ default: ComponentType<any> }>));
+    lazyCache.set(
+      key,
+      lazy(() => {
+        // If already resolved (from preloadSectionComponents on server,
+        // or from route loader on client SPA), return a sync thenable.
+        // React reads thenable.status/value synchronously — no Suspense.
+        const resolved = getResolvedComponent(key);
+        if (resolved) {
+          return syncThenable({ default: resolved });
+        }
+
+        return (loader as () => Promise<{ default: ComponentType<any> }>)().then((mod) => {
+          if (!mod?.default) {
+            console.error(`[DecoSection] "${key}" has no default export`, Object.keys(mod ?? {}));
+            return { default: () => null } as { default: ComponentType<any> };
+          }
+          setResolvedComponent(key, mod.default);
+          return mod as { default: ComponentType<any> };
+        });
+      }),
+    );
   }
   return lazyCache.get(key)!;
 }
@@ -21,27 +73,339 @@ function DefaultSectionFallback() {
   return <div className="w-full h-48 bg-base-200 animate-pulse rounded" />;
 }
 
-interface Props {
-  sections: ResolvedSection[];
-  /** Global fallback for loading states. Per-section fallbacks from the registry take priority. */
-  loadingFallback?: ReactNode;
-  /** Global fallback for error states. Per-section error fallbacks take priority. */
-  errorFallback?: ReactNode;
+function NestedSectionFallback() {
+  return <div className="w-full h-24 bg-base-200 animate-pulse rounded" />;
 }
 
-export function DecoPageRenderer({ sections, loadingFallback, errorFallback }: Props) {
+import { isDevMode } from "../sdk/env";
+
+const isDev = isDevMode();
+
+const DEFERRED_FADE_CSS = `@keyframes decoFadeIn{from{opacity:0}to{opacity:1}}`;
+let fadeStyleInjected = false;
+
+function FadeInStyle() {
+  if (fadeStyleInjected) return null;
+  fadeStyleInjected = true;
+  return <style dangerouslySetInnerHTML={{ __html: DEFERRED_FADE_CSS }} />;
+}
+
+function DevMissingFallbackWarning({ component }: { component: string }) {
+  if (!isDev) return null;
+  return (
+    <div
+      style={{
+        position: "relative",
+        border: "2px dashed #e53e3e",
+        borderRadius: 8,
+        padding: 8,
+        margin: "4px 0",
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          color: "#e53e3e",
+          fontFamily: "monospace",
+          marginBottom: 4,
+        }}
+      >
+        [AsyncRender] Missing LoadingFallback for &quot;{component}&quot;.
+        <br />
+        Export a LoadingFallback from your section for better UX.
+        <br />
+        See: https://deco.cx/docs/async-rendering
+      </div>
+      <DefaultSectionFallback />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Section type — same shape as deco-cx/deco (Fresh): { Component, props }
+// ---------------------------------------------------------------------------
+
+interface Section {
+  Component: string | ComponentType<any>;
+  props: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// SectionRenderer — renders a single nested section
+// ---------------------------------------------------------------------------
+
+export function SectionRenderer({ section }: { section: Section | null | undefined }) {
+  if (!section?.Component) return null;
+
+  if (typeof section.Component === "function") {
+    const Comp = section.Component;
+    return <Comp {...(section.props ?? {})} />;
+  }
+
+  const Lazy = getLazyComponent(section.Component);
+  if (!Lazy) {
+    console.warn(`[SectionRenderer] No component registered for: ${section.Component}`);
+    return null;
+  }
+
+  return (
+    <Suspense fallback={<NestedSectionFallback />}>
+      <Lazy {...(section.props ?? {})} />
+    </Suspense>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SectionList — renders an array of nested sections
+// ---------------------------------------------------------------------------
+
+export function SectionList({ sections }: { sections: Section[] | null | undefined }) {
+  if (!sections?.length) return null;
   return (
     <>
-      {sections.map((section, index) => {
-        const LazyComponent = getLazyComponent(section.component);
+      {sections.map((section, i) => {
+        const key = typeof section.Component === "string" ? section.Component : `nested-${i}`;
+        return <SectionRenderer key={key} section={section} />;
+      })}
+    </>
+  );
+}
 
-        if (!LazyComponent) return null;
+// ---------------------------------------------------------------------------
+// DeferredSectionWrapper — loads a section when it scrolls into view
+// ---------------------------------------------------------------------------
+
+interface DeferredSectionWrapperProps {
+  deferred: DeferredSection;
+  pagePath: string;
+  loadingFallback?: ReactNode;
+  errorFallback?: ReactNode;
+  loadFn: (data: {
+    component: string;
+    rawProps: Record<string, unknown>;
+    pagePath: string;
+  }) => Promise<ResolvedSection | null>;
+}
+
+function DeferredSectionWrapper({
+  deferred,
+  pagePath,
+  loadingFallback,
+  errorFallback,
+  loadFn,
+}: DeferredSectionWrapperProps) {
+  const stableKey = `${pagePath}::${deferred.component}::${deferred.index}`;
+  const [section, setSection] = useState<ResolvedSection | null>(null);
+  const [error, setError] = useState<Error | null>(null);
+  const [loadedOptions, setLoadedOptions] = useState<SectionOptions | undefined>(() =>
+    getSectionOptions(deferred.component),
+  );
+  const [optionsReady, setOptionsReady] = useState(() => !!getSectionOptions(deferred.component));
+  const ref = useRef<HTMLDivElement>(null);
+  const triggered = useRef(false);
+  const prevKeyRef = useRef(stableKey);
+
+  if (prevKeyRef.current !== stableKey) {
+    prevKeyRef.current = stableKey;
+    triggered.current = false;
+    if (section) setSection(null);
+    if (error) setError(null);
+  }
+
+  useEffect(() => {
+    if (optionsReady) return;
+    preloadSectionModule(deferred.component).then((opts) => {
+      if (opts) setLoadedOptions(opts);
+      setOptionsReady(true);
+    });
+  }, [deferred.component, optionsReady]);
+
+  const hasCustomFallback = !!loadedOptions?.loadingFallback;
+  const skeleton = !optionsReady
+    ? null
+    : hasCustomFallback
+      ? createElement(loadedOptions!.loadingFallback!)
+      : (loadingFallback ??
+        (isDev ? (
+          <DevMissingFallbackWarning component={deferred.component} />
+        ) : (
+          <DefaultSectionFallback />
+        )));
+
+  useEffect(() => {
+    if (triggered.current || section) return;
+
+    const el = ref.current;
+    if (!el) return;
+
+    if (typeof IntersectionObserver === "undefined") {
+      triggered.current = true;
+      loadFn({
+        component: deferred.component,
+        rawProps: deferred.rawProps,
+        pagePath,
+      })
+        .then(setSection)
+        .catch((e) => setError(e));
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting && !triggered.current) {
+          triggered.current = true;
+          observer.disconnect();
+          loadFn({
+            component: deferred.component,
+            rawProps: deferred.rawProps,
+            pagePath,
+          })
+            .then(setSection)
+            .catch((e) => setError(e));
+        }
+      },
+      { rootMargin: "300px" },
+    );
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [deferred.component, deferred.rawProps, pagePath, section, loadFn]);
+
+  if (error) {
+    const errFallback = loadedOptions?.errorFallback
+      ? createElement(loadedOptions.errorFallback, { error })
+      : errorFallback;
+    return <>{errFallback ?? null}</>;
+  }
+
+  if (section) {
+    const sectionId = section.key
+      .replace(/\//g, "-")
+      .replace(/\.tsx$/, "")
+      .replace(/^site-sections-/, "");
+
+    const LazyComponent = getLazyComponent(section.component);
+    if (!LazyComponent) return null;
+
+    return (
+      <section
+        id={sectionId}
+        data-manifest-key={section.key}
+        style={{ animation: "decoFadeIn 0.3s ease-out" }}
+      >
+        <SectionErrorBoundary sectionKey={section.key} fallback={errorFallback}>
+          <Suspense fallback={skeleton}>
+            <LazyComponent {...section.props} />
+          </Suspense>
+        </SectionErrorBoundary>
+      </section>
+    );
+  }
+
+  const sectionId = deferred.key
+    .replace(/\//g, "-")
+    .replace(/\.tsx$/, "")
+    .replace(/^site-sections-/, "");
+
+  return (
+    <section ref={ref} id={sectionId} data-manifest-key={deferred.key} data-deferred="true">
+      {skeleton}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Merge helper — combines eager and deferred sections in original order
+// ---------------------------------------------------------------------------
+
+type PageItem =
+  | { type: "eager"; section: ResolvedSection; originalIndex: number }
+  | { type: "deferred"; deferred: DeferredSection };
+
+function mergeSections(resolved: ResolvedSection[], deferred: DeferredSection[]): PageItem[] {
+  if (!deferred.length) {
+    return resolved.map((s, i) => ({ type: "eager", section: s, originalIndex: i }));
+  }
+
+  const items: PageItem[] = [];
+
+  const deferredByIndex = new Map<number, DeferredSection>();
+  for (const d of deferred) {
+    deferredByIndex.set(d.index, d);
+  }
+
+  const totalSlots = resolved.length + deferred.length;
+  let eagerIdx = 0;
+
+  for (let slot = 0; slot < totalSlots; slot++) {
+    const deferredItem = deferredByIndex.get(slot);
+    if (deferredItem) {
+      items.push({ type: "deferred", deferred: deferredItem });
+    } else if (eagerIdx < resolved.length) {
+      items.push({ type: "eager", section: resolved[eagerIdx], originalIndex: eagerIdx });
+      eagerIdx++;
+    }
+  }
+
+  while (eagerIdx < resolved.length) {
+    items.push({ type: "eager", section: resolved[eagerIdx], originalIndex: eagerIdx });
+    eagerIdx++;
+  }
+
+  return items;
+}
+
+// ---------------------------------------------------------------------------
+// DecoPageRenderer — renders top-level resolved sections from a CMS page
+// ---------------------------------------------------------------------------
+
+interface Props {
+  sections: ResolvedSection[];
+  deferredSections?: DeferredSection[];
+  pagePath?: string;
+  loadingFallback?: ReactNode;
+  errorFallback?: ReactNode;
+  loadDeferredSectionFn?: (data: {
+    component: string;
+    rawProps: Record<string, unknown>;
+    pagePath: string;
+  }) => Promise<ResolvedSection | null>;
+}
+
+export function DecoPageRenderer({
+  sections,
+  deferredSections,
+  pagePath = "/",
+  loadingFallback,
+  errorFallback,
+  loadDeferredSectionFn,
+}: Props) {
+  const items = mergeSections(sections, deferredSections ?? []);
+  const hasDeferred = deferredSections && deferredSections.length > 0;
+
+  return (
+    <>
+      {hasDeferred && <FadeInStyle />}
+      {items.map((item, index) => {
+        if (item.type === "deferred") {
+          if (!loadDeferredSectionFn) {
+            return null;
+          }
+          return (
+            <DeferredSectionWrapper
+              key={`deferred-${pagePath}-${item.deferred.key}-${item.deferred.index}`}
+              deferred={item.deferred}
+              pagePath={pagePath}
+              loadingFallback={loadingFallback}
+              errorFallback={errorFallback}
+              loadFn={loadDeferredSectionFn}
+            />
+          );
+        }
+
+        const { section } = item;
 
         const options = getSectionOptions(section.component);
-        const fallback = options?.loadingFallback
-          ? createElement(options.loadingFallback)
-          : (loadingFallback ?? <DefaultSectionFallback />);
-
         const errFallback = options?.errorFallback
           ? createElement(options.errorFallback, { error: new Error("") })
           : errorFallback;
@@ -51,10 +415,30 @@ export function DecoPageRenderer({ sections, loadingFallback, errorFallback }: P
           .replace(/\.tsx$/, "")
           .replace(/^site-sections-/, "");
 
+        // Only use sync path for sections explicitly registered via registerSectionsSync.
+        // DO NOT fallback to getResolvedComponent: that is populated server-side by
+        // preloadSectionComponents but NOT on the client, causing hydration mismatches
+        // (server renders <ul>, client renders <Suspense> for the same component).
+        const SyncComp = getSyncComponent(section.component);
+        if (SyncComp) {
+          return (
+            <section key={`${section.key}-${index}`} id={sectionId} data-manifest-key={section.key}>
+              <SectionErrorBoundary sectionKey={section.key} fallback={errFallback}>
+                <SyncComp {...section.props} />
+              </SectionErrorBoundary>
+            </section>
+          );
+        }
+
+        // Fallback: React.lazy with syncThenable for pre-loaded modules.
+        // fallback={null} preserves server HTML during hydration.
+        const LazyComponent = getLazyComponent(section.component);
+        if (!LazyComponent) return null;
+
         return (
           <section key={`${section.key}-${index}`} id={sectionId} data-manifest-key={section.key}>
             <SectionErrorBoundary sectionKey={section.key} fallback={errFallback}>
-              <Suspense fallback={fallback}>
+              <Suspense fallback={null}>
                 <LazyComponent {...section.props} />
               </Suspense>
             </SectionErrorBoundary>
