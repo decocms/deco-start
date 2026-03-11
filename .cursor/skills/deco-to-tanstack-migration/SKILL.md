@@ -124,6 +124,13 @@ What are you migrating?
 3. **Types from the library, UI from the site** -- `Product` type comes from `@decocms/apps/commerce/types`, but the `<Image>` component is site-local
 4. **One Vite alias maximum** -- `"~"` -> `"src/"` is the only acceptable alias in a finished migration
 5. **`tsconfig.json` mirrors `vite.config.ts`** -- only `"~/*": ["./src/*"]` in paths
+6. **Signals don't auto-subscribe in React** -- reading `signal.value` in render creates NO subscription; use `useStore(signal.store)` from `@tanstack/react-store`
+7. **Commerce loaders need request context** -- `resolve.ts` must pass URL/path to PLP/PDP loaders for search, categories, sort, and pagination to work
+8. **`wrangler.jsonc` main must be a custom worker-entry** -- TanStack Start ignores `export default` in `server.ts`; create a separate `worker-entry.ts` and point wrangler to it
+9. **Copy components faithfully, never rewrite** -- `cp` the original file, then only change: `class` → `className`, `for` → `htmlFor`, import paths (`apps/` → `~/`, `$store/` → `~/`), `preact` → `react`. NEVER regenerate, "clean up", or "improve" the component. AI-rewritten components are the #1 source of visual regressions -- the layout, grid classes, responsive variants, and conditional logic must be byte-identical to the original except for the mechanical migration changes
+10. **Tailwind v4 logical property hazard** -- mixed `px-*` + `pl-*/pr-*` on the same element breaks the cascade. Replace mixed patterns with consistent longhand (`pl-X pr-X` instead of `px-X`) on those elements only
+11. **oklch CSS variables need triplets, not hex** -- sites using `oklch(var(--x))` must store variables as oklch triplets (`100% 0.00 0deg`), not hex values. `oklch(#FFF)` is invalid CSS
+12. **Verify ALL imports resolve at runtime, not just build** -- Vite tree-shakes dead imports, so `npm run build` passes even with missing modules. But `registerSections` lazy imports execute at runtime, killing entire sections silently
 
 ## Worker Entry Architecture
 
@@ -257,6 +264,59 @@ To use the deco admin with a local storefront:
 4. Navigate to `http://localhost:4200/sites/YOUR_SITE_NAME/spaces/pages`
 5. After schema changes: clear admin cache (`localStorage.removeItem('meta::YOUR_SITE_NAME')`) and hard-refresh
 
+## Conductor / AI Bulk Migration Workflow
+
+For sites with 100+ sections and 200+ components, manual file-by-file migration is impractical. The proven workflow:
+
+### Phase 1: Scaffold + Copy (human)
+1. Scaffold TanStack Start project
+2. `cp -r` the entire `src/` from the original site
+3. Set up `vite.config.ts`, `tsconfig.json`, `wrangler.jsonc`, `package.json`
+4. Install dependencies
+
+### Phase 2: Mechanical Rewrites (AI/conductor)
+Let AI tackle the bulk TypeScript errors in a single pass:
+
+1. **Import rewrites** (safe for bulk `sed`):
+   - `from "preact"` → `from "react"`
+   - `from "preact/hooks"` → `from "react"`
+   - `from "preact/compat"` → `from "react"`
+   - `from "@preact/signals"` → `from "~/sdk/signal"`
+   - `from "apps/commerce/types"` → `from "@decocms/apps/commerce/types"`
+   - `from "$store/"` → `from "~/"`
+
+2. **JSX attribute rewrites** (safe for bulk):
+   - `class=` → `className=` (in JSX context)
+   - `for=` → `htmlFor=` (on `<label>` elements)
+   - `stroke-width` → `strokeWidth`, `fill-rule` → `fillRule` (SVG)
+   - Remove `data-fresh-disable-lock`
+
+3. **Type rewrites** (per-file, AI-assisted):
+   - `JSX.TargetedEvent<HTMLInputElement>` → `React.ChangeEvent<HTMLInputElement>`
+   - `JSX.TargetedMouseEvent` → `React.MouseEvent`
+   - `ComponentChildren` → `ReactNode`
+   - `SVGAttributes<SVGSVGElement>` → `React.SVGProps<SVGSVGElement>`
+   - Create consolidated type files (`~/types/vtex.ts`, `~/types/widgets.ts`)
+
+4. **Signal-to-state** (per-file, needs judgment):
+   - `useSignal(x)` → `useState(x)` with setter
+   - `.value` reads → direct variable reads
+   - `.value =` writes → `setState()` calls
+   - Toggle: `x.value = !x.value` → `setX(prev => !prev)`
+
+### Phase 3: Verify (human + AI)
+1. `npx tsc --noEmit` — catches remaining type errors
+2. `npm run build` — catches import resolution errors
+3. `bun run dev` + browser test — catches runtime errors
+4. Visual comparison with production — catches layout regressions
+
+### Phase 4: Fix Runtime Issues (human-guided)
+This is where gotchas 1-45 apply. The mechanical rewrite gets you to "builds clean" but runtime issues require understanding the architectural differences.
+
+### Key Insight: Never Rewrite, Only Port
+
+The conductor approach that worked (836 errors → 0 across 213 files) treated every file as: **copy the original, apply mechanical changes only**. The failed approach was: "look at the original and rewrite it in React" — this produced components that looked similar in code but rendered completely differently because of subtle grid/flex/responsive differences.
+
 ## Reference Index
 
 | Topic | Path |
@@ -268,4 +328,4 @@ To use the deco admin with a local storefront:
 | Platform hooks (VTEX, etc) | `references/platform-hooks/` |
 | Vite configuration | `references/vite-config/` |
 | Admin schema composition | `src/admin/schema.ts` in `@decocms/start` |
-| Common gotchas | `references/gotchas.md` |
+| Common gotchas (45 items) | `references/gotchas.md` |

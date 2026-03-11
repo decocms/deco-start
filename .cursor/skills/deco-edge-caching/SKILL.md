@@ -44,8 +44,19 @@ The **worker-entry** is the authority for edge caching. Routes declare intent vi
 
 ## Site Worker Entry (10 lines)
 
+**CRITICAL**: `wrangler.jsonc` must point to this custom file, NOT to `@tanstack/react-start/server-entry`. TanStack Start's Cloudflare adapter completely ignores custom `export default` — it generates its own handler that calls `createStartHandler` directly. Without a separate worker-entry, none of the caching, admin routes, or purge logic will execute in production.
+
+```jsonc
+// wrangler.jsonc
+{
+  "main": "./src/worker-entry.ts"
+  // NOT: "main": "@tanstack/react-start/server-entry"
+}
+```
+
 ```ts
 // src/worker-entry.ts
+import "./setup";
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { createDecoWorkerEntry } from "@decocms/start/sdk/workerEntry";
 
