@@ -18,6 +18,7 @@ export {
 export { clx } from "./clx";
 export { decodeCookie, deleteCookie, getCookie, getServerSideCookie, setCookie } from "./cookie";
 export { buildCSPHeaderValue, type CSPOptions, setCSPHeaders } from "./csp";
+export { isDevMode } from "./env";
 export {
   createInstrumentedFetch,
   type FetchInstrumentationOptions,
@@ -43,6 +44,14 @@ export {
   hasTrackingParams,
   stripTrackingParams,
 } from "./urlUtils";
+export {
+  checkDesktop,
+  checkMobile,
+  checkTablet,
+  type Device,
+  detectDevice,
+  useDevice,
+} from "./useDevice";
 export { useId } from "./useId";
 export { usePartialSection, useScript, useScriptAsDataURI, useSection } from "./useScript";
 export { createDecoWorkerEntry, type DecoWorkerEntryOptions } from "./workerEntry";

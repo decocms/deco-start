@@ -55,145 +55,89 @@ function buildResolvableDefinition() {
 }
 
 // ---------------------------------------------------------------------------
-// Loader definitions
+// Loader definitions — dynamic registry
 // ---------------------------------------------------------------------------
 
-interface LoaderConfig {
+export interface LoaderConfig {
   key: string;
   title: string;
   namespace: string;
   propsSchema: Record<string, any>;
+  /** Tags for property matching (e.g., "product-list" enables injection into Product[] props). */
+  tags?: string[];
 }
 
-const KNOWN_LOADERS: LoaderConfig[] = [
-  {
-    key: "vtex/loaders/intelligentSearch/productList.ts",
-    title: "VTEX Product List",
-    namespace: "vtex",
-    propsSchema: {
-      type: "object",
-      properties: {
-        query: { type: "string", title: "Search Query" },
-        count: { type: "number", title: "Count" },
-        sort: { type: "string", title: "Sort" },
-        collection: { type: "string", title: "Collection ID" },
-        hideUnavailableItems: { type: "boolean", title: "Hide Unavailable Items" },
-        similars: { type: "boolean", title: "Include Similars" },
-      },
-    },
-  },
-  {
-    key: "vtex/loaders/intelligentSearch/productListingPage.ts",
-    title: "VTEX Product Listing Page",
-    namespace: "vtex",
-    propsSchema: {
-      type: "object",
-      properties: {
-        query: { type: "string", title: "Query" },
-        count: { type: "number", title: "Count" },
-        page: { type: "number", title: "Page" },
-        sort: { type: "string", title: "Sort" },
-        slug: { type: "string", title: "Slug" },
-      },
-    },
-  },
-  {
-    key: "vtex/loaders/intelligentSearch/suggestions.ts",
-    title: "VTEX Suggestions",
-    namespace: "vtex",
-    propsSchema: {
-      type: "object",
-      properties: {
-        query: { type: "string", title: "Query" },
-        count: { type: "number", title: "Count" },
-      },
-    },
-  },
-  {
-    key: "vtex/loaders/legacy/productList.ts",
-    title: "VTEX Legacy Product List",
-    namespace: "vtex",
-    propsSchema: {
-      type: "object",
-      properties: {
-        query: { type: "string", title: "Query" },
-        count: { type: "number", title: "Count" },
-        collection: { type: "string", title: "Collection" },
-      },
-    },
-  },
-  {
-    key: "vtex/loaders/legacy/relatedProductsLoader.ts",
-    title: "VTEX Related Products",
-    namespace: "vtex",
-    propsSchema: {
-      type: "object",
-      properties: {
-        id: { type: "string", title: "Product ID" },
-        crossSelling: { type: "string", title: "Cross Selling Type" },
-      },
-    },
-  },
-  {
-    key: "vtex/loaders/intelligentSearch/productDetailsPage.ts",
-    title: "VTEX Product Details Page",
-    namespace: "vtex",
-    propsSchema: {
-      type: "object",
-      properties: {
-        slug: { type: "string", title: "Slug" },
-      },
-    },
-  },
-  {
-    key: "vtex/loaders/legacy/productDetailsPage.ts",
-    title: "VTEX Legacy Product Details Page",
-    namespace: "vtex",
-    propsSchema: {
-      type: "object",
-      properties: {
-        slug: { type: "string", title: "Slug" },
-      },
-    },
-  },
-  {
-    key: "vtex/loaders/workflow/products.ts",
-    title: "VTEX Workflow Products",
-    namespace: "vtex",
-    propsSchema: {
-      type: "object",
-      properties: {
-        query: { type: "string", title: "Query" },
-        count: { type: "number", title: "Count" },
-      },
-    },
-  },
-  {
-    key: "vtex/loaders/proxy.ts",
-    title: "VTEX Proxy",
-    namespace: "vtex",
-    propsSchema: {
-      type: "object",
-      properties: {},
-    },
-  },
-];
+const loaderRegistry: LoaderConfig[] = [];
 
-// Loaders whose output is Product[] — used to inject specific loader refs
-// into section properties typed as Product arrays.
-const PRODUCT_LIST_LOADERS = [
-  "vtex/loaders/intelligentSearch/productList.ts",
-  "vtex/loaders/legacy/productList.ts",
-  "vtex/loaders/legacy/relatedProductsLoader.ts",
-  "vtex/loaders/workflow/products.ts",
-];
+/** Register a single loader schema for the admin. */
+export function registerLoaderSchema(config: LoaderConfig) {
+  const idx = loaderRegistry.findIndex((l) => l.key === config.key);
+  if (idx >= 0) {
+    loaderRegistry[idx] = config;
+  } else {
+    loaderRegistry.push(config);
+  }
+}
+
+/** Register multiple loader schemas at once. */
+export function registerLoaderSchemas(configs: LoaderConfig[]) {
+  for (const config of configs) registerLoaderSchema(config);
+}
+
+/** Get all registered loader schemas. */
+export function getRegisteredLoaders(): LoaderConfig[] {
+  return [...loaderRegistry];
+}
+
+function getProductListLoaderKeys(): string[] {
+  return loaderRegistry.filter((l) => l.tags?.includes("product-list")).map((l) => l.key);
+}
+
+// ---------------------------------------------------------------------------
+// Matcher definitions — dynamic registry
+// ---------------------------------------------------------------------------
+
+export interface MatcherConfig {
+  key: string;
+  title: string;
+  namespace: string;
+  propsSchema?: Record<string, any>;
+}
+
+const matcherRegistry: MatcherConfig[] = [];
+
+/** Register a single matcher schema for the admin. */
+export function registerMatcherSchema(config: MatcherConfig) {
+  const idx = matcherRegistry.findIndex((m) => m.key === config.key);
+  if (idx >= 0) {
+    matcherRegistry[idx] = config;
+  } else {
+    matcherRegistry.push(config);
+  }
+}
+
+/** Register multiple matcher schemas at once. */
+export function registerMatcherSchemas(configs: MatcherConfig[]) {
+  for (const config of configs) registerMatcherSchema(config);
+}
+
+/** Get all registered matcher schemas. */
+export function getRegisteredMatchers(): MatcherConfig[] {
+  return matcherRegistry;
+}
+
+// Register built-in matchers that are always available
+registerMatcherSchemas([
+  { key: "website/matchers/always.ts", title: "Always", namespace: "website" },
+  { key: "website/matchers/never.ts", title: "Never", namespace: "website" },
+]);
 
 function buildLoaderDefinitions() {
   const definitions: Record<string, any> = {};
   const manifestBlocks: Record<string, any> = {};
   const loaderAnyOf: any[] = [{ $ref: `#/definitions/${RESOLVABLE_LITERAL_KEY}` }];
 
-  for (const loader of KNOWN_LOADERS) {
+  for (const loader of loaderRegistry) {
     const defKey = toBase64(loader.key);
 
     definitions[defKey] = {
@@ -230,12 +174,7 @@ function buildMatcherDefinitions() {
   const manifestBlocks: Record<string, any> = {};
   const matcherAnyOf: any[] = [{ $ref: `#/definitions/${RESOLVABLE_LITERAL_KEY}` }];
 
-  const matchers = [
-    { key: "website/matchers/always.ts", title: "Always" },
-    { key: "website/matchers/never.ts", title: "Never" },
-  ];
-
-  for (const matcher of matchers) {
+  for (const matcher of matcherRegistry) {
     const defKey = toBase64(matcher.key);
     definitions[defKey] = {
       title: matcher.key,
@@ -247,11 +186,12 @@ function buildMatcherDefinitions() {
           enum: [matcher.key],
           default: matcher.key,
         },
+        ...(matcher.propsSchema?.properties || {}),
       },
     };
     manifestBlocks[matcher.key] = {
       $ref: `#/definitions/${defKey}`,
-      namespace: "website",
+      namespace: matcher.namespace,
     };
     matcherAnyOf.push({ $ref: `#/definitions/${defKey}` });
   }
@@ -470,11 +410,11 @@ function buildFrameworkSections(sectionAnyOf: any[]) {
  */
 function wrapResolvableProperties(
   definitions: Record<string, any>,
-  loaderDefinitions: Record<string, any>,
+  _loaderDefinitions: Record<string, any>,
 ) {
   const resolvableRef = { $ref: `#/definitions/${RESOLVABLE_LITERAL_KEY}` };
 
-  const productLoaderRefs = PRODUCT_LIST_LOADERS.map((key) => ({
+  const productLoaderRefs = getProductListLoaderKeys().map((key) => ({
     $ref: `#/definitions/${toBase64(key)}`,
   }));
 

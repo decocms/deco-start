@@ -18,6 +18,25 @@ export interface CachedLoaderOptions {
   keyFn?: (props: unknown) => string;
 }
 
+/**
+ * Loader module interface for modules that export cache configuration alongside
+ * their default loader function. Mirrors deco-cx/apps pattern where loaders
+ * can declare their own caching policy.
+ *
+ * @example
+ * ```ts
+ * // In a loader file:
+ * export const cache = "stale-while-revalidate";
+ * export const cacheKey = (props: any) => `myLoader:${props.slug}`;
+ * export default async function myLoader(props: Props) { ... }
+ * ```
+ */
+export interface LoaderModule<TProps = any, TResult = any> {
+  default: (props: TProps) => Promise<TResult>;
+  cache?: CachePolicy | { maxAge: number };
+  cacheKey?: (props: TProps) => string | null;
+}
+
 interface CacheEntry<T = unknown> {
   value: T;
   createdAt: number;
@@ -57,6 +76,9 @@ export function createCachedLoader<TProps, TResult>(
 ): (props: TProps) => Promise<TResult> {
   const { policy, maxAge = DEFAULT_MAX_AGE, keyFn = JSON.stringify } = options;
 
+  const env = typeof globalThis.process !== "undefined" ? globalThis.process.env : undefined;
+  const isDev = env?.DECO_CACHE_DISABLE === "true" || env?.NODE_ENV === "development";
+
   if (policy === "no-store") return loaderFn;
 
   return async (props: TProps): Promise<TResult> => {
@@ -65,6 +87,13 @@ export function createCachedLoader<TProps, TResult>(
     // Single-flight dedup: if an identical request is already in-flight, reuse it
     const inflight = inflightRequests.get(cacheKey);
     if (inflight) return inflight as Promise<TResult>;
+
+    // In dev mode, skip SWR cache but keep inflight dedup
+    if (isDev) {
+      const promise = loaderFn(props).finally(() => inflightRequests.delete(cacheKey));
+      inflightRequests.set(cacheKey, promise);
+      return promise;
+    }
 
     const entry = cache.get(cacheKey) as CacheEntry<TResult> | undefined;
     const now = Date.now();
@@ -117,6 +146,49 @@ export function createCachedLoader<TProps, TResult>(
     inflightRequests.set(cacheKey, promise);
     return promise;
   };
+}
+
+/**
+ * Create a cached loader from a module that exports `cache` and/or `cacheKey`.
+ * Falls back to the provided defaults if the module doesn't declare them.
+ *
+ * @example
+ * ```ts
+ * import * as myLoaderModule from "./loaders/myLoader";
+ * const cached = createCachedLoaderFromModule("myLoader", myLoaderModule, {
+ *   policy: "stale-while-revalidate",
+ *   maxAge: 60_000,
+ * });
+ * ```
+ */
+export function createCachedLoaderFromModule<TProps, TResult>(
+  name: string,
+  mod: LoaderModule<TProps, TResult>,
+  defaults?: Partial<CachedLoaderOptions>,
+): (props: TProps) => Promise<TResult> {
+  const moduleCache = mod.cache;
+  let policy: CachePolicy;
+  let maxAge: number | undefined;
+
+  if (typeof moduleCache === "string") {
+    policy = moduleCache;
+  } else if (moduleCache && typeof moduleCache === "object") {
+    policy = "stale-while-revalidate";
+    maxAge = moduleCache.maxAge;
+  } else {
+    policy = defaults?.policy ?? "stale-while-revalidate";
+  }
+
+  maxAge = maxAge ?? defaults?.maxAge;
+
+  const keyFn = mod.cacheKey
+    ? (props: unknown) => {
+        const key = mod.cacheKey!(props as TProps);
+        return key ?? JSON.stringify(props);
+      }
+    : defaults?.keyFn;
+
+  return createCachedLoader(name, mod.default, { policy, maxAge, keyFn });
 }
 
 /** Clear all cached entries. Useful for decofile hot-reload. */

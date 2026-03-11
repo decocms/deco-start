@@ -153,6 +153,10 @@ const ROUTE_CACHE: Record<CacheProfile, RouteCacheDefaults> = {
  * Returns `{ staleTime, gcTime }` for a cache profile, ready to spread
  * into a TanStack Router route definition.
  *
+ * In dev mode, uses short staleTime (5s) to keep data fresh enough for
+ * development while avoiding redundant re-fetches during rapid
+ * interactions (e.g. variant switching on a PDP).
+ *
  * @example
  * ```ts
  * export const Route = createFileRoute("/$")({
@@ -163,6 +167,9 @@ const ROUTE_CACHE: Record<CacheProfile, RouteCacheDefaults> = {
  * ```
  */
 export function routeCacheDefaults(profile: CacheProfile): RouteCacheDefaults {
+  const env = typeof globalThis.process !== "undefined" ? globalThis.process.env : undefined;
+  const isDev = env?.DECO_CACHE_DISABLE === "true" || env?.NODE_ENV === "development";
+  if (isDev) return { staleTime: 5_000, gcTime: 30_000 };
   return ROUTE_CACHE[profile];
 }
 

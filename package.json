@@ -25,17 +25,22 @@
     "./sdk/workerEntry": "./src/sdk/workerEntry.ts",
     "./sdk/redirects": "./src/sdk/redirects.ts",
     "./sdk/sitemap": "./src/sdk/sitemap.ts",
+    "./sdk/useDevice": "./src/sdk/useDevice.ts",
     "./middleware": "./src/middleware/index.ts",
+    "./middleware/healthMetrics": "./src/middleware/healthMetrics.ts",
     "./sdk/wrapCaughtErrors": "./src/sdk/wrapCaughtErrors.ts",
     "./sdk/csp": "./src/sdk/csp.ts",
     "./sdk/urlUtils": "./src/sdk/urlUtils.ts",
     "./sdk/mergeCacheControl": "./src/sdk/mergeCacheControl.ts",
     "./sdk/requestContext": "./src/sdk/requestContext.ts",
+    "./sdk/createInvoke": "./src/sdk/createInvoke.ts",
     "./matchers/posthog": "./src/matchers/posthog.ts",
     "./matchers/builtins": "./src/matchers/builtins.ts",
     "./types/widgets": "./src/types/widgets.ts",
+    "./routes": "./src/routes/index.ts",
     "./scripts/generate-blocks": "./scripts/generate-blocks.ts",
-    "./scripts/generate-schema": "./scripts/generate-schema.ts"
+    "./scripts/generate-schema": "./scripts/generate-schema.ts",
+    "./scripts/generate-invoke": "./scripts/generate-invoke.ts"
   },
   "scripts": {
     "build": "tsc",
@@ -63,6 +68,7 @@
     "registry": "https://npm.pkg.github.com"
   },
   "peerDependencies": {
+    "@tanstack/react-start": ">=1.0.0",
     "@tanstack/store": ">=0.7.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

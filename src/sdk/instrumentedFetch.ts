@@ -26,6 +26,12 @@ export interface FetchInstrumentationOptions {
   tracing?: boolean;
   /** Callback when a request completes (for custom metrics). */
   onComplete?: (info: FetchMetrics) => void;
+  /**
+   * Underlying fetch implementation to wrap. Defaults to `globalThis.fetch`.
+   * Use this when the client already has a custom fetch (e.g. with cookies,
+   * custom headers, or a proxy) that must be preserved.
+   */
+  baseFetch?: typeof fetch;
 }
 
 export interface FetchMetrics {
@@ -49,7 +55,13 @@ export function createInstrumentedFetch(
   const options: FetchInstrumentationOptions =
     typeof nameOrOptions === "string" ? { name: nameOrOptions } : nameOrOptions;
 
-  const { name, logging = isDev, tracing = true, onComplete } = options;
+  const {
+    name,
+    logging = isDev,
+    tracing = true,
+    onComplete,
+    baseFetch = globalThis.fetch,
+  } = options;
 
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url =
@@ -62,7 +74,7 @@ export function createInstrumentedFetch(
         console.log(`[${name}] ${method} ${truncateUrl(url)}`);
       }
 
-      const response = await globalThis.fetch(input, init);
+      const response = await baseFetch(input, init);
       const durationMs = performance.now() - startTime;
       const cached = response.headers.get("x-cache") === "HIT";
 
@@ -116,12 +128,10 @@ function truncateUrl(url: string, maxLen = 120): string {
 }
 
 /**
- * Wraps an existing commerce client's fetch calls by monkey-patching
- * the fetch function it uses. For clients that expose `fetch` as a param.
+ * Wraps an existing fetch function with logging and tracing instrumentation.
+ * Unlike `createInstrumentedFetch`, this preserves the original fetch's
+ * behavior (custom headers, cookies, proxy logic) and adds observability on top.
  */
 export function instrumentFetch(originalFetch: typeof fetch, name: string): typeof fetch {
-  const instrumented = createInstrumentedFetch(name);
-  return ((input: RequestInfo | URL, init?: RequestInit) => {
-    return instrumented(input, init);
-  }) as typeof fetch;
+  return createInstrumentedFetch({ name, baseFetch: originalFetch });
 }

@@ -1,13 +1,17 @@
-import { loadBlocks, setBlocks } from "../cms/loader";
+import { getRevision, loadBlocks, setBlocks } from "../cms/loader";
+import { clearLoaderCache } from "../sdk/cachedLoader";
+import { invalidateMetaCache } from "./meta";
 
 export function handleDecofileRead(): Response {
   const blocks = loadBlocks();
+  const revision = getRevision();
 
-  return new Response(JSON.stringify(blocks), {
+  return new Response(JSON.stringify({ blocks, revision }), {
     status: 200,
     headers: {
       "Content-Type": "application/json",
       "Cache-Control": "no-cache",
+      ...(revision ? { ETag: `"${revision}"` } : {}),
     },
   });
 }
@@ -45,14 +49,22 @@ export async function handleDecofileReload(
   }
 
   const previousBlockCount = Object.keys(loadBlocks()).length;
+
   setBlocks(newBlocks);
+  // Invalidate the meta ETag so the admin re-fetches the schema on next poll.
+  invalidateMetaCache();
+  // Clear stale loader cache entries after decofile update
+  clearLoaderCache();
+
   const newBlockCount = Object.keys(newBlocks).length;
+  const revision = getRevision();
 
   return new Response(
     JSON.stringify({
       ok: true,
       previousBlockCount,
       newBlockCount,
+      revision,
       timestamp: Date.now(),
     }),
     { status: 200, headers: { "Content-Type": "application/json" } },

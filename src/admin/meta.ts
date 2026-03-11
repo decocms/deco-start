@@ -4,6 +4,17 @@ let metaData: MetaResponse | null = null;
 let cachedEtag: string | null = null;
 
 /**
+ * Invalidate the cached ETag so the admin re-fetches meta after a
+ * hot-reload or decofile change.
+ *
+ * Called by decofile.ts after setBlocks() — no server-side loader import
+ * needed here, keeping this module safe for client-side bundles.
+ */
+export function invalidateMetaCache() {
+  cachedEtag = null;
+}
+
+/**
  * Set the schema metadata that /deco/meta will return.
  * Runs composeMeta() to inject framework-level schemas (pages, etc.)
  * on top of the site-generated section schemas.

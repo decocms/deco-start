@@ -177,6 +177,33 @@ export interface DecoWorkerEntryOptions {
   stripTrackingParams?: boolean;
 
   /**
+   * Optional proxy handler for commerce backend routes
+   * (checkout, account, API, login, etc.).
+   *
+   * Called early in the request pipeline — after admin routes and cache
+   * purge, but before static assets and edge cache logic. This ensures
+   * proxy requests never hit TanStack Start or the React SSR pipeline.
+   *
+   * Return a `Response` to proxy the request, or `null` to let the
+   * normal TanStack Start flow handle it.
+   *
+   * @example
+   * ```ts
+   * import { shouldProxyToVtex, proxyToVtex } from "@decocms/apps/vtex/utils/proxy";
+   *
+   * createDecoWorkerEntry(serverEntry, {
+   *   proxyHandler: (request, url) => {
+   *     if (shouldProxyToVtex(url.pathname)) {
+   *       return proxyToVtex(request);
+   *     }
+   *     return null;
+   *   },
+   * });
+   * ```
+   */
+  proxyHandler?: (request: Request, url: URL) => Promise<Response | null> | Response | null;
+
+  /**
    * Environment variable name holding a build version string.
    * The value is appended to every cache key so each deploy gets its own
    * cache namespace — old entries become orphaned and expire naturally,
@@ -382,7 +409,15 @@ export function createDecoWorkerEntry(
       return new Response('Body must include "paths": ["/", "/page"]', { status: 400 });
     }
 
-    const cache = (caches as unknown as { default: Cache }).default;
+    const cache =
+      typeof caches !== "undefined"
+        ? ((caches as unknown as { default?: Cache }).default ?? null)
+        : null;
+
+    if (!cache) {
+      return Response.json({ purged: [], total: 0, note: "Cache API unavailable" });
+    }
+
     const baseUrl = new URL(request.url).origin;
     const purged: string[] = [];
 
@@ -403,8 +438,12 @@ export function createDecoWorkerEntry(
           const url = new URL(p, baseUrl);
           url.searchParams.set("__seg", hashSegment(seg));
           const key = new Request(url.toString(), { method: "GET" });
-          if (await cache.delete(key)) {
-            purged.push(`${p} (${hashSegment(seg)})`);
+          try {
+            if (await cache.delete(key)) {
+              purged.push(`${p} (${hashSegment(seg)})`);
+            }
+          } catch {
+            /* ignore */
           }
         }
       } else {
@@ -414,8 +453,12 @@ export function createDecoWorkerEntry(
           const url = new URL(p, baseUrl);
           if (device) url.searchParams.set("__cf_device", device);
           const key = new Request(url.toString(), { method: "GET" });
-          if (await cache.delete(key)) {
-            purged.push(device ? `${p} (${device})` : p);
+          try {
+            if (await cache.delete(key)) {
+              purged.push(device ? `${p} (${device})` : p);
+            }
+          } catch {
+            /* ignore */
           }
         }
       }
@@ -527,6 +570,12 @@ export function createDecoWorkerEntry(
         return handlePurge(request, env);
       }
 
+      // Commerce proxy (checkout, account, API, etc.)
+      if (options.proxyHandler) {
+        const proxyResponse = await options.proxyHandler(request, url);
+        if (proxyResponse) return proxyResponse;
+      }
+
       // Static fingerprinted assets — serve from origin with immutable headers
       if (isStaticAsset(url.pathname)) {
         const origin = await serverEntry.fetch(request, env, ctx);
@@ -574,19 +623,28 @@ export function createDecoWorkerEntry(
         return resp;
       }
 
-      // Check Cache API
-      const cache = (caches as unknown as { default: Cache }).default;
+      // Check Cache API (may not be available in local dev / miniflare)
+      const cache =
+        typeof caches !== "undefined"
+          ? ((caches as unknown as { default?: Cache }).default ?? null)
+          : null;
 
-      const cached = await cache.match(cacheKey);
-      if (cached) {
-        const hit = new Response(cached.body, cached);
-        hit.headers.set("X-Cache", "HIT");
-        if (segment) hit.headers.set("X-Cache-Segment", hashSegment(segment));
-        if (cacheVersionEnv !== false) {
-          const v = (env[cacheVersionEnv] as string) || "";
-          if (v) hit.headers.set("X-Cache-Version", v);
+      if (cache) {
+        try {
+          const cached = await cache.match(cacheKey);
+          if (cached) {
+            const hit = new Response(cached.body, cached);
+            hit.headers.set("X-Cache", "HIT");
+            if (segment) hit.headers.set("X-Cache-Segment", hashSegment(segment));
+            if (cacheVersionEnv !== false) {
+              const v = (env[cacheVersionEnv] as string) || "";
+              if (v) hit.headers.set("X-Cache-Version", v);
+            }
+            return hit;
+          }
+        } catch {
+          // Cache API unavailable in this environment — proceed without cache
         }
-        return hit;
       }
 
       // Cache MISS — fetch from origin
@@ -629,9 +687,15 @@ export function createDecoWorkerEntry(
 
       // For Cache API storage, use sMaxAge as max-age since the Cache API
       // ignores s-maxage and only respects max-age for TTL decisions.
-      const toStore = toReturn.clone();
-      toStore.headers.set("Cache-Control", `public, max-age=${profileConfig.sMaxAge}`);
-      ctx.waitUntil(cache.put(cacheKey, toStore));
+      if (cache) {
+        try {
+          const toStore = toReturn.clone();
+          toStore.headers.set("Cache-Control", `public, max-age=${profileConfig.sMaxAge}`);
+          ctx.waitUntil(cache.put(cacheKey, toStore));
+        } catch {
+          // Cache API unavailable — skip storing
+        }
+      }
 
       return toReturn;
     },

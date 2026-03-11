@@ -1,88 +1,163 @@
 /**
- * Handles /deco/invoke -- executes a loader or action by key.
- * Commerce loaders must be registered via registerCommerceLoader() before use.
+ * Handles /deco/invoke -- executes loaders and actions by key.
  *
- * Loaders receive `(props, request)` so they can access cookies, headers,
- * auth tokens, etc. from the original HTTP request.
+ * Supports:
+ * - Single invoke by key: POST /deco/invoke/some/loader.ts
+ * - Batch invoke: POST /deco/invoke with { key: payload } body
+ * - FormData parsing for file uploads and form submissions
+ * - `?select=field1,field2` to pick fields from the result
+ * - Resolves __resolveType in batch payloads
  */
 
 export type InvokeLoader = (props: any, request: Request) => Promise<any>;
+export type InvokeAction = (props: any, request: Request) => Promise<any>;
 
 let getRegisteredLoaders: () => Record<string, InvokeLoader> = () => ({});
+let getRegisteredActions: () => Record<string, InvokeAction> = () => ({});
 
 export function setInvokeLoaders(getter: () => Record<string, InvokeLoader>) {
   getRegisteredLoaders = getter;
 }
 
+export function setInvokeActions(getter: () => Record<string, InvokeAction>) {
+  getRegisteredActions = getter;
+}
+
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
+
+const isDev =
+  typeof globalThis.process !== "undefined" && globalThis.process.env?.NODE_ENV === "development";
+
+function selectFields(data: unknown, select?: string[]): unknown {
+  if (!select?.length || !data || typeof data !== "object") return data;
+  if (Array.isArray(data)) return data.map((item) => selectFields(item, select));
+  const result: Record<string, unknown> = {};
+  for (const key of select) {
+    if (key in (data as Record<string, unknown>)) {
+      result[key] = (data as Record<string, unknown>)[key];
+    }
+  }
+  return result;
+}
+
+function errorResponse(message: string, status: number, error?: unknown) {
+  const body: Record<string, unknown> = { error: message };
+  if (isDev && error instanceof Error && error.stack) {
+    body.stack = error.stack;
+  }
+  return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
+}
+
+async function parseBody(request: Request): Promise<any> {
+  const contentType = request.headers.get("content-type") ?? "";
+
+  // FormData
+  if (
+    contentType.includes("multipart/form-data") ||
+    contentType.includes("application/x-www-form-urlencoded")
+  ) {
+    try {
+      const formData = await request.formData();
+      const obj: Record<string, unknown> = {};
+      for (const [key, value] of formData.entries()) {
+        if (obj[key] !== undefined) {
+          // Multiple values → array
+          const existing = Array.isArray(obj[key]) ? (obj[key] as unknown[]) : [obj[key]];
+          existing.push(value);
+          obj[key] = existing;
+        } else {
+          obj[key] = value;
+        }
+      }
+      return obj;
+    } catch {
+      return {};
+    }
+  }
+
+  // URL-encoded search params (for GET fallback)
+  if (request.method === "GET") {
+    const url = new URL(request.url);
+    const propsParam = url.searchParams.get("props");
+    if (propsParam) {
+      try {
+        return JSON.parse(decodeURIComponent(propsParam));
+      } catch {
+        return {};
+      }
+    }
+    return {};
+  }
+
+  // JSON (default for POST)
+  try {
+    return await request.json();
+  } catch {
+    return {};
+  }
+}
+
+function findHandler(
+  key: string,
+): { handler: InvokeLoader | InvokeAction; type: "loader" | "action" } | null {
+  const loaders = getRegisteredLoaders();
+  if (loaders[key]) return { handler: loaders[key], type: "loader" };
+
+  const actions = getRegisteredActions();
+  if (actions[key]) return { handler: actions[key], type: "action" };
+
+  return null;
+}
 
 export async function handleInvoke(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const pathParts = url.pathname.split("/deco/invoke/");
   const invokeKey = pathParts[1] || "";
+  const select = url.searchParams.get("select")?.split(",").filter(Boolean);
 
-  const loaders = getRegisteredLoaders();
-
-  let body: any = {};
-  if (request.method === "POST") {
-    try {
-      body = await request.json();
-    } catch {
-      // no body
-    }
-  }
+  const body = await parseBody(request);
 
   // Single invoke by key
   if (invokeKey) {
-    const loader = loaders[invokeKey];
-    if (!loader) {
-      return new Response(JSON.stringify({ error: `Unknown loader: ${invokeKey}` }), {
-        status: 404,
-        headers: JSON_HEADERS,
-      });
+    const found = findHandler(invokeKey);
+    if (!found) {
+      return errorResponse(`Unknown handler: ${invokeKey}`, 404);
     }
 
     try {
-      const result = await loader(body, request);
-      return new Response(JSON.stringify(result), {
-        status: 200,
-        headers: JSON_HEADERS,
-      });
+      const result = await found.handler(body, request);
+      const filtered = selectFields(result, select);
+      return new Response(JSON.stringify(filtered), { status: 200, headers: JSON_HEADERS });
     } catch (error) {
-      return new Response(JSON.stringify({ error: (error as Error).message }), {
-        status: 500,
-        headers: JSON_HEADERS,
-      });
+      return errorResponse((error as Error).message, 500, error);
     }
   }
 
   // Batch invoke
-  if (request.method === "POST" && typeof body === "object") {
-    const results: Record<string, any> = {};
+  if (request.method === "POST" && body && typeof body === "object" && !Array.isArray(body)) {
+    const results: Record<string, unknown> = {};
 
-    for (const [key, payload] of Object.entries(body)) {
-      const loaderKey = (payload as any)?.__resolveType || key;
-      const loader = loaders[loaderKey];
+    const entries = Object.entries(body as Record<string, unknown>);
+    await Promise.all(
+      entries.map(async ([key, payload]) => {
+        const resolveType = (payload as any)?.__resolveType || key;
+        const found = findHandler(resolveType);
 
-      if (loader) {
-        try {
-          results[key] = await loader(payload, request);
-        } catch (error) {
-          results[key] = { error: (error as Error).message };
+        if (found) {
+          try {
+            const result = await found.handler(payload, request);
+            results[key] = selectFields(result, select);
+          } catch (error) {
+            results[key] = { error: (error as Error).message };
+          }
+        } else {
+          results[key] = { error: `Unknown handler: ${resolveType}` };
         }
-      } else {
-        results[key] = { error: `Unknown loader: ${loaderKey}` };
-      }
-    }
+      }),
+    );
 
-    return new Response(JSON.stringify(results), {
-      status: 200,
-      headers: JSON_HEADERS,
-    });
+    return new Response(JSON.stringify(results), { status: 200, headers: JSON_HEADERS });
   }
 
-  return new Response(JSON.stringify({ error: "No invoke key specified" }), {
-    status: 400,
-    headers: JSON_HEADERS,
-  });
+  return errorResponse("No invoke key specified", 400);
 }
