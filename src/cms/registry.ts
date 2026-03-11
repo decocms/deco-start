@@ -16,8 +16,14 @@ export interface SectionOptions {
   errorFallback?: ComponentType<{ error: Error }>;
 }
 
-const registry: Record<string, RegistryEntry> = {};
-const sectionOptions: Record<string, SectionOptions> = {};
+// globalThis-backed: server function split modules need access to the registry
+const G = globalThis as any;
+if (!G.__deco) G.__deco = {};
+if (!G.__deco.sectionRegistry) G.__deco.sectionRegistry = {};
+if (!G.__deco.sectionOptions) G.__deco.sectionOptions = {};
+
+const registry: Record<string, RegistryEntry> = G.__deco.sectionRegistry;
+const sectionOptions: Record<string, SectionOptions> = G.__deco.sectionOptions;
 
 // Cache of already-resolved component references.
 // When a module is loaded (server-side or after first client import),

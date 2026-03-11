@@ -2,6 +2,12 @@ import { findPageByPath, loadBlocks } from "./loader";
 import { getSection } from "./registry";
 import { isLayoutSection } from "./sectionLoaders";
 
+// globalThis-backed: share state across Vite server function split modules
+const G = globalThis as any;
+if (!G.__deco) G.__deco = {};
+if (!G.__deco.commerceLoaders) G.__deco.commerceLoaders = {};
+if (!G.__deco.customMatchers) G.__deco.customMatchers = {};
+
 export type ResolvedSection = {
   component: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -47,7 +53,7 @@ export interface AsyncRenderingConfig {
   alwaysEager: Set<string>;
 }
 
-let asyncConfig: AsyncRenderingConfig | null = null;
+let asyncConfig: AsyncRenderingConfig | null = G.__deco.asyncConfig ?? null;
 
 /**
  * Enable async section rendering.
@@ -71,6 +77,7 @@ export function setAsyncRenderingConfig(config?: {
     foldThreshold: config?.foldThreshold ?? Infinity,
     alwaysEager: new Set(config?.alwaysEager ?? []),
   };
+  G.__deco.asyncConfig = asyncConfig;
 }
 
 /** Read-only access to the current config (null when disabled). */
@@ -150,7 +157,7 @@ const MAX_RESOLVE_DEPTH = 20;
 // Commerce loaders
 // ---------------------------------------------------------------------------
 
-const commerceLoaders: Record<string, CommerceLoader> = {};
+const commerceLoaders: Record<string, CommerceLoader> = G.__deco.commerceLoaders;
 
 export function registerCommerceLoader(key: string, loader: CommerceLoader) {
   commerceLoaders[key] = loader;
@@ -167,7 +174,7 @@ export function registerCommerceLoaders(loaders: Record<string, CommerceLoader>)
 const customMatchers: Record<
   string,
   (rule: Record<string, unknown>, ctx: MatcherContext) => boolean
-> = {};
+> = G.__deco.customMatchers;
 
 export function registerMatcher(
   key: string,
@@ -211,16 +218,23 @@ export function setDanglingReferenceHandler(handler: DanglingReferenceHandler) {
 // Init hook
 // ---------------------------------------------------------------------------
 
-let initCallback: (() => void) | null = null;
-let initialized = false;
+let initCallback: (() => void) | null = G.__deco.initCallback ?? null;
+let initialized = G.__deco.initialized ?? false;
 
 export function onBeforeResolve(callback: () => void) {
   initCallback = callback;
+  G.__deco.initCallback = callback;
 }
 
 function ensureInitialized() {
-  if (!initialized && initCallback) {
+  if (!initCallback && G.__deco.initCallback) {
+    initCallback = G.__deco.initCallback;
+  }
+  if (!initialized && !G.__deco.initialized && initCallback) {
     initCallback();
+    initialized = true;
+    G.__deco.initialized = true;
+  } else if (G.__deco.initialized) {
     initialized = true;
   }
 }
