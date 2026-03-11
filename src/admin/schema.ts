@@ -86,7 +86,7 @@ export function registerLoaderSchemas(configs: LoaderConfig[]) {
 
 /** Get all registered loader schemas. */
 export function getRegisteredLoaders(): LoaderConfig[] {
-  return loaderRegistry;
+  return [...loaderRegistry];
 }
 
 function getProductListLoaderKeys(): string[] {

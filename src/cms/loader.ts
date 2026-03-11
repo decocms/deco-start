@@ -70,7 +70,7 @@ export function setBlocks(blocks: Record<string, unknown>) {
   blockData = blocks;
   revision = computeRevision(blocks);
 
-  for (const listener of changeListeners) {
+  for (const listener of [...changeListeners]) {
     try {
       listener(blocks, revision);
     } catch (e) {

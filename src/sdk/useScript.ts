@@ -38,14 +38,14 @@ function cacheSet(key: string, value: string) {
 function minifyJs(code: string): string {
   return (
     code
-      // Remove single-line comments (but not URLs with //)
-      .replace(/(?<![:"'])\/\/[^\n]*/g, "")
-      // Remove multi-line comments
+      // Remove block comments only — line-comment stripping and operator-spacing
+      // collapse are unsafe: they can corrupt string literals containing "//"
+      // or operators, and regex literals whose delimiters look like operators.
       .replace(/\/\*[\s\S]*?\*\//g, "")
-      // Collapse whitespace around operators and punctuation
-      .replace(/\s*([{};,=():<>+\-*/?&|!])\s*/g, "$1")
-      // Collapse remaining multi-space to single space
-      .replace(/\s{2,}/g, " ")
+      // Collapse runs of whitespace (spaces, tabs, newlines) to a single space.
+      // This is safe because whitespace inside string/template literals is
+      // preserved as a single space, which is semantically identical.
+      .replace(/\s+/g, " ")
       .trim()
   );
 }

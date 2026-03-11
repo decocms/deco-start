@@ -31,6 +31,8 @@
 // Tracer
 // ---------------------------------------------------------------------------
 
+import * as asyncHooks from "node:async_hooks";
+
 export interface Span {
   end(): void;
   setError?(error: unknown): void;
@@ -42,7 +44,17 @@ export interface TracerAdapter {
 }
 
 let tracer: TracerAdapter | null = null;
-let activeSpan: Span | null = null;
+
+// Per-request active span stored in AsyncLocalStorage so concurrent requests
+// cannot overwrite each other's span when `withTracing` awaits async work.
+// The namespace import + runtime guard mirrors loader.ts to stay safe in client builds.
+const ALS = (asyncHooks as any).AsyncLocalStorage as
+  | (new <T>() => { getStore(): T | undefined; run<R>(store: T, fn: () => R): R })
+  | undefined;
+const spanStorage: {
+  getStore(): Span | null | undefined;
+  run<R>(store: Span | null, fn: () => R): R;
+} = ALS ? new ALS<Span | null>() : { getStore: () => undefined, run: (_s: any, fn: any) => fn() };
 
 export function configureTracer(t: TracerAdapter) {
   tracer = t;
@@ -52,14 +64,14 @@ export function getTracer(): TracerAdapter | null {
   return tracer;
 }
 
-/** Get the currently active span, if any. */
+/** Get the currently active span for the current async context, if any. */
 export function getActiveSpan(): Span | null {
-  return activeSpan;
+  return spanStorage.getStore() ?? null;
 }
 
 /** Set an attribute on the active span, if one exists. */
 export function setSpanAttribute(key: string, value: string | number | boolean) {
-  activeSpan?.setAttribute?.(key, value);
+  getActiveSpan()?.setAttribute?.(key, value);
 }
 
 export async function withTracing<T>(
@@ -69,20 +81,16 @@ export async function withTracing<T>(
 ): Promise<T> {
   if (!tracer) return fn();
 
-  const parentSpan = activeSpan;
   const span = tracer.startSpan(name, attributes);
-  activeSpan = span;
 
   try {
-    const result = await fn();
+    const result = await spanStorage.run(span, fn);
     span.end();
     return result;
   } catch (error) {
     span.setError?.(error);
     span.end();
     throw error;
-  } finally {
-    activeSpan = parentSpan;
   }
 }
 
@@ -152,7 +160,7 @@ function normalizePath(path: string): string {
   return path
     .replace(/\/[0-9a-f]{8,}/gi, "/:id")
     .replace(/\/\d+/g, "/:id")
-    .replace(/\/p$/, "/:slug/p");
+    .replace(/\/[^/]+\/p$/, "/:slug/p");
 }
 
 // ---------------------------------------------------------------------------

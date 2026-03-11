@@ -25,8 +25,11 @@ import { RequestContext } from "./requestContext";
 
 export type Device = "mobile" | "tablet" | "desktop";
 
-const MOBILE_RE = /mobile|android|iphone|ipod|webos|blackberry|opera mini|iemobile/i;
-const TABLET_RE = /ipad|tablet|kindle|silk|playbook/i;
+// Android phones include "Mobile" in their UA; Android tablets do not.
+// Check TABLET_RE first so `android(?!.*mobile)` captures tablets before
+// the MOBILE_RE `android.*mobile` branch matches phones.
+const MOBILE_RE = /mobile|android.*mobile|iphone|ipod|webos|blackberry|opera mini|iemobile/i;
+const TABLET_RE = /ipad|tablet|kindle|silk|playbook|android(?!.*mobile)/i;
 
 /**
  * Detect device type from a User-Agent string.

@@ -1,14 +1,18 @@
-import { onChange } from "../cms/loader";
 import { composeMeta, type MetaResponse } from "./schema";
 
 let metaData: MetaResponse | null = null;
 let cachedEtag: string | null = null;
 
-// Auto-invalidate the cached ETag when the decofile changes.
-// This ensures the admin re-fetches meta after a hot-reload.
-onChange(() => {
+/**
+ * Invalidate the cached ETag so the admin re-fetches meta after a
+ * hot-reload or decofile change.
+ *
+ * Called by decofile.ts after setBlocks() — no server-side loader import
+ * needed here, keeping this module safe for client-side bundles.
+ */
+export function invalidateMetaCache() {
   cachedEtag = null;
-});
+}
 
 /**
  * Set the schema metadata that /deco/meta will return.

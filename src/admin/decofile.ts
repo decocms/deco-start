@@ -1,5 +1,6 @@
 import { getRevision, loadBlocks, setBlocks } from "../cms/loader";
 import { clearLoaderCache } from "../sdk/cachedLoader";
+import { invalidateMetaCache } from "./meta";
 
 export function handleDecofileRead(): Response {
   const blocks = loadBlocks();
@@ -49,9 +50,9 @@ export async function handleDecofileReload(
 
   const previousBlockCount = Object.keys(loadBlocks()).length;
 
-  // setBlocks triggers onChange listeners (including meta ETag invalidation)
   setBlocks(newBlocks);
-
+  // Invalidate the meta ETag so the admin re-fetches the schema on next poll.
+  invalidateMetaCache();
   // Clear stale loader cache entries after decofile update
   clearLoaderCache();
 
