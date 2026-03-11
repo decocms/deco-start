@@ -1,5 +1,4 @@
 import { createElement } from "react";
-import { renderToString } from "react-dom/server";
 import { loadBlocks, withBlocksOverride } from "../cms/loader";
 import { getSection } from "../cms/registry";
 import { resolveValue } from "../cms/resolve";
@@ -48,6 +47,7 @@ async function renderOneSection(section: Record<string, unknown>): Promise<strin
 
   try {
     const { __resolveType: _, ...sectionProps } = section;
+    const { renderToString } = await import("react-dom/server");
     const mod = await sectionLoader();
     return renderToString(createElement(mod.default, sectionProps));
   } catch (error) {
@@ -180,6 +180,7 @@ export async function handleRender(request: Request): Promise<Response> {
     try {
       const resolvedProps = (await resolveValue(props)) as Record<string, unknown>;
       const { __resolveType: _, ...cleanProps } = resolvedProps;
+      const { renderToString } = await import("react-dom/server");
       const mod = await sectionLoader();
       const sectionHtml = renderToString(createElement(mod.default, cleanProps));
       return new Response(wrapInHtmlShell(sectionHtml), {
