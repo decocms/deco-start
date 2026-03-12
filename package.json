@@ -76,6 +76,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.6",
+    "@semantic-release/exec": "^7.1.0",
     "@semantic-release/git": "^10.0.1",
     "@tanstack/store": "^0.9.1",
     "@types/react": "^19.0.0",
