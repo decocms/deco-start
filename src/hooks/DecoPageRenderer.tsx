@@ -197,7 +197,10 @@ function DeferredSectionWrapper({
   const [loadedOptions, setLoadedOptions] = useState<SectionOptions | undefined>(() =>
     getSectionOptions(deferred.component),
   );
-  const [optionsReady, setOptionsReady] = useState(() => !!getSectionOptions(deferred.component));
+  const isSSR = typeof document === "undefined";
+  const [optionsReady, setOptionsReady] = useState(() =>
+    isSSR ? false : !!getSectionOptions(deferred.component),
+  );
   const ref = useRef<HTMLDivElement>(null);
   const triggered = useRef(false);
   const prevKeyRef = useRef(stableKey);
@@ -320,20 +323,24 @@ type PageItem =
   | { type: "deferred"; deferred: DeferredSection };
 
 function mergeSections(resolved: ResolvedSection[], deferred: DeferredSection[]): PageItem[] {
-  if (!deferred.length) {
-    return resolved.map((s, i) => ({ type: "eager", section: s, originalIndex: i }));
+  if (!resolved?.length && !deferred?.length) return [];
+  const safeResolved = resolved ?? [];
+  const safeDeferred = deferred ?? [];
+
+  if (!safeDeferred.length) {
+    return safeResolved.map((s, i) => ({ type: "eager", section: s, originalIndex: i }));
   }
 
   // Use the `index` property stamped by resolveDecoPage to sort all
   // sections (eager + deferred) back into their original CMS order.
   const items: (PageItem & { _sort: number })[] = [];
 
-  for (let i = 0; i < resolved.length; i++) {
-    const s = resolved[i];
+  for (let i = 0; i < safeResolved.length; i++) {
+    const s = safeResolved[i];
     items.push({ type: "eager", section: s, originalIndex: i, _sort: s.index ?? i });
   }
 
-  for (const d of deferred) {
+  for (const d of safeDeferred) {
     items.push({ type: "deferred", deferred: d, _sort: d.index } as PageItem & { _sort: number });
   }
 
@@ -367,7 +374,7 @@ export function DecoPageRenderer({
   errorFallback,
   loadDeferredSectionFn,
 }: Props) {
-  const items = mergeSections(sections, deferredSections ?? []);
+  const items = mergeSections(sections ?? [], deferredSections ?? []);
   const hasDeferred = deferredSections && deferredSections.length > 0;
 
   return (
