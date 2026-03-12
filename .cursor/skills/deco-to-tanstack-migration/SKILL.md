@@ -15,6 +15,46 @@ Phase-based playbook for converting `deco-sites/*` storefronts from Fresh/Preact
 | **@decocms/apps** | `@decocms/apps` | VTEX/Shopify loaders, commerce types, commerce sdk (useOffer, formatPrice, analytics) | Passthrough HTML components, Preact/Fresh refs |
 | **Site repo** | (not published) | All UI: components, hooks, types, routes, styles | No compat/ layer, no aliases beyond `~` |
 
+### What Belongs Where
+
+```
+@decocms/start (framework)
+├── src/cms/          # Block loading, page resolution, section registry
+│   └── loader.ts     # loadBlocks, setBlocks, AsyncLocalStorage for per-request overrides
+├── src/admin/        # Admin protocol: meta, decofile, invoke, render, schema composition
+│   ├── meta.ts       # setMetaData() calls composeMeta() at startup; /deco/meta handler
+│   ├── schema.ts     # MetaResponse type, composeMeta(), framework block schemas (pages)
+│   ├── render.ts     # /live/previews/* for section + page preview (HTML shell)
+│   ├── setup.ts      # Client-safe setup (setMetaData, setInvokeLoaders, setRenderShell)
+│   ├── decofile.ts   # /.decofile read/reload
+│   ├── invoke.ts     # /deco/invoke for loader/action calls
+│   ├── cors.ts       # CORS + admin origin validation
+│   └── liveControls.ts # Admin iframe bridge postMessage script
+├── src/sdk/
+│   ├── workerEntry.ts # createDecoWorkerEntry: outermost Cloudflare Worker wrapper
+│   ├── useScript.ts, signal.ts, clx.ts, cachedLoader.ts, instrumentedFetch.ts
+│   └── ...
+├── src/hooks/        # DecoPageRenderer (uses registry, NOT hardcoded map), LiveControls
+├── src/types/        # FnContext, App, AppContext, Section, SectionProps, Resolved
+└── scripts/          # generate-blocks.ts, generate-schema.ts
+
+@decocms/apps (commerce)
+├── commerce/types/   # Product, AnalyticsItem, BreadcrumbList, Filter, etc.
+├── commerce/utils/   # mapProductToAnalyticsItem, parseRange, formatRange
+├── commerce/sdk/     # useOffer, useVariantPossibilities, formatPrice, relative, analytics
+├── vtex/             # Client, loaders (actual VTEX API calls)
+└── shopify/          # Client, loaders (actual Shopify API calls)
+
+site repo (UI + business logic)
+├── src/components/   # All UI components (Image, Picture, Seo, Theme, etc.)
+├── src/hooks/        # useCart (real VTEX implementation), useUser, useWishlist
+├── src/types/        # widgets.ts (string aliases), vtex.ts (OrderFormItem, etc.)
+├── src/sdk/          # Site-specific contexts, usePlatform, useUI, useSuggestions
+├── src/sections/     # All CMS-renderable sections
+├── src/routes/       # TanStack Router routes
+└── src/server/       # Server functions (invoke.ts — createServerFn wrappers for @decocms/apps)
+```
+
 ### Architecture Map
 
 | Old Stack | New Stack |
@@ -278,6 +318,24 @@ npm run dev
 # 8. Admin — /deco/meta returns JSON, /live/previews works
 ```
 
+## Quick Start (Full Migration)
+
+1. **Scaffold**: `npm create @tanstack/app@latest -- --template cloudflare-workers`
+2. **Copy source**: Move `src/` from deco-site
+3. **Configure Vite**: See `references/vite-config/`
+4. **Install deps**: `npm install @decocms/start @decocms/apps @tanstack/store @tanstack/react-store`
+5. **Link local libs** (if not published): `cd apps-start && npm link && cd ../deco-start && npm link && cd ../my-store && npm link @decocms/apps @decocms/start`
+6. **Rewrite imports** (parallelizable):
+   - Preact -> React: `references/imports/`
+   - Signals -> TanStack Store: `references/signals/`
+   - Deco framework -> inline: `references/deco-framework/`
+   - Commerce/widget types -> @decocms/apps + local: `references/commerce/`
+   - SDK utilities -> packages: `~/sdk/useOffer` -> `@decocms/apps/commerce/sdk/useOffer`, `~/sdk/useScript` -> `@decocms/start/sdk/useScript`, etc.
+7. **Create local UI components**: Image.tsx, Picture.tsx, Seo.tsx, Theme.tsx in `~/components/ui/`
+8. **Implement platform hooks**: `references/platform-hooks/`
+9. **Build & verify**: `npm run build`
+10. **Final audit**: Zero `from "apps/"`, `from "$store/"`, `from "preact"`, `from "@preact"`, `from "@deco/deco"`, `from "~/sdk/useOffer"`, `from "~/sdk/format"` etc. -- all sdk utilities should come from packages
+
 ## Key Principles
 
 1. **No compat layer anywhere** -- not in `@decocms/start`, not in `@decocms/apps`, not in the site repo
@@ -492,6 +550,7 @@ The conductor approach that worked (836 errors → 0 across 213 files) treated e
 | Vite configuration | `references/vite-config/` |
 | Automation commands | `references/codemod-commands.md` |
 | Admin schema composition | `src/admin/schema.ts` in `@decocms/start` |
+| Server functions (`createServerFn`) | `references/server-functions/` |
 | Common gotchas (45 items) | `references/gotchas.md` |
 | setup.ts template | `templates/setup-ts.md` |
 | vite.config.ts template | `templates/vite-config.md` |

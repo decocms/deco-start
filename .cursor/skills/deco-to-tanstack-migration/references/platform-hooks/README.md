@@ -18,60 +18,27 @@ The storefront domain (e.g., `my-store.deco.site`) differs from the VTEX checkou
 
 Use TanStack Start `createServerFn` to create server-side proxy functions that the client hook calls transparently.
 
-### Server Functions (~/lib/vtex-cart-server.ts)
+> See `references/server-functions/README.md` for the full pattern and all TypeScript pitfalls.
+
+### Server Functions (`src/server/invoke.ts`)
+
+Wrap `@decocms/apps` VTEX actions in `createServerFn`. Always use `.inputValidator()` (not `.validator()`) and return `Promise<any>` to bypass `ValidateSerializable`:
 
 ```typescript
 import { createServerFn } from "@tanstack/react-start";
+import { getOrCreateCart } from "@decocms/apps/vtex/actions/checkout";
 
-const ACCOUNT = "myaccount";
-const API_KEY = process.env.VTEX_APP_KEY!;
-const API_TOKEN = process.env.VTEX_APP_TOKEN!;
-
-export const getOrCreateCart = createServerFn({ method: "GET" })
-  .validator((orderFormId: string) => orderFormId)
-  .handler(async ({ data: orderFormId }) => {
-    const url = orderFormId
-      ? `https://${ACCOUNT}.vtexcommercestable.com.br/api/checkout/pub/orderForm/${orderFormId}`
-      : `https://${ACCOUNT}.vtexcommercestable.com.br/api/checkout/pub/orderForm`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-VTEX-API-AppKey": API_KEY,
-        "X-VTEX-API-AppToken": API_TOKEN,
-      },
-      body: JSON.stringify({ expectedOrderFormSections: ["items", "totalizers", "shippingData", "clientPreferencesData", "storePreferencesData", "marketingData"] }),
-    });
-    return res.json();
+// Preferred: wrap @decocms/apps actions (handles auth + API details internally)
+const _getOrCreateCart = createServerFn({ method: "POST" })
+  .inputValidator((data: { orderFormId?: string }) => data)
+  .handler(async ({ data }): Promise<any> => {
+    const result = await getOrCreateCart(data.orderFormId);
+    return (result as any).data;
   });
 
-export const addItemsToCart = createServerFn({ method: "POST" })
-  .validator((data: { orderFormId: string; items: any[] }) => data)
-  .handler(async ({ data }) => {
-    const res = await fetch(
-      `https://${ACCOUNT}.vtexcommercestable.com.br/api/checkout/pub/orderForm/${data.orderFormId}/items`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-VTEX-API-AppKey": API_KEY, "X-VTEX-API-AppToken": API_TOKEN },
-        body: JSON.stringify({ orderItems: data.items }),
-      },
-    );
-    return res.json();
-  });
-
-export const updateCartItems = createServerFn({ method: "POST" })
-  .validator((data: { orderFormId: string; items: any[] }) => data)
-  .handler(async ({ data }) => {
-    const res = await fetch(
-      `https://${ACCOUNT}.vtexcommercestable.com.br/api/checkout/pub/orderForm/${data.orderFormId}/items/update`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-VTEX-API-AppKey": API_KEY, "X-VTEX-API-AppToken": API_TOKEN },
-        body: JSON.stringify({ orderItems: data.items }),
-      },
-    );
-    return res.json();
-  });
+export const invoke = {
+  vtex: { actions: { getOrCreateCart: _getOrCreateCart } },
+} as const;
 ```
 
 ### Hook (~/hooks/useCart.ts)

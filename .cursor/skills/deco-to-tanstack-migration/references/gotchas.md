@@ -1,6 +1,6 @@
 # Migration Gotchas
 
-45 pitfalls discovered during real migrations (espacosmart-storefront, osklen).
+46 pitfalls discovered during real migrations (espacosmart-storefront, osklen).
 
 ## 1. Section Loaders Don't Execute
 
@@ -717,3 +717,20 @@ Or in project `.npmrc` with an env var (for CI):
 ```
 
 **Tradeoff with `github:` syntax**: No semver resolution — `npm update` is meaningless. Pin to a tag for stability: `github:decocms/deco-start#v0.14.2`. Without a tag, you get HEAD of the default branch.
+
+## 46. `export type { X } from "..."` Does Not Scope `X` for Parameter Annotations
+
+Re-exporting a type makes it available to importers but does NOT bring it into scope in the same file:
+
+```typescript
+// BROKEN — Props is not in scope
+export type { Props } from "~/components/ui/Foo";
+export default function Foo({ bar }: Props) { } // Error: Cannot find name 'Props'
+
+// CORRECT — import separately, then re-export
+import type { Props } from "~/components/ui/Foo";
+export type { Props };
+export default function Foo({ bar }: Props) { }
+```
+
+This is a common pattern in section wrapper files (e.g. `src/sections/CountDownApp/CountDownApp.tsx`).
