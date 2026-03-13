@@ -413,11 +413,17 @@ export function createDecoWorkerEntry(
       }
     }
 
-    // Include CF country in cache key so geo-targeted content (location matcher)
-    // doesn't leak across countries. Applies to both segment and device-based keys.
+    // Include CF geo data in cache key so location matcher results don't leak
+    // across different geos. Applies to both segment and device-based keys.
     const cf = (request as unknown as { cf?: Record<string, string> }).cf;
-    if (cf?.country) {
-      url.searchParams.set("__cf_country", cf.country);
+    if (cf) {
+      const geoParts: string[] = [];
+      if (cf.country) geoParts.push(cf.country);
+      if (cf.region) geoParts.push(cf.region);
+      if (cf.city) geoParts.push(cf.city);
+      if (geoParts.length) {
+        url.searchParams.set("__cf_geo", geoParts.join("|"));
+      }
     }
 
     if (buildSegment) {
@@ -458,10 +464,11 @@ export function createDecoWorkerEntry(
       return new Response('Body must include "paths": ["/", "/page"]', { status: 400 });
     }
 
-    // Countries to purge geo-targeted cache variants.
-    // Pass ["BR", "US", ...] to purge specific country variants,
-    // or omit to only purge non-geo-targeted entries.
-    const countries = body.countries ?? [];
+    // Geo strings to purge location-specific cache variants.
+    // Pass ["BR", "BR|São Paulo|Curitiba", ...] to purge specific geo variants.
+    // Each string must match the __cf_geo param format: "country|region|city".
+    // When omitted, only the non-geo cache entry is purged.
+    const geoVariants = body.countries ?? [];
 
     const cache =
       typeof caches !== "undefined"
@@ -486,16 +493,16 @@ export function createDecoWorkerEntry(
         ]
       : [];
 
-    // Purge both without country (non-geo) and with each specified country
-    const countryVariants: (string | null)[] = [null, ...countries];
+    // Purge both without geo (non-geo-targeted) and with each specified geo variant
+    const geoKeys: (string | null)[] = [null, ...geoVariants];
 
     for (const p of paths) {
       if (buildSegment && segments.length > 0) {
         for (const seg of segments) {
-          for (const cc of countryVariants) {
+          for (const cc of geoKeys) {
             const url = new URL(p, baseUrl);
             url.searchParams.set("__seg", hashSegment(seg));
-            if (cc) url.searchParams.set("__cf_country", cc);
+            if (cc) url.searchParams.set("__cf_geo", cc);
             const key = new Request(url.toString(), { method: "GET" });
             try {
               if (await cache.delete(key)) {
@@ -511,10 +518,10 @@ export function createDecoWorkerEntry(
         const devices = deviceSpecificKeys ? (["mobile", "desktop"] as const) : ([null] as const);
 
         for (const device of devices) {
-          for (const cc of countryVariants) {
+          for (const cc of geoKeys) {
             const url = new URL(p, baseUrl);
             if (device) url.searchParams.set("__cf_device", device);
-            if (cc) url.searchParams.set("__cf_country", cc);
+            if (cc) url.searchParams.set("__cf_geo", cc);
             const key = new Request(url.toString(), { method: "GET" });
             try {
               if (await cache.delete(key)) {
