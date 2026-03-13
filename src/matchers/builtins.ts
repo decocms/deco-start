@@ -234,7 +234,8 @@ interface LocationRule {
 
 function matchesLocationRule(
   loc: LocationRule,
-  region: string,
+  regionName: string,
+  regionCode: string,
   country: string,
   city: string,
 ): boolean {
@@ -242,7 +243,12 @@ function matchesLocationRule(
     const code = COUNTRY_NAME_TO_CODE[loc.country] ?? loc.country;
     if (code.toUpperCase() !== country.toUpperCase()) return false;
   }
-  if (loc.regionCode && loc.regionCode.toLowerCase() !== region.toLowerCase()) return false;
+  if (loc.regionCode) {
+    // Match against both the short code ("SP") and full name ("São Paulo")
+    // so rules authored against either format continue working.
+    const ruleVal = loc.regionCode.toLowerCase();
+    if (regionCode.toLowerCase() !== ruleVal && regionName.toLowerCase() !== ruleVal) return false;
+  }
   if (loc.city && loc.city.toLowerCase() !== city.toLowerCase()) return false;
   return true;
 }
@@ -251,18 +257,17 @@ function locationMatcher(rule: Record<string, unknown>, ctx: MatcherContext): bo
   const cookies = ctx.cookies ?? {};
   const regionName = cookies.__cf_geo_region ? decodeURIComponent(cookies.__cf_geo_region) : "";
   const regionCode = cookies.__cf_geo_region_code ? decodeURIComponent(cookies.__cf_geo_region_code) : "";
-  const region = regionCode || regionName;
   const country = cookies.__cf_geo_country ? decodeURIComponent(cookies.__cf_geo_country) : "";
   const city = cookies.__cf_geo_city ? decodeURIComponent(cookies.__cf_geo_city) : "";
 
   const includeLocations = rule.includeLocations as LocationRule[] | undefined;
   const excludeLocations = rule.excludeLocations as LocationRule[] | undefined;
 
-  if (excludeLocations?.some((loc) => matchesLocationRule(loc, region, country, city))) {
+  if (excludeLocations?.some((loc) => matchesLocationRule(loc, regionName, regionCode, country, city))) {
     return false;
   }
   if (includeLocations?.length) {
-    return includeLocations.some((loc) => matchesLocationRule(loc, region, country, city));
+    return includeLocations.some((loc) => matchesLocationRule(loc, regionName, regionCode, country, city));
   }
   return true;
 }

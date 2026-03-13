@@ -413,6 +413,13 @@ export function createDecoWorkerEntry(
       }
     }
 
+    // Include CF country in cache key so geo-targeted content (location matcher)
+    // doesn't leak across countries. Applies to both segment and device-based keys.
+    const cf = (request as unknown as { cf?: Record<string, string> }).cf;
+    if (cf?.country) {
+      url.searchParams.set("__cf_country", cf.country);
+    }
+
     if (buildSegment) {
       const segment = buildSegment(request);
       url.searchParams.set("__seg", hashSegment(segment));
@@ -422,14 +429,6 @@ export function createDecoWorkerEntry(
     if (deviceSpecificKeys) {
       const device = MOBILE_RE.test(request.headers.get("user-agent") ?? "") ? "mobile" : "desktop";
       url.searchParams.set("__cf_device", device);
-    }
-
-    // Include CF country in cache key so geo-targeted content (location matcher)
-    // doesn't leak across countries. Only applies when request.cf is present
-    // (production Cloudflare Workers) and injectGeoCookies was called.
-    const cf = (request as unknown as { cf?: Record<string, string> }).cf;
-    if (cf?.country) {
-      url.searchParams.set("__cf_country", cf.country);
     }
 
     return { key: new Request(url.toString(), { method: "GET" }) };
@@ -447,7 +446,7 @@ export function createDecoWorkerEntry(
       return new Response("Unauthorized", { status: 401 });
     }
 
-    let body: { paths?: string[] };
+    let body: { paths?: string[]; countries?: string[] };
     try {
       body = await request.json();
     } catch {
@@ -458,6 +457,11 @@ export function createDecoWorkerEntry(
     if (!Array.isArray(paths) || paths.length === 0) {
       return new Response('Body must include "paths": ["/", "/page"]', { status: 400 });
     }
+
+    // Countries to purge geo-targeted cache variants.
+    // Pass ["BR", "US", ...] to purge specific country variants,
+    // or omit to only purge non-geo-targeted entries.
+    const countries = body.countries ?? [];
 
     const cache =
       typeof caches !== "undefined"
@@ -482,33 +486,44 @@ export function createDecoWorkerEntry(
         ]
       : [];
 
+    // Purge both without country (non-geo) and with each specified country
+    const countryVariants: (string | null)[] = [null, ...countries];
+
     for (const p of paths) {
       if (buildSegment && segments.length > 0) {
         for (const seg of segments) {
-          const url = new URL(p, baseUrl);
-          url.searchParams.set("__seg", hashSegment(seg));
-          const key = new Request(url.toString(), { method: "GET" });
-          try {
-            if (await cache.delete(key)) {
-              purged.push(`${p} (${hashSegment(seg)})`);
+          for (const cc of countryVariants) {
+            const url = new URL(p, baseUrl);
+            url.searchParams.set("__seg", hashSegment(seg));
+            if (cc) url.searchParams.set("__cf_country", cc);
+            const key = new Request(url.toString(), { method: "GET" });
+            try {
+              if (await cache.delete(key)) {
+                const label = cc ? `${p} (${hashSegment(seg)}, ${cc})` : `${p} (${hashSegment(seg)})`;
+                purged.push(label);
+              }
+            } catch {
+              /* ignore */
             }
-          } catch {
-            /* ignore */
           }
         }
       } else {
         const devices = deviceSpecificKeys ? (["mobile", "desktop"] as const) : ([null] as const);
 
         for (const device of devices) {
-          const url = new URL(p, baseUrl);
-          if (device) url.searchParams.set("__cf_device", device);
-          const key = new Request(url.toString(), { method: "GET" });
-          try {
-            if (await cache.delete(key)) {
-              purged.push(device ? `${p} (${device})` : p);
+          for (const cc of countryVariants) {
+            const url = new URL(p, baseUrl);
+            if (device) url.searchParams.set("__cf_device", device);
+            if (cc) url.searchParams.set("__cf_country", cc);
+            const key = new Request(url.toString(), { method: "GET" });
+            try {
+              if (await cache.delete(key)) {
+                const parts = [device, cc].filter(Boolean).join(", ");
+                purged.push(parts ? `${p} (${parts})` : p);
+              }
+            } catch {
+              /* ignore */
             }
-          } catch {
-            /* ignore */
           }
         }
       }
