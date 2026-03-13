@@ -274,6 +274,48 @@ function buildPreviewShell(): string {
 </html>`;
 }
 
+// ---------------------------------------------------------------------------
+// Cloudflare geo cookie injection
+// ---------------------------------------------------------------------------
+
+/**
+ * Inject Cloudflare geo data as cookies so matchers (location.ts) can
+ * read them from MatcherContext.cookies without relying on request.cf.
+ *
+ * Call this on the incoming request before passing it to the worker entry.
+ * Only needed in production Cloudflare Workers where `request.cf` is populated.
+ *
+ * @example
+ * ```ts
+ * export default {
+ *   async fetch(request, env, ctx) {
+ *     return handler.fetch(injectGeoCookies(request), env, ctx);
+ *   }
+ * };
+ * ```
+ */
+export function injectGeoCookies(request: Request): Request {
+  const cf = (request as unknown as { cf?: Record<string, string> }).cf;
+  if (!cf) return request;
+
+  const parts: string[] = [];
+  if (cf.region) parts.push(`__cf_geo_region=${encodeURIComponent(cf.region)}`);
+  if (cf.country) parts.push(`__cf_geo_country=${encodeURIComponent(cf.country)}`);
+  if (cf.city) parts.push(`__cf_geo_city=${encodeURIComponent(cf.city)}`);
+  if (cf.latitude) parts.push(`__cf_geo_lat=${encodeURIComponent(cf.latitude)}`);
+  if (cf.longitude) parts.push(`__cf_geo_lng=${encodeURIComponent(cf.longitude)}`);
+  if (cf.regionCode) parts.push(`__cf_geo_region_code=${encodeURIComponent(cf.regionCode)}`);
+
+  if (!parts.length) return request;
+
+  const existing = request.headers.get("cookie") ?? "";
+  const combined = existing ? `${existing}; ${parts.join("; ")}` : parts.join("; ");
+  const headers = new Headers(request.headers);
+  headers.set("cookie", combined);
+
+  return new Request(request, { headers });
+}
+
 const MOBILE_RE = /mobile|android|iphone|ipad|ipod/i;
 const ONE_YEAR = 31536000;
 
@@ -371,6 +413,19 @@ export function createDecoWorkerEntry(
       }
     }
 
+    // Include CF geo data in cache key so location matcher results don't leak
+    // across different geos. Applies to both segment and device-based keys.
+    const cf = (request as unknown as { cf?: Record<string, string> }).cf;
+    if (cf) {
+      const geoParts: string[] = [];
+      if (cf.country) geoParts.push(cf.country);
+      if (cf.region) geoParts.push(cf.region);
+      if (cf.city) geoParts.push(cf.city);
+      if (geoParts.length) {
+        url.searchParams.set("__cf_geo", geoParts.join("|"));
+      }
+    }
+
     if (buildSegment) {
       const segment = buildSegment(request);
       url.searchParams.set("__seg", hashSegment(segment));
@@ -397,7 +452,7 @@ export function createDecoWorkerEntry(
       return new Response("Unauthorized", { status: 401 });
     }
 
-    let body: { paths?: string[] };
+    let body: { paths?: string[]; countries?: string[] };
     try {
       body = await request.json();
     } catch {
@@ -408,6 +463,12 @@ export function createDecoWorkerEntry(
     if (!Array.isArray(paths) || paths.length === 0) {
       return new Response('Body must include "paths": ["/", "/page"]', { status: 400 });
     }
+
+    // Geo strings to purge location-specific cache variants.
+    // Pass ["BR", "BR|São Paulo|Curitiba", ...] to purge specific geo variants.
+    // Each string must match the __cf_geo param format: "country|region|city".
+    // When omitted, only the non-geo cache entry is purged.
+    const geoVariants = body.countries ?? [];
 
     const cache =
       typeof caches !== "undefined"
@@ -432,33 +493,44 @@ export function createDecoWorkerEntry(
         ]
       : [];
 
+    // Purge both without geo (non-geo-targeted) and with each specified geo variant
+    const geoKeys: (string | null)[] = [null, ...geoVariants];
+
     for (const p of paths) {
       if (buildSegment && segments.length > 0) {
         for (const seg of segments) {
-          const url = new URL(p, baseUrl);
-          url.searchParams.set("__seg", hashSegment(seg));
-          const key = new Request(url.toString(), { method: "GET" });
-          try {
-            if (await cache.delete(key)) {
-              purged.push(`${p} (${hashSegment(seg)})`);
+          for (const cc of geoKeys) {
+            const url = new URL(p, baseUrl);
+            url.searchParams.set("__seg", hashSegment(seg));
+            if (cc) url.searchParams.set("__cf_geo", cc);
+            const key = new Request(url.toString(), { method: "GET" });
+            try {
+              if (await cache.delete(key)) {
+                const label = cc ? `${p} (${hashSegment(seg)}, ${cc})` : `${p} (${hashSegment(seg)})`;
+                purged.push(label);
+              }
+            } catch {
+              /* ignore */
             }
-          } catch {
-            /* ignore */
           }
         }
       } else {
         const devices = deviceSpecificKeys ? (["mobile", "desktop"] as const) : ([null] as const);
 
         for (const device of devices) {
-          const url = new URL(p, baseUrl);
-          if (device) url.searchParams.set("__cf_device", device);
-          const key = new Request(url.toString(), { method: "GET" });
-          try {
-            if (await cache.delete(key)) {
-              purged.push(device ? `${p} (${device})` : p);
+          for (const cc of geoKeys) {
+            const url = new URL(p, baseUrl);
+            if (device) url.searchParams.set("__cf_device", device);
+            if (cc) url.searchParams.set("__cf_geo", cc);
+            const key = new Request(url.toString(), { method: "GET" });
+            try {
+              if (await cache.delete(key)) {
+                const parts = [device, cc].filter(Boolean).join(", ");
+                purged.push(parts ? `${p} (${parts})` : p);
+              }
+            } catch {
+              /* ignore */
             }
-          } catch {
-            /* ignore */
           }
         }
       }

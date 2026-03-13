@@ -238,6 +238,110 @@ registerMatcherSchemas([
       },
     },
   },
+  {
+    key: "website/matchers/location.ts",
+    title: "Location",
+    namespace: "website",
+    propsSchema: {
+      type: "object",
+      properties: {
+        includeLocations: {
+          type: "array",
+          title: "Include Locations",
+          items: {
+            type: "object",
+            properties: {
+              country: { type: "string", title: "Country" },
+              regionCode: { type: "string", title: "Region" },
+              city: { type: "string", title: "City" },
+            },
+          },
+        },
+        excludeLocations: {
+          type: "array",
+          title: "Exclude Locations",
+          items: {
+            type: "object",
+            properties: {
+              country: { type: "string", title: "Country" },
+              regionCode: { type: "string", title: "Region" },
+              city: { type: "string", title: "City" },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    key: "website/matchers/userAgent.ts",
+    title: "User Agent",
+    namespace: "website",
+    propsSchema: {
+      type: "object",
+      properties: {
+        includes: { type: "string", title: "Includes (substring)" },
+        match: { type: "string", title: "Match (regex)" },
+      },
+    },
+  },
+  {
+    key: "website/matchers/environment.ts",
+    title: "Environment",
+    namespace: "website",
+    propsSchema: {
+      type: "object",
+      properties: {
+        environment: {
+          type: "string",
+          title: "Environment",
+          enum: ["production", "development"],
+        },
+      },
+    },
+  },
+  {
+    key: "website/matchers/multi.ts",
+    title: "Multi (AND/OR)",
+    namespace: "website",
+    propsSchema: {
+      type: "object",
+      properties: {
+        op: {
+          type: "string",
+          title: "Operator",
+          enum: ["and", "or"],
+          default: "and",
+        },
+        matchers: {
+          type: "array",
+          title: "Matchers",
+          items: {
+            type: "object",
+            required: ["__resolveType"],
+            properties: { __resolveType: { type: "string" } },
+            additionalProperties: true,
+          },
+        },
+      },
+    },
+  },
+  {
+    key: "website/matchers/negate.ts",
+    title: "Negate (NOT)",
+    namespace: "website",
+    propsSchema: {
+      type: "object",
+      properties: {
+        matcher: {
+          type: "object",
+          title: "Matcher",
+          required: ["__resolveType"],
+          properties: { __resolveType: { type: "string" } },
+          additionalProperties: true,
+        },
+      },
+    },
+  },
 ]);
 
 function buildLoaderDefinitions() {

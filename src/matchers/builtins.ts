@@ -3,7 +3,8 @@
  *
  * These augment the matchers already handled inline in resolve.ts
  * (always, never, device, random, utm) with the additional matchers
- * that deco supported: cookie, cron, host, pathname, queryString.
+ * that deco supported: cookie, cron, host, pathname, queryString,
+ * location, userAgent, environment, multi, negate.
  *
  * Register these at startup:
  *
@@ -15,7 +16,7 @@
  */
 
 import type { MatcherContext } from "../cms/resolve";
-import { registerMatcher } from "../cms/resolve";
+import { evaluateMatcher, registerMatcher } from "../cms/resolve";
 
 // -------------------------------------------------------------------------
 // Cookie matcher
@@ -164,6 +165,175 @@ function queryStringMatcher(rule: Record<string, unknown>, ctx: MatcherContext):
 }
 
 // -------------------------------------------------------------------------
+// Location matcher
+// -------------------------------------------------------------------------
+
+/**
+ * CF country codes -> CMS country name mapping.
+ * The CMS stores country as full names ("Brasil"), CF provides ISO codes ("BR").
+ */
+const COUNTRY_NAME_TO_CODE: Record<string, string> = {
+  Brasil: "BR", Brazil: "BR",
+  Argentina: "AR", Chile: "CL",
+  Colombia: "CO", Mexico: "MX", "México": "MX",
+  Peru: "PE", "Perú": "PE",
+  Uruguay: "UY", Paraguay: "PY",
+  Bolivia: "BO", Ecuador: "EC",
+  Venezuela: "VE",
+  "United States": "US", USA: "US",
+  "Estados Unidos": "US",
+  Spain: "ES", "España": "ES",
+  Portugal: "PT",
+  Canada: "CA", "Canadá": "CA",
+  Germany: "DE", Alemania: "DE", Deutschland: "DE",
+  France: "FR", Francia: "FR",
+  Italy: "IT", Italia: "IT",
+  "United Kingdom": "GB", UK: "GB",
+  Japan: "JP", "Japón": "JP",
+  China: "CN",
+  Australia: "AU",
+  "South Korea": "KR",
+  India: "IN",
+  Netherlands: "NL",
+  Switzerland: "CH",
+  Sweden: "SE",
+  Norway: "NO",
+  Denmark: "DK",
+  Finland: "FI",
+  Belgium: "BE",
+  Austria: "AT",
+  Ireland: "IE",
+  "New Zealand": "NZ",
+  "South Africa": "ZA",
+  Israel: "IL",
+  "Saudi Arabia": "SA",
+  "United Arab Emirates": "AE",
+  Turkey: "TR", "Türkiye": "TR",
+  Poland: "PL",
+  "Czech Republic": "CZ", Czechia: "CZ",
+  Romania: "RO",
+  Hungary: "HU",
+  Greece: "GR",
+  Croatia: "HR",
+  "Costa Rica": "CR",
+  Panama: "PA", "Panamá": "PA",
+  "Dominican Republic": "DO",
+  Guatemala: "GT",
+  Honduras: "HN",
+  "El Salvador": "SV",
+  Nicaragua: "NI",
+  Cuba: "CU",
+  "Puerto Rico": "PR",
+};
+
+interface LocationRule {
+  country?: string;
+  regionCode?: string;
+  city?: string;
+}
+
+function matchesLocationRule(
+  loc: LocationRule,
+  regionName: string,
+  regionCode: string,
+  country: string,
+  city: string,
+): boolean {
+  if (loc.country) {
+    const code = COUNTRY_NAME_TO_CODE[loc.country] ?? loc.country;
+    if (code.toUpperCase() !== country.toUpperCase()) return false;
+  }
+  if (loc.regionCode) {
+    // Match against both the short code ("SP") and full name ("São Paulo")
+    // so rules authored against either format continue working.
+    const ruleVal = loc.regionCode.toLowerCase();
+    if (regionCode.toLowerCase() !== ruleVal && regionName.toLowerCase() !== ruleVal) return false;
+  }
+  if (loc.city && loc.city.toLowerCase() !== city.toLowerCase()) return false;
+  return true;
+}
+
+function locationMatcher(rule: Record<string, unknown>, ctx: MatcherContext): boolean {
+  const cookies = ctx.cookies ?? {};
+  const regionName = cookies.__cf_geo_region ? decodeURIComponent(cookies.__cf_geo_region) : "";
+  const regionCode = cookies.__cf_geo_region_code ? decodeURIComponent(cookies.__cf_geo_region_code) : "";
+  const country = cookies.__cf_geo_country ? decodeURIComponent(cookies.__cf_geo_country) : "";
+  const city = cookies.__cf_geo_city ? decodeURIComponent(cookies.__cf_geo_city) : "";
+
+  const includeLocations = rule.includeLocations as LocationRule[] | undefined;
+  const excludeLocations = rule.excludeLocations as LocationRule[] | undefined;
+
+  if (excludeLocations?.some((loc) => matchesLocationRule(loc, regionName, regionCode, country, city))) {
+    return false;
+  }
+  if (includeLocations?.length) {
+    return includeLocations.some((loc) => matchesLocationRule(loc, regionName, regionCode, country, city));
+  }
+  return true;
+}
+
+// -------------------------------------------------------------------------
+// User Agent matcher
+// -------------------------------------------------------------------------
+
+function userAgentMatcher(rule: Record<string, unknown>, ctx: MatcherContext): boolean {
+  const ua = ctx.userAgent ?? "";
+  const includes = rule.includes as string | undefined;
+  const match = rule.match as string | undefined;
+
+  if (includes && !ua.includes(includes)) return false;
+  if (match) {
+    if (!isSafePattern(match)) return false;
+    try {
+      if (!new RegExp(match, "i").test(ua)) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+// -------------------------------------------------------------------------
+// Environment matcher
+// -------------------------------------------------------------------------
+
+function environmentMatcher(rule: Record<string, unknown>, _ctx: MatcherContext): boolean {
+  const environment = rule.environment as string | undefined;
+  if (!environment) return true;
+
+  const isProd =
+    typeof process !== "undefined" && process.env?.NODE_ENV === "production";
+
+  if (environment === "production") return isProd;
+  if (environment === "development") return !isProd;
+  return false;
+}
+
+// -------------------------------------------------------------------------
+// Multi matcher (AND/OR combinator)
+// -------------------------------------------------------------------------
+
+function multiMatcher(rule: Record<string, unknown>, ctx: MatcherContext): boolean {
+  const op = (rule.op as string) ?? "and";
+  const matchers = rule.matchers as Array<Record<string, unknown>> | undefined;
+
+  if (!matchers?.length) return true;
+
+  const results = matchers.map((m) => evaluateMatcher(m, ctx));
+  return op === "or" ? results.some(Boolean) : results.every(Boolean);
+}
+
+// -------------------------------------------------------------------------
+// Negate matcher
+// -------------------------------------------------------------------------
+
+function negateMatcher(rule: Record<string, unknown>, ctx: MatcherContext): boolean {
+  const matcher = rule.matcher as Record<string, unknown> | undefined;
+  if (!matcher) return false;
+  return !evaluateMatcher(matcher, ctx);
+}
+
+// -------------------------------------------------------------------------
 // Registration
 // -------------------------------------------------------------------------
 
@@ -181,4 +351,9 @@ export function registerBuiltinMatchers(): void {
   registerMatcher("website/matchers/host.ts", hostMatcher);
   registerMatcher("website/matchers/pathname.ts", pathnameMatcher);
   registerMatcher("website/matchers/queryString.ts", queryStringMatcher);
+  registerMatcher("website/matchers/location.ts", locationMatcher);
+  registerMatcher("website/matchers/userAgent.ts", userAgentMatcher);
+  registerMatcher("website/matchers/environment.ts", environmentMatcher);
+  registerMatcher("website/matchers/multi.ts", multiMatcher);
+  registerMatcher("website/matchers/negate.ts", negateMatcher);
 }

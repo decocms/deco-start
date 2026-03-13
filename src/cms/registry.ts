@@ -133,15 +133,43 @@ export async function preloadSectionComponents(keys: string[]): Promise<void> {
 }
 
 /**
+ * A sync section entry: either a plain component reference or a full module
+ * object with optional LoadingFallback and ErrorFallback.
+ * Providing the full module allows DeferredSectionWrapper to show the correct
+ * skeleton immediately (optionsReady=true on first render) without waiting for
+ * the async preloadSectionModule() call.
+ */
+export type SyncSectionEntry =
+  | ComponentType<any>
+  | {
+      default: ComponentType<any>;
+      LoadingFallback?: ComponentType<any>;
+      ErrorFallback?: ComponentType<{ error: Error }>;
+    };
+
+/**
  * Register sections with their already-imported component references.
  * These are available synchronously on both server and client — no dynamic
  * import, no React.lazy, no Suspense. Use for critical above-the-fold
  * sections that must never flash during hydration.
+ *
+ * Accepts either a plain component or a full module object (with optional
+ * LoadingFallback / ErrorFallback). Providing the module object populates
+ * sectionOptions immediately, so DeferredSectionWrapper can show the correct
+ * skeleton without an extra async preloadSectionModule() round-trip.
  */
-export function registerSectionsSync(sections: Record<string, ComponentType<any>>): void {
-  for (const [key, component] of Object.entries(sections)) {
+export function registerSectionsSync(sections: Record<string, SyncSectionEntry>): void {
+  for (const [key, entry] of Object.entries(sections)) {
+    const component = typeof entry === "function" ? entry : entry.default;
     syncComponents[key] = component;
     resolvedComponents[key] = component;
+
+    if (typeof entry !== "function") {
+      const opts: SectionOptions = { ...sectionOptions[key] };
+      if (entry.LoadingFallback) opts.loadingFallback = entry.LoadingFallback;
+      if (entry.ErrorFallback) opts.errorFallback = entry.ErrorFallback;
+      sectionOptions[key] = opts;
+    }
   }
 }
 
