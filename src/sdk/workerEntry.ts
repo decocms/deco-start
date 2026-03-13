@@ -424,6 +424,14 @@ export function createDecoWorkerEntry(
       url.searchParams.set("__cf_device", device);
     }
 
+    // Include CF country in cache key so geo-targeted content (location matcher)
+    // doesn't leak across countries. Only applies when request.cf is present
+    // (production Cloudflare Workers) and injectGeoCookies was called.
+    const cf = (request as unknown as { cf?: Record<string, string> }).cf;
+    if (cf?.country) {
+      url.searchParams.set("__cf_country", cf.country);
+    }
+
     return { key: new Request(url.toString(), { method: "GET" }) };
   }
 

@@ -249,7 +249,9 @@ function matchesLocationRule(
 
 function locationMatcher(rule: Record<string, unknown>, ctx: MatcherContext): boolean {
   const cookies = ctx.cookies ?? {};
-  const region = cookies.__cf_geo_region ? decodeURIComponent(cookies.__cf_geo_region) : "";
+  const regionName = cookies.__cf_geo_region ? decodeURIComponent(cookies.__cf_geo_region) : "";
+  const regionCode = cookies.__cf_geo_region_code ? decodeURIComponent(cookies.__cf_geo_region_code) : "";
+  const region = regionCode || regionName;
   const country = cookies.__cf_geo_country ? decodeURIComponent(cookies.__cf_geo_country) : "";
   const city = cookies.__cf_geo_city ? decodeURIComponent(cookies.__cf_geo_city) : "";
 
@@ -276,6 +278,7 @@ function userAgentMatcher(rule: Record<string, unknown>, ctx: MatcherContext): b
 
   if (includes && !ua.includes(includes)) return false;
   if (match) {
+    if (!isSafePattern(match)) return false;
     try {
       if (!new RegExp(match, "i").test(ua)) return false;
     } catch {
