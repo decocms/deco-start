@@ -126,3 +126,49 @@ grep -r '@deco/deco' src/ --include='*.ts' --include='*.tsx'
 grep -r '\$fresh/' src/ --include='*.ts' --include='*.tsx'
 # Both should return ZERO matches
 ```
+
+## Deferred Sections and CLS Prevention
+
+When a CMS page wraps a section in `website/sections/Rendering/Lazy.tsx`, it becomes a `DeferredSection`. The `DeferredSectionWrapper` renders a skeleton via `getSectionOptions(key).loadingFallback`.
+
+**Problem**: `getSectionOptions` returns `undefined` if the section module hasn't loaded yet. The module is loaded async in a `useEffect` (`preloadSectionModule`), so on first paint `skeleton = null` — the space is blank and the footer jumps down as sections load (CLS).
+
+**Fix**: Use `registerSection` with `loadingFallback` pre-populated in `setup.ts` instead of including the section in the bulk `registerSections` call:
+
+```typescript
+import { registerSection, registerSections } from "@decocms/start/cms";
+import PDPSkeleton from "./components/product/PDPSkeleton";
+
+registerSections({
+  // ... all other sections (NOT the lazy-wrapped one)
+});
+
+// Pre-populate sectionOptions synchronously so DeferredSectionWrapper
+// has loadingFallback on the very first render — no null flash.
+registerSection(
+  "site/sections/Product/NotFoundChallenge.tsx",
+  () => import("./sections/Product/NotFoundChallenge") as any,
+  { loadingFallback: PDPSkeleton },
+);
+```
+
+**Why `as any`**: `registerSection` expects `Promise<SectionModule>` but the actual module export is wider (includes `LoadingFallback`, `loader`, etc.). The cast is safe.
+
+**Composite skeleton**: Create a `PDPSkeleton` that combines all `LoadingFallback` exports from the section's sub-components:
+
+```tsx
+// src/components/product/PDPSkeleton.tsx
+import { LoadingFallback as MountedPDPSkeleton } from "~/components/product/MountedPDP";
+import { LoadingFallback as ProductDescriptionSkeleton } from "~/components/product/MountedPDP/ProductDescription";
+import { LoadingFallback as ProductFAQSkeleton } from "~/components/product/MountedPDP/ProductFAQ";
+
+export default function PDPSkeleton() {
+  return (
+    <div>
+      <MountedPDPSkeleton />
+      <ProductDescriptionSkeleton />
+      <ProductFAQSkeleton />
+    </div>
+  );
+}
+```
