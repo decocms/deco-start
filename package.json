@@ -31,6 +31,7 @@
     "./sdk/wrapCaughtErrors": "./src/sdk/wrapCaughtErrors.ts",
     "./sdk/csp": "./src/sdk/csp.ts",
     "./sdk/urlUtils": "./src/sdk/urlUtils.ts",
+    "./sdk/normalizeUrls": "./src/sdk/normalizeUrls.ts",
     "./sdk/mergeCacheControl": "./src/sdk/mergeCacheControl.ts",
     "./sdk/requestContext": "./src/sdk/requestContext.ts",
     "./sdk/createInvoke": "./src/sdk/createInvoke.ts",

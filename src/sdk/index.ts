@@ -28,6 +28,11 @@ export {
 export { batchInvoke, createInvokeProxy, type InvokeProxy, invokeQueryOptions } from "./invoke";
 export { createCacheControlCollector, mergeCacheControl } from "./mergeCacheControl";
 export {
+  getProductionOrigins,
+  normalizeUrlsInObject,
+  registerProductionOrigins,
+} from "./normalizeUrls";
+export {
   addRedirects,
   loadRedirects,
   matchRedirect,

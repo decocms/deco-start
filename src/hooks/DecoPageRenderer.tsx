@@ -209,18 +209,21 @@ export function SectionList({ sections }: { sections: Section[] | null | undefin
 interface DeferredSectionWrapperProps {
   deferred: DeferredSection;
   pagePath: string;
+  pageUrl?: string;
   loadingFallback?: ReactNode;
   errorFallback?: ReactNode;
   loadFn: (data: {
     component: string;
     rawProps: Record<string, unknown>;
     pagePath: string;
+    pageUrl?: string;
   }) => Promise<ResolvedSection | null>;
 }
 
 function DeferredSectionWrapper({
   deferred,
   pagePath,
+  pageUrl,
   loadingFallback,
   errorFallback,
   loadFn,
@@ -283,6 +286,7 @@ function DeferredSectionWrapper({
         component: deferred.component,
         rawProps: deferred.rawProps,
         pagePath,
+        pageUrl,
       })
         .then((result) => {
           if (result) deferredSectionCache.set(key0, { section: result, ts: Date.now() });
@@ -302,6 +306,7 @@ function DeferredSectionWrapper({
             component: deferred.component,
             rawProps: deferred.rawProps,
             pagePath,
+            pageUrl,
           })
             .then((result) => {
               if (result) deferredSectionCache.set(key1, { section: result, ts: Date.now() });
@@ -315,7 +320,7 @@ function DeferredSectionWrapper({
 
     observer.observe(el);
     return () => observer.disconnect();
-  }, [deferred.component, deferred.rawProps, pagePath, section, loadFn]);
+  }, [deferred.component, deferred.rawProps, pagePath, pageUrl, section, loadFn]);
 
   if (error) {
     const errFallback = loadedOptions?.errorFallback
@@ -403,12 +408,15 @@ interface Props {
   sections: ResolvedSection[];
   deferredSections?: DeferredSection[];
   pagePath?: string;
+  /** Original page URL (with query params) — forwarded to deferred section loaders. */
+  pageUrl?: string;
   loadingFallback?: ReactNode;
   errorFallback?: ReactNode;
   loadDeferredSectionFn?: (data: {
     component: string;
     rawProps: Record<string, unknown>;
     pagePath: string;
+    pageUrl?: string;
   }) => Promise<ResolvedSection | null>;
 }
 
@@ -416,6 +424,7 @@ export function DecoPageRenderer({
   sections,
   deferredSections,
   pagePath = "/",
+  pageUrl,
   loadingFallback,
   errorFallback,
   loadDeferredSectionFn,
@@ -436,6 +445,7 @@ export function DecoPageRenderer({
               key={`deferred-${pagePath}-${item.deferred.key}-${item.deferred.index}`}
               deferred={item.deferred}
               pagePath={pagePath}
+              pageUrl={pageUrl}
               loadingFallback={loadingFallback}
               errorFallback={errorFallback}
               loadFn={loadDeferredSectionFn}
