@@ -237,7 +237,7 @@ function ensureInitialized() {
 // Matcher evaluation
 // ---------------------------------------------------------------------------
 
-function evaluateMatcher(rule: Record<string, unknown> | undefined, ctx: MatcherContext): boolean {
+export function evaluateMatcher(rule: Record<string, unknown> | undefined, ctx: MatcherContext): boolean {
   if (!rule) return true;
 
   const resolveType = rule.__resolveType as string | undefined;

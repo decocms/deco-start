@@ -35,6 +35,7 @@ export type {
 } from "./resolve";
 export {
   addSkipResolveType,
+  evaluateMatcher,
   getAsyncRenderingConfig,
   onBeforeResolve,
   registerCommerceLoader,

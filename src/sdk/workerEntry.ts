@@ -274,6 +274,48 @@ function buildPreviewShell(): string {
 </html>`;
 }
 
+// ---------------------------------------------------------------------------
+// Cloudflare geo cookie injection
+// ---------------------------------------------------------------------------
+
+/**
+ * Inject Cloudflare geo data as cookies so matchers (location.ts) can
+ * read them from MatcherContext.cookies without relying on request.cf.
+ *
+ * Call this on the incoming request before passing it to the worker entry.
+ * Only needed in production Cloudflare Workers where `request.cf` is populated.
+ *
+ * @example
+ * ```ts
+ * export default {
+ *   async fetch(request, env, ctx) {
+ *     return handler.fetch(injectGeoCookies(request), env, ctx);
+ *   }
+ * };
+ * ```
+ */
+export function injectGeoCookies(request: Request): Request {
+  const cf = (request as unknown as { cf?: Record<string, string> }).cf;
+  if (!cf) return request;
+
+  const parts: string[] = [];
+  if (cf.region) parts.push(`__cf_geo_region=${encodeURIComponent(cf.region)}`);
+  if (cf.country) parts.push(`__cf_geo_country=${encodeURIComponent(cf.country)}`);
+  if (cf.city) parts.push(`__cf_geo_city=${encodeURIComponent(cf.city)}`);
+  if (cf.latitude) parts.push(`__cf_geo_lat=${encodeURIComponent(cf.latitude)}`);
+  if (cf.longitude) parts.push(`__cf_geo_lng=${encodeURIComponent(cf.longitude)}`);
+  if (cf.regionCode) parts.push(`__cf_geo_region_code=${encodeURIComponent(cf.regionCode)}`);
+
+  if (!parts.length) return request;
+
+  const existing = request.headers.get("cookie") ?? "";
+  const combined = existing ? `${existing}; ${parts.join("; ")}` : parts.join("; ");
+  const headers = new Headers(request.headers);
+  headers.set("cookie", combined);
+
+  return new Request(request, { headers });
+}
+
 const MOBILE_RE = /mobile|android|iphone|ipad|ipod/i;
 const ONE_YEAR = 31536000;
 
