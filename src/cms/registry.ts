@@ -161,11 +161,17 @@ export type SyncSectionEntry =
 export function registerSectionsSync(sections: Record<string, SyncSectionEntry>): void {
   for (const [key, entry] of Object.entries(sections)) {
     const raw = typeof entry === "function" ? entry : (entry as any).default;
-    // Accept functions and React wrapper objects (React.memo, forwardRef, lazy
-    // which have a $$typeof symbol marker)
+    // Accept functions and React wrapper objects (React.memo, forwardRef, lazy)
+    const REACT_WRAPPERS = [
+      Symbol.for("react.memo"),
+      Symbol.for("react.forward_ref"),
+      Symbol.for("react.lazy"),
+    ];
     const component =
       typeof raw === "function" ||
-      (raw != null && typeof raw === "object" && "$$typeof" in raw)
+      (raw != null &&
+        typeof raw === "object" &&
+        REACT_WRAPPERS.includes((raw as any).$$typeof))
         ? raw
         : undefined;
     if (!component) {
