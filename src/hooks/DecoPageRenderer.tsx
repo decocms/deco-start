@@ -265,7 +265,7 @@ function DeferredSectionWrapper({
   const skeleton = !optionsReady
     ? null
     : hasCustomFallback
-      ? createElement(loadedOptions!.loadingFallback!)
+      ? createElement(loadedOptions!.loadingFallback!, deferred.rawProps)
       : (loadingFallback ??
         (isDev ? (
           <DevMissingFallbackWarning component={deferred.component} />
