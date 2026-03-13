@@ -81,6 +81,31 @@ import { isDevMode } from "../sdk/env";
 
 const isDev = isDevMode();
 
+// ---------------------------------------------------------------------------
+// Deferred section data cache — persists resolved section props across SPA
+// navigations so navigating back to a page doesn't re-fetch already-loaded
+// sections. TTL is aligned with cmsRouteConfig staleTime (5 min prod / 5s dev).
+// ---------------------------------------------------------------------------
+
+const DEFERRED_CACHE_TTL = isDev ? 5_000 : 5 * 60 * 1000;
+
+interface DeferredCacheEntry {
+  section: ResolvedSection;
+  ts: number;
+}
+
+const deferredSectionCache = new Map<string, DeferredCacheEntry>();
+
+function getCachedDeferredSection(stableKey: string): ResolvedSection | null {
+  const entry = deferredSectionCache.get(stableKey);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > DEFERRED_CACHE_TTL) {
+    deferredSectionCache.delete(stableKey);
+    return null;
+  }
+  return entry.section;
+}
+
 const DEFERRED_FADE_CSS = `@keyframes decoFadeIn{from{opacity:0}to{opacity:1}}`;
 
 function FadeInStyle() {
@@ -192,7 +217,9 @@ function DeferredSectionWrapper({
   loadFn,
 }: DeferredSectionWrapperProps) {
   const stableKey = `${pagePath}::${deferred.component}::${deferred.index}`;
-  const [section, setSection] = useState<ResolvedSection | null>(null);
+  const [section, setSection] = useState<ResolvedSection | null>(() =>
+    typeof document === "undefined" ? null : getCachedDeferredSection(stableKey),
+  );
   const [error, setError] = useState<Error | null>(null);
   const [loadedOptions, setLoadedOptions] = useState<SectionOptions | undefined>(() =>
     getSectionOptions(deferred.component),
@@ -208,7 +235,8 @@ function DeferredSectionWrapper({
   if (prevKeyRef.current !== stableKey) {
     prevKeyRef.current = stableKey;
     triggered.current = false;
-    if (section) setSection(null);
+    const cached = getCachedDeferredSection(stableKey);
+    if (section !== cached) setSection(cached);
     if (error) setError(null);
   }
 
@@ -240,12 +268,16 @@ function DeferredSectionWrapper({
 
     if (typeof IntersectionObserver === "undefined") {
       triggered.current = true;
+      const key0 = stableKey;
       loadFn({
         component: deferred.component,
         rawProps: deferred.rawProps,
         pagePath,
       })
-        .then(setSection)
+        .then((result) => {
+          if (result) deferredSectionCache.set(key0, { section: result, ts: Date.now() });
+          setSection(result);
+        })
         .catch((e) => setError(e));
       return;
     }
@@ -255,12 +287,16 @@ function DeferredSectionWrapper({
         if (entry?.isIntersecting && !triggered.current) {
           triggered.current = true;
           observer.disconnect();
+          const key1 = stableKey;
           loadFn({
             component: deferred.component,
             rawProps: deferred.rawProps,
             pagePath,
           })
-            .then(setSection)
+            .then((result) => {
+              if (result) deferredSectionCache.set(key1, { section: result, ts: Date.now() });
+              setSection(result);
+            })
             .catch((e) => setError(e));
         }
       },
