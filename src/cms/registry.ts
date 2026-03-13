@@ -160,12 +160,12 @@ export type SyncSectionEntry =
  */
 export function registerSectionsSync(sections: Record<string, SyncSectionEntry>): void {
   for (const [key, entry] of Object.entries(sections)) {
+    const raw = typeof entry === "function" ? entry : (entry as any).default;
+    // Accept functions and React wrapper objects (React.memo, forwardRef, lazy)
     const component =
-      typeof entry === "function"
-        ? entry
-        : typeof (entry as any).default === "function"
-          ? (entry as any).default
-          : undefined;
+      typeof raw === "function" || (raw != null && typeof raw === "object")
+        ? raw
+        : undefined;
     if (!component) {
       console.warn(`[registerSectionsSync] "${key}" has no callable default export — skipping`);
       continue;
