@@ -25,14 +25,15 @@
  * ```
  */
 
-import { getRenderShellConfig } from "../admin/setup";
 import {
   type CacheProfile,
   cacheHeaders,
   detectCacheProfile,
   getCacheProfileConfig,
 } from "./cacheHeaders";
+import { buildHtmlShell } from "./htmlShell";
 import { cleanPathForCacheKey } from "./urlUtils";
+import { isMobileUA } from "./useDevice";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -244,34 +245,7 @@ const PREVIEW_SHELL_SCRIPT = `(function() {
   })();`;
 
 function buildPreviewShell(): string {
-  const { cssHref, fontHrefs, themeName, bodyClass, htmlLang } = getRenderShellConfig();
-
-  const themeAttr = themeName ? ` data-theme="${themeName}"` : "";
-  const langAttr = htmlLang ? ` lang="${htmlLang}"` : "";
-  const bodyAttr = bodyClass ? ` class="${bodyClass}"` : "";
-
-  const stylesheets = [
-    ...fontHrefs.map((href) => `<link rel="stylesheet" href="${href}" />`),
-    cssHref ? `<link rel="stylesheet" href="${cssHref}" />` : "",
-  ]
-    .filter(Boolean)
-    .join("\n    ");
-
-  return `<!DOCTYPE html>
-<html${langAttr}${themeAttr}>
-<head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Preview</title>
-    ${stylesheets}
-    <script>${PREVIEW_SHELL_SCRIPT}</script>
-</head>
-<body${bodyAttr}>
-    <div id="preview-root" style="display:flex;align-items:center;justify-content:center;min-height:100vh;font-family:system-ui;color:#666;">
-        Loading preview...
-    </div>
-</body>
-</html>`;
+  return buildHtmlShell({ script: PREVIEW_SHELL_SCRIPT });
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +290,6 @@ export function injectGeoCookies(request: Request): Request {
   return new Request(request, { headers });
 }
 
-const MOBILE_RE = /mobile|android|iphone|ipad|ipod/i;
 const ONE_YEAR = 31536000;
 
 const DEFAULT_BYPASS_PATHS = ["/_server", "/_build", "/deco/", "/live/", "/.decofile"];
@@ -433,7 +406,7 @@ export function createDecoWorkerEntry(
     }
 
     if (deviceSpecificKeys) {
-      const device = MOBILE_RE.test(request.headers.get("user-agent") ?? "") ? "mobile" : "desktop";
+      const device = isMobileUA(request.headers.get("user-agent") ?? "") ? "mobile" : "desktop";
       url.searchParams.set("__cf_device", device);
     }
 

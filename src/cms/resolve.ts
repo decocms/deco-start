@@ -8,6 +8,24 @@ if (!G.__deco) G.__deco = {};
 if (!G.__deco.commerceLoaders) G.__deco.commerceLoaders = {};
 if (!G.__deco.customMatchers) G.__deco.customMatchers = {};
 
+// ---------------------------------------------------------------------------
+// Well-known resolve types — extracted as constants so they're searchable
+// and overridable. Consumers migrating from deco-cx/deco may have blocks
+// with these __resolveType strings in their CMS JSON.
+// ---------------------------------------------------------------------------
+
+/** @internal */
+export const WELL_KNOWN_TYPES = {
+  LAZY: "website/sections/Rendering/Lazy.tsx",
+  DEFERRED: "website/sections/Rendering/Deferred.tsx",
+  REQUEST_TO_PARAM: "website/functions/requestToParam.ts",
+  COMMERCE_EXT_DETAILS: "commerce/loaders/product/extensions/detailsPage.ts",
+  COMMERCE_EXT_LISTING: "commerce/loaders/product/extensions/listingPage.ts",
+  MULTIVARIATE: "website/flags/multivariate.ts",
+  MULTIVARIATE_SECTION: "website/flags/multivariate/section.ts",
+  PAGE: "website/pages/Page.tsx",
+} as const;
+
 export type ResolvedSection = {
   component: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -93,12 +111,21 @@ export function getAsyncRenderingConfig(): AsyncRenderingConfig | null {
 // Bot detection — bots always receive fully eager pages for SEO
 // ---------------------------------------------------------------------------
 
-const BOT_UA_RE =
-  /bot|crawl|spider|slurp|facebookexternalhit|mediapartners|google|bing|yandex|baidu|duckduck|teoma|ia_archiver|semrush|ahrefs|lighthouse/i;
+const botPatterns: RegExp[] = [
+  /bot|crawl|spider|slurp|facebookexternalhit|mediapartners|google|bing|yandex|baidu|duckduck|teoma|ia_archiver|semrush|ahrefs|lighthouse/i,
+];
+
+/**
+ * Add a custom bot detection regex.
+ * Requests matching any bot pattern receive fully eager pages for SEO.
+ */
+export function registerBotPattern(pattern: RegExp): void {
+  botPatterns.push(pattern);
+}
 
 function isBot(userAgent?: string): boolean {
   if (!userAgent) return false;
-  return BOT_UA_RE.test(userAgent);
+  return botPatterns.some((re) => re.test(userAgent));
 }
 
 export type CommerceLoader = (props: any) => Promise<any>;
@@ -188,6 +215,44 @@ export function registerMatcher(
 }
 
 // ---------------------------------------------------------------------------
+// Built-in matchers — registered through the same API as custom matchers
+// ---------------------------------------------------------------------------
+
+if (!G.__deco._builtinMatchersRegistered) {
+  G.__deco._builtinMatchersRegistered = true;
+
+  const builtinMatchers: Record<string, (rule: Record<string, unknown>, ctx: MatcherContext) => boolean> = {
+    "website/matchers/always.ts": () => true,
+    "$live/matchers/MatchAlways.ts": () => true,
+    "website/matchers/never.ts": () => false,
+    "website/matchers/device.ts": (rule, ctx) => {
+      const ua = (ctx.userAgent || "").toLowerCase();
+      const isMobile = /mobile|android|iphone|ipad|ipod|webos|blackberry|opera mini|iemobile/i.test(ua);
+      if (rule.mobile) return isMobile;
+      if (rule.desktop) return !isMobile;
+      return true;
+    },
+    "website/matchers/random.ts": (rule) => {
+      const traffic = typeof rule.traffic === "number" ? rule.traffic : 0.5;
+      return Math.random() < traffic;
+    },
+    "website/matchers/date.ts": (rule) => {
+      const now = Date.now();
+      const start = typeof rule.start === "string" ? new Date(rule.start).getTime() : 0;
+      const end = typeof rule.end === "string" ? new Date(rule.end).getTime() : Infinity;
+      return now >= start && now <= end;
+    },
+  };
+
+  for (const [key, fn] of Object.entries(builtinMatchers)) {
+    // Only register if not already overridden by consumer
+    if (!customMatchers[key]) {
+      customMatchers[key] = fn;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Error handling
 // ---------------------------------------------------------------------------
 
@@ -253,49 +318,17 @@ export function evaluateMatcher(rule: Record<string, unknown> | undefined, ctx: 
     );
   }
 
-  switch (resolveType) {
-    case "website/matchers/always.ts":
-    case "$live/matchers/MatchAlways.ts":
-      return true;
-
-    case "website/matchers/never.ts":
-      return false;
-
-    case "website/matchers/device.ts": {
-      const ua = (ctx.userAgent || "").toLowerCase();
-      const isMobile = /mobile|android|iphone|ipad|ipod|webos|blackberry|opera mini|iemobile/i.test(
-        ua,
-      );
-      if (rule.mobile) return isMobile;
-      if (rule.desktop) return !isMobile;
-      return true;
-    }
-
-    case "website/matchers/random.ts": {
-      const traffic = typeof rule.traffic === "number" ? rule.traffic : 0.5;
-      return Math.random() < traffic;
-    }
-
-    case "website/matchers/date.ts": {
-      const now = Date.now();
-      const start = typeof rule.start === "string" ? new Date(rule.start).getTime() : 0;
-      const end = typeof rule.end === "string" ? new Date(rule.end).getTime() : Infinity;
-      return now >= start && now <= end;
-    }
-
-    default: {
-      const customMatcher = customMatchers[resolveType];
-      if (customMatcher) {
-        try {
-          return customMatcher(rule, ctx);
-        } catch {
-          return false;
-        }
-      }
-      console.warn(`[CMS] Unknown matcher: ${resolveType}, defaulting to false`);
+  const matcher = customMatchers[resolveType];
+  if (matcher) {
+    try {
+      return matcher(rule, ctx);
+    } catch {
       return false;
     }
   }
+
+  console.warn(`[CMS] Unknown matcher: ${resolveType}, defaulting to false`);
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -357,33 +390,33 @@ async function internalResolve(value: unknown, rctx: ResolveContext): Promise<un
   if (resolveType === "resolved") return obj.data ?? null;
 
   // Lazy section wrapper — unwrap single inner section
-  if (resolveType === "website/sections/Rendering/Lazy.tsx") {
+  if (resolveType === WELL_KNOWN_TYPES.LAZY) {
     return obj.section ? internalResolve(obj.section, childCtx) : null;
   }
 
   // Deferred section wrapper (legacy Fresh/HTMX) — unwrap inner sections array
-  if (resolveType === "website/sections/Rendering/Deferred.tsx") {
+  if (resolveType === WELL_KNOWN_TYPES.DEFERRED) {
     return obj.sections ? internalResolve(obj.sections, childCtx) : null;
   }
 
   // Request param extraction
-  if (resolveType === "website/functions/requestToParam.ts") {
+  if (resolveType === WELL_KNOWN_TYPES.REQUEST_TO_PARAM) {
     const paramName = (obj as any).param as string;
     return rctx.routeParams?.[paramName] ?? null;
   }
 
   // Commerce extension wrappers — unwrap to inner data
   if (
-    resolveType === "commerce/loaders/product/extensions/detailsPage.ts" ||
-    resolveType === "commerce/loaders/product/extensions/listingPage.ts"
+    resolveType === WELL_KNOWN_TYPES.COMMERCE_EXT_DETAILS ||
+    resolveType === WELL_KNOWN_TYPES.COMMERCE_EXT_LISTING
   ) {
     return obj.data ? internalResolve(obj.data, childCtx) : null;
   }
 
   // Multivariate flags
   if (
-    resolveType === "website/flags/multivariate.ts" ||
-    resolveType === "website/flags/multivariate/section.ts"
+    resolveType === WELL_KNOWN_TYPES.MULTIVARIATE ||
+    resolveType === WELL_KNOWN_TYPES.MULTIVARIATE_SECTION
   ) {
     const variants = obj.variants as Array<{ value: unknown; rule?: unknown }> | undefined;
     if (!variants || variants.length === 0) return null;
@@ -631,7 +664,7 @@ function resolveFinalSectionKey(
     if (!rt) return null;
 
     // Lazy wrapper — unwrap single inner section
-    if (rt === "website/sections/Rendering/Lazy.tsx") {
+    if (rt === WELL_KNOWN_TYPES.LAZY) {
       const inner = current.section;
       if (!inner || typeof inner !== "object") return null;
       current = inner as Record<string, unknown>;
@@ -655,8 +688,8 @@ function resolveFinalSectionKey(
     }
 
     if (
-      rt === "website/flags/multivariate.ts" ||
-      rt === "website/flags/multivariate/section.ts"
+      rt === WELL_KNOWN_TYPES.MULTIVARIATE ||
+      rt === WELL_KNOWN_TYPES.MULTIVARIATE_SECTION
     ) {
       const variants = current.variants as
         | Array<{ value: unknown; rule?: unknown }>
@@ -708,16 +741,16 @@ function isCmsDeferralWrapped(section: unknown, matcherCtx?: MatcherContext): bo
     if (!rt) return false;
 
     if (
-      rt === "website/sections/Rendering/Lazy.tsx" ||
-      rt === "website/sections/Rendering/Deferred.tsx"
+      rt === WELL_KNOWN_TYPES.LAZY ||
+      rt === WELL_KNOWN_TYPES.DEFERRED
     ) {
       return true;
     }
 
     // Walk through multivariate flags to check the matched variant
     if (
-      rt === "website/flags/multivariate.ts" ||
-      rt === "website/flags/multivariate/section.ts"
+      rt === WELL_KNOWN_TYPES.MULTIVARIATE ||
+      rt === WELL_KNOWN_TYPES.MULTIVARIATE_SECTION
     ) {
       const variants = current.variants as
         | Array<{ value: unknown; rule?: unknown }>
@@ -806,7 +839,7 @@ function resolveSectionShallow(
     if (SKIP_RESOLVE_TYPES.has(rt)) return null;
 
     // Lazy wrapper — unwrap to the inner section
-    if (rt === "website/sections/Rendering/Lazy.tsx") {
+    if (rt === WELL_KNOWN_TYPES.LAZY) {
       const inner = current.section;
       if (!inner || typeof inner !== "object") return null;
       current = inner as Record<string, unknown>;
@@ -832,8 +865,8 @@ function resolveSectionShallow(
 
     // Multivariate flags — evaluate matchers and continue with matched variant
     if (
-      rt === "website/flags/multivariate.ts" ||
-      rt === "website/flags/multivariate/section.ts"
+      rt === WELL_KNOWN_TYPES.MULTIVARIATE ||
+      rt === WELL_KNOWN_TYPES.MULTIVARIATE_SECTION
     ) {
       const variants = current.variants as
         | Array<{ value: unknown; rule?: unknown }>
@@ -897,7 +930,7 @@ async function resolveSectionsList(
   if (!rt) return [];
 
   // Multivariate flags — evaluate matchers and recurse into matched variant
-  if (rt === "website/flags/multivariate.ts" || rt === "website/flags/multivariate/section.ts") {
+  if (rt === WELL_KNOWN_TYPES.MULTIVARIATE || rt === WELL_KNOWN_TYPES.MULTIVARIATE_SECTION) {
     const variants = obj.variants as Array<{ value: unknown; rule?: unknown }> | undefined;
     if (!variants?.length) return [];
     for (const variant of variants) {

@@ -67,6 +67,14 @@ const REDIRECT_RESOLVE_TYPES = new Set([
 ]);
 
 /**
+ * Register additional __resolveType strings that should be treated as redirect blocks.
+ * Useful for custom redirect loaders.
+ */
+export function registerRedirectResolveType(resolveType: string): void {
+  REDIRECT_RESOLVE_TYPES.add(resolveType);
+}
+
+/**
  * Load all redirect definitions from CMS blocks.
  *
  * Scans the blocks for known redirect resolve types and builds

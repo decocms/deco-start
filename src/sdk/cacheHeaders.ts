@@ -128,6 +128,20 @@ export function getCacheProfileConfig(profile: CacheProfile): CacheHeadersConfig
   return PROFILES[profile];
 }
 
+/**
+ * Override the default TTLs for a cache profile.
+ * Useful when the built-in values don't match your site's
+ * freshness requirements (e.g., longer product TTL for low-traffic stores).
+ *
+ * @example
+ * ```ts
+ * setCacheProfileConfig("product", { maxAge: 120, sMaxAge: 600, staleWhileRevalidate: 7200, isPublic: true });
+ * ```
+ */
+export function setCacheProfileConfig(profile: CacheProfile, config: CacheHeadersConfig): void {
+  PROFILES[profile] = config;
+}
+
 // ---------------------------------------------------------------------------
 // Client-side route cache defaults (TanStack Router staleTime / gcTime)
 // ---------------------------------------------------------------------------
@@ -171,6 +185,18 @@ export function routeCacheDefaults(profile: CacheProfile): RouteCacheDefaults {
   const isDev = env?.DECO_CACHE_DISABLE === "true" || env?.NODE_ENV === "development";
   if (isDev) return { staleTime: 5_000, gcTime: 30_000 };
   return ROUTE_CACHE[profile];
+}
+
+/**
+ * Override the client-side route cache defaults for a profile.
+ *
+ * @example
+ * ```ts
+ * setRouteCacheDefaults("product", { staleTime: 120_000, gcTime: 10 * 60_000 });
+ * ```
+ */
+export function setRouteCacheDefaults(profile: CacheProfile, defaults: RouteCacheDefaults): void {
+  ROUTE_CACHE[profile] = defaults;
 }
 
 // ---------------------------------------------------------------------------

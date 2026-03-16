@@ -28,6 +28,23 @@ const UTM_PARAMS = new Set([
 ]);
 
 /**
+ * Register additional tracking parameters to strip from cache keys.
+ * Useful for proprietary attribution params (e.g., custom analytics tags).
+ */
+export function registerTrackingParam(param: string): void {
+  UTM_PARAMS.add(param.toLowerCase());
+}
+
+/**
+ * Register multiple additional tracking parameters at once.
+ */
+export function registerTrackingParams(params: string[]): void {
+  for (const param of params) {
+    UTM_PARAMS.add(param.toLowerCase());
+  }
+}
+
+/**
  * Strip UTM and tracking parameters from a URL.
  *
  * Used to normalize URLs for caching -- two requests that differ

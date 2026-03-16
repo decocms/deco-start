@@ -1,35 +1,14 @@
 import { createElement } from "react";
 import { loadBlocks, withBlocksOverride } from "../cms/loader";
 import { getSection } from "../cms/registry";
-import { resolveValue } from "../cms/resolve";
+import { resolveValue, WELL_KNOWN_TYPES } from "../cms/resolve";
+import { buildHtmlShell } from "../sdk/htmlShell";
 import { LIVE_CONTROLS_SCRIPT } from "./liveControls";
-import { getRenderShellConfig } from "./setup";
 
 export { setRenderShell } from "./setup";
 
 function wrapInHtmlShell(sectionHtml: string): string {
-  const { cssHref, fontHrefs, themeName, bodyClass, htmlLang } = getRenderShellConfig();
-  const stylesheets = [
-    ...fontHrefs.map((href) => `<link rel="stylesheet" href="${href}" />`),
-    cssHref ? `<link rel="stylesheet" href="${cssHref}" />` : "",
-  ].join("\n    ");
-
-  const themeAttr = themeName ? ` data-theme="${themeName}"` : "";
-  const langAttr = htmlLang ? ` lang="${htmlLang}"` : "";
-  const bodyAttr = bodyClass ? ` class="${bodyClass}"` : "";
-
-  return `<!DOCTYPE html>
-<html${langAttr}${themeAttr}>
-<head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    ${stylesheets}
-    <script>${LIVE_CONTROLS_SCRIPT}</script>
-</head>
-<body${bodyAttr}>
-${sectionHtml}
-</body>
-</html>`;
+  return buildHtmlShell({ body: sectionHtml, script: LIVE_CONTROLS_SCRIPT });
 }
 
 /**
@@ -139,7 +118,7 @@ export async function handleRender(request: Request): Promise<Response> {
     }
 
     // Page compositor: resolve + render all child sections
-    if (component === "website/pages/Page.tsx") {
+    if (component === WELL_KNOWN_TYPES.PAGE) {
       const rawSections = props.sections;
       const resolvedSections = await resolveValue(rawSections);
       const sectionsList = Array.isArray(resolvedSections)

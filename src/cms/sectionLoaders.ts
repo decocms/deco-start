@@ -8,6 +8,7 @@
  * This runs AFTER resolveDecoPage and BEFORE React rendering,
  * inside the TanStack Start server function.
  */
+import { djb2 } from "../sdk/djb2";
 import type { ResolvedSection } from "./resolve";
 
 export type SectionLoaderFn = (
@@ -51,16 +52,8 @@ function evictSectionCacheIfNeeded() {
   for (const [key] of toDelete) sectionLoaderCache.delete(key);
 }
 
-function djb2Hash(str: string): number {
-  let hash = 5381;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) + hash + str.charCodeAt(i)) | 0;
-  }
-  return hash >>> 0;
-}
-
 function sectionCacheKey(component: string, props: Record<string, unknown>): string {
-  return `${component}::${djb2Hash(JSON.stringify(props))}`;
+  return `${component}::${djb2(JSON.stringify(props))}`;
 }
 
 /**

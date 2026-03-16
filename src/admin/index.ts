@@ -1,4 +1,4 @@
-export { corsHeaders, isAdminOrLocalhost } from "./cors";
+export { corsHeaders, isAdminOrLocalhost, registerAdminOrigin, registerAdminOrigins } from "./cors";
 export { handleDecofileRead, handleDecofileReload } from "./decofile";
 export {
   handleInvoke,
