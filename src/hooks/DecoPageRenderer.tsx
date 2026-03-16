@@ -203,6 +203,86 @@ export function SectionList({ sections }: { sections: Section[] | null | undefin
 }
 
 // ---------------------------------------------------------------------------
+// Batch coordinator — collects deferred section load requests in a microtask
+// and sends them in a single network request for deterministic ordering.
+// ---------------------------------------------------------------------------
+
+type BatchRequest = {
+  component: string;
+  rawProps: Record<string, unknown>;
+  pagePath: string;
+  pageUrl?: string;
+  resolve: (result: ResolvedSection | null) => void;
+  reject: (error: Error) => void;
+};
+
+let batchQueue: BatchRequest[] = [];
+let batchScheduled = false;
+let batchLoadFn: ((data: {
+  sections: Array<{ component: string; rawProps: Record<string, any> }>;
+  pagePath: string;
+  pageUrl?: string;
+}) => Promise<Array<ResolvedSection | null>>) | null = null;
+
+/**
+ * Set the batch load function. Called once from DecoPageRenderer.
+ */
+export function setBatchLoadFn(fn: typeof batchLoadFn) {
+  batchLoadFn = fn;
+}
+
+function flushBatch() {
+  batchScheduled = false;
+  const items = batchQueue;
+  batchQueue = [];
+  if (!items.length) return;
+
+  // Group by pagePath+pageUrl (normally all same page)
+  const groups = new Map<string, BatchRequest[]>();
+  for (const item of items) {
+    const key = `${item.pagePath}::${item.pageUrl ?? ""}`;
+    const group = groups.get(key) ?? [];
+    group.push(item);
+    groups.set(key, group);
+  }
+
+  for (const [, group] of groups) {
+    const first = group[0];
+    if (batchLoadFn && group.length > 1) {
+      // Batch: single request for all sections in this group
+      batchLoadFn({
+        sections: group.map((g) => ({ component: g.component, rawProps: g.rawProps as Record<string, any> })),
+        pagePath: first.pagePath,
+        pageUrl: first.pageUrl,
+      })
+        .then((results) => {
+          for (let i = 0; i < group.length; i++) {
+            group[i].resolve(results[i] ?? null);
+          }
+        })
+        .catch((err) => {
+          for (const g of group) g.reject(err);
+        });
+    } else {
+      // Fallback: individual loads (single section or no batch fn)
+      for (const item of group) {
+        item.resolve(null); // Will fall through to individual loadFn
+      }
+    }
+  }
+}
+
+function enqueueBatchLoad(request: Omit<BatchRequest, "resolve" | "reject">): Promise<ResolvedSection | null> {
+  return new Promise((resolve, reject) => {
+    batchQueue.push({ ...request, resolve, reject });
+    if (!batchScheduled) {
+      batchScheduled = true;
+      queueMicrotask(flushBatch);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // DeferredSectionWrapper — loads a section when it scrolls into view
 // ---------------------------------------------------------------------------
 
@@ -239,7 +319,7 @@ function DeferredSectionWrapper({
   );
   const isSSR = typeof document === "undefined";
   const [optionsReady, setOptionsReady] = useState(() =>
-    isSSR ? false : !!getSectionOptions(deferred.component),
+    !!getSectionOptions(deferred.component),
   );
   const ref = useRef<HTMLDivElement>(null);
   const triggered = useRef(false);
@@ -273,6 +353,37 @@ function DeferredSectionWrapper({
           <DefaultSectionFallback />
         )));
 
+  // Helper: load via batch coordinator (falls back to individual loadFn)
+  const doLoad = (cacheKey: string) => {
+    if (batchLoadFn) {
+      // Use batch coordinator — groups with other deferred sections in same microtask
+      enqueueBatchLoad({
+        component: deferred.component,
+        rawProps: deferred.rawProps,
+        pagePath,
+        pageUrl,
+      })
+        .then((result) => {
+          if (result) deferredSectionCache.set(cacheKey, { section: result, ts: Date.now() });
+          setSection(result);
+        })
+        .catch((e) => setError(e));
+    } else {
+      // Fallback: individual load
+      loadFn({
+        component: deferred.component,
+        rawProps: deferred.rawProps,
+        pagePath,
+        pageUrl,
+      })
+        .then((result) => {
+          if (result) deferredSectionCache.set(cacheKey, { section: result, ts: Date.now() });
+          setSection(result);
+        })
+        .catch((e) => setError(e));
+    }
+  };
+
   useEffect(() => {
     if (triggered.current || section) return;
 
@@ -281,18 +392,7 @@ function DeferredSectionWrapper({
 
     if (typeof IntersectionObserver === "undefined") {
       triggered.current = true;
-      const key0 = stableKey;
-      loadFn({
-        component: deferred.component,
-        rawProps: deferred.rawProps,
-        pagePath,
-        pageUrl,
-      })
-        .then((result) => {
-          if (result) deferredSectionCache.set(key0, { section: result, ts: Date.now() });
-          setSection(result);
-        })
-        .catch((e) => setError(e));
+      doLoad(stableKey);
       return;
     }
 
@@ -301,18 +401,7 @@ function DeferredSectionWrapper({
         if (entry?.isIntersecting && !triggered.current) {
           triggered.current = true;
           observer.disconnect();
-          const key1 = stableKey;
-          loadFn({
-            component: deferred.component,
-            rawProps: deferred.rawProps,
-            pagePath,
-            pageUrl,
-          })
-            .then((result) => {
-              if (result) deferredSectionCache.set(key1, { section: result, ts: Date.now() });
-              setSection(result);
-            })
-            .catch((e) => setError(e));
+          doLoad(stableKey);
         }
       },
       { rootMargin: "300px" },
@@ -418,6 +507,12 @@ interface Props {
     pagePath: string;
     pageUrl?: string;
   }) => Promise<ResolvedSection | null>;
+  /** Batch load function — resolves multiple deferred sections in one request. */
+  loadDeferredSectionBatchFn?: (data: {
+    sections: Array<{ component: string; rawProps: Record<string, any> }>;
+    pagePath: string;
+    pageUrl?: string;
+  }) => Promise<Array<ResolvedSection | null>>;
 }
 
 export function DecoPageRenderer({
@@ -428,7 +523,13 @@ export function DecoPageRenderer({
   loadingFallback,
   errorFallback,
   loadDeferredSectionFn,
+  loadDeferredSectionBatchFn,
 }: Props) {
+  // Wire up batch coordinator when batch function is provided
+  if (loadDeferredSectionBatchFn) {
+    setBatchLoadFn(loadDeferredSectionBatchFn);
+  }
+
   const items = mergeSections(sections ?? [], deferredSections ?? []);
   const hasDeferred = deferredSections && deferredSections.length > 0;
 

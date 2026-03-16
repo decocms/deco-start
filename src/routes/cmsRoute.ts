@@ -170,6 +170,46 @@ export const loadDeferredSection = createServerFn({ method: "POST" })
   });
 
 // ---------------------------------------------------------------------------
+// Batch deferred section loader — resolves multiple sections in one request
+// ---------------------------------------------------------------------------
+
+export const loadDeferredSectionBatch = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: unknown) =>
+      data as {
+        sections: Array<{ component: string; rawProps: Record<string, any> }>;
+        pagePath: string;
+        pageUrl?: string;
+      },
+  )
+  .handler(async (ctx) => {
+    const { sections, pagePath, pageUrl } = ctx.data;
+
+    const serverUrl = getRequestUrl().toString();
+    const matcherCtx: MatcherContext = {
+      userAgent: getRequestHeader("user-agent") ?? "",
+      url: pageUrl || serverUrl,
+      path: pagePath,
+      cookies: getCookies(),
+    };
+
+    const results = await Promise.all(
+      sections.map(async ({ component, rawProps }) => {
+        const section = await resolveDeferredSection(component, rawProps, pagePath, matcherCtx);
+        if (!section) return null;
+
+        const request = new Request(pageUrl || serverUrl, {
+          headers: getRequest().headers,
+        });
+        const enriched = await runSingleSectionLoader(section, request);
+        return normalizeUrlsInObject(enriched);
+      }),
+    );
+
+    return results;
+  });
+
+// ---------------------------------------------------------------------------
 // Default pending component — shown during SPA navigation while loader runs
 // ---------------------------------------------------------------------------
 
