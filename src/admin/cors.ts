@@ -1,4 +1,4 @@
-const ADMIN_ORIGINS = [
+const ADMIN_ORIGINS = new Set([
   "https://admin.deco.cx",
   "https://v0-admin.deco.cx",
   "https://play.deco.cx",
@@ -6,7 +6,24 @@ const ADMIN_ORIGINS = [
   "https://deco.chat",
   "https://admin.decocms.com",
   "https://decocms.com",
-];
+]);
+
+/**
+ * Register additional allowed admin origins.
+ * Useful for self-hosted admin UIs or custom dashboards.
+ */
+export function registerAdminOrigin(origin: string): void {
+  ADMIN_ORIGINS.add(origin);
+}
+
+/**
+ * Register multiple additional allowed admin origins.
+ */
+export function registerAdminOrigins(origins: string[]): void {
+  for (const origin of origins) {
+    ADMIN_ORIGINS.add(origin);
+  }
+}
 
 export function isAdminOrLocalhost(request: Request): boolean {
   const origin = request.headers.get("origin") || request.headers.get("referer") || "";
@@ -15,7 +32,10 @@ export function isAdminOrLocalhost(request: Request): boolean {
     return true;
   }
 
-  return ADMIN_ORIGINS.some((domain) => origin.startsWith(domain));
+  for (const domain of ADMIN_ORIGINS) {
+    if (origin.startsWith(domain)) return true;
+  }
+  return false;
 }
 
 export function corsHeaders(request: Request): Record<string, string> {

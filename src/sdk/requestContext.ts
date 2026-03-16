@@ -52,7 +52,8 @@ export interface RequestContextData {
 
 const storage = new AsyncLocalStorage<RequestContextData>();
 
-const MOBILE_RE = /mobile|android|iphone|ipad|ipod|webos|blackberry|opera mini|iemobile/i;
+import { isMobileUA } from "./useDevice";
+
 const BOT_RE =
   /bot|crawl|spider|slurp|bingpreview|facebookexternalhit|linkedinbot|twitterbot|whatsapp|telegram|googlebot|yandex|baidu|duckduck/i;
 
@@ -126,7 +127,7 @@ export const RequestContext = {
     if (!ctx) return "desktop";
     if (ctx._device) return ctx._device;
     const ua = ctx.request.headers.get("user-agent") ?? "";
-    ctx._device = MOBILE_RE.test(ua) ? "mobile" : "desktop";
+    ctx._device = isMobileUA(ua) ? "mobile" : "desktop";
     return ctx._device;
   },
 

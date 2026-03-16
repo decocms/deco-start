@@ -1,3 +1,4 @@
+import { djb2Hex } from "../sdk/djb2";
 import { composeMeta, type MetaResponse } from "./schema";
 
 let metaData: MetaResponse | null = null;
@@ -26,18 +27,13 @@ export function setMetaData(data: MetaResponse) {
 
 /**
  * Content-based hash for ETag.
- * Uses a simple DJB2-style hash over the serialised JSON so any
- * definition change results in a different ETag, forcing admin to
- * re-fetch rather than use stale cached meta.
+ * Uses DJB2 over the serialised JSON so any definition change
+ * results in a different ETag, forcing admin to re-fetch.
  */
 function getEtag(): string {
   if (!cachedEtag) {
     const str = JSON.stringify(metaData || {});
-    let hash = 5381;
-    for (let i = 0; i < str.length; i++) {
-      hash = ((hash << 5) + hash + str.charCodeAt(i)) >>> 0;
-    }
-    cachedEtag = `"meta-${hash.toString(36)}"`;
+    cachedEtag = `"meta-${djb2Hex(str)}"`;
   }
   return cachedEtag;
 }

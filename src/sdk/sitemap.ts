@@ -47,6 +47,17 @@ export interface SitemapOptions {
   maxEntries?: number;
 }
 
+export interface CMSSitemapOptions {
+  /** Default changefreq for non-home pages. @default "weekly" */
+  defaultChangefreq?: SitemapEntry["changefreq"];
+  /** Default priority for non-home pages (0.0–1.0). @default 0.7 */
+  defaultPriority?: number;
+  /** Changefreq for the home page. @default "daily" */
+  homeChangefreq?: SitemapEntry["changefreq"];
+  /** Priority for the home page (0.0–1.0). @default 1.0 */
+  homePriority?: number;
+}
+
 // -------------------------------------------------------------------------
 // CMS page entries
 // -------------------------------------------------------------------------
@@ -57,22 +68,28 @@ export interface SitemapOptions {
  * Reads all pages from the block store and generates URLs from their
  * path patterns (excluding wildcard-only patterns like `/*`).
  */
-export function getCMSSitemapEntries(origin: string): SitemapEntry[] {
+export function getCMSSitemapEntries(origin: string, options?: CMSSitemapOptions): SitemapEntry[] {
   const pages = getAllPages();
   const entries: SitemapEntry[] = [];
   const today = new Date().toISOString().split("T")[0];
+
+  const defaultChangefreq = options?.defaultChangefreq ?? "weekly";
+  const defaultPriority = options?.defaultPriority ?? 0.7;
+  const homeChangefreq = options?.homeChangefreq ?? "daily";
+  const homePriority = options?.homePriority ?? 1.0;
 
   for (const { page } of pages) {
     if (!page.path) continue;
 
     if (page.path.includes("*") || page.path.includes(":")) continue;
 
-    const loc = `${origin}${page.path === "/" ? "" : page.path}`;
+    const isHome = page.path === "/";
+    const loc = `${origin}${isHome ? "" : page.path}`;
     entries.push({
       loc: loc || origin,
       lastmod: today,
-      changefreq: page.path === "/" ? "daily" : "weekly",
-      priority: page.path === "/" ? 1.0 : 0.7,
+      changefreq: isHome ? homeChangefreq : defaultChangefreq,
+      priority: isHome ? homePriority : defaultPriority,
     });
   }
 

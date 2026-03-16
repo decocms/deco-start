@@ -28,8 +28,17 @@ export type Device = "mobile" | "tablet" | "desktop";
 // Android phones include "Mobile" in their UA; Android tablets do not.
 // Check TABLET_RE first so `android(?!.*mobile)` captures tablets before
 // the MOBILE_RE `android.*mobile` branch matches phones.
-const MOBILE_RE = /mobile|android.*mobile|iphone|ipod|webos|blackberry|opera mini|iemobile/i;
-const TABLET_RE = /ipad|tablet|kindle|silk|playbook|android(?!.*mobile)/i;
+export const MOBILE_RE = /mobile|android.*mobile|iphone|ipod|webos|blackberry|opera mini|iemobile/i;
+export const TABLET_RE = /ipad|tablet|kindle|silk|playbook|android(?!.*mobile)/i;
+
+/**
+ * Simple mobile-or-not check (mobile + tablet = true).
+ * Use this for cache key splitting or any context where you
+ * only need a mobile/desktop binary decision.
+ */
+export function isMobileUA(userAgent: string): boolean {
+  return MOBILE_RE.test(userAgent) || TABLET_RE.test(userAgent);
+}
 
 /**
  * Detect device type from a User-Agent string.

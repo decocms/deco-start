@@ -38,6 +38,7 @@ export {
   evaluateMatcher,
   getAsyncRenderingConfig,
   onBeforeResolve,
+  registerBotPattern,
   registerCommerceLoader,
   registerCommerceLoaders,
   registerMatcher,
@@ -47,6 +48,7 @@ export {
   setAsyncRenderingConfig,
   setDanglingReferenceHandler,
   setResolveErrorHandler,
+  WELL_KNOWN_TYPES,
 } from "./resolve";
 export type { SectionLoaderFn } from "./sectionLoaders";
 export {

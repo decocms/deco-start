@@ -18,6 +18,7 @@ import {
   setResolvedComponent,
 } from "../cms/registry";
 import type { DeferredSection, ResolvedSection } from "../cms/resolve";
+import { djb2Hex } from "../sdk/djb2";
 import { SectionErrorBoundary } from "./SectionErrorFallback";
 
 type LazyComponent = ReturnType<typeof lazy>;
@@ -106,14 +107,6 @@ function getCachedDeferredSection(stableKey: string): ResolvedSection | null {
   return entry.section;
 }
 
-/** Fast DJB2 hash for cache key differentiation. */
-function djb2(str: string): string {
-  let hash = 5381;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) + hash + str.charCodeAt(i)) | 0;
-  }
-  return (hash >>> 0).toString(36);
-}
 
 const DEFERRED_FADE_CSS = `@keyframes decoFadeIn{from{opacity:0}to{opacity:1}}`;
 
@@ -228,7 +221,7 @@ function DeferredSectionWrapper({
   errorFallback,
   loadFn,
 }: DeferredSectionWrapperProps) {
-  const propsHash = djb2(JSON.stringify(deferred.rawProps));
+  const propsHash = djb2Hex(JSON.stringify(deferred.rawProps));
   const stableKey = `${pagePath}::${deferred.component}::${deferred.index}::${propsHash}`;
   const [section, setSection] = useState<ResolvedSection | null>(() =>
     typeof document === "undefined" ? null : getCachedDeferredSection(stableKey),

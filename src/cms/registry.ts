@@ -83,7 +83,8 @@ export async function preloadSectionModule(
     if (mod.ErrorFallback) opts.errorFallback = mod.ErrorFallback;
     sectionOptions[resolveType] = opts;
     return opts;
-  } catch {
+  } catch (e) {
+    console.warn(`[Registry] Failed to preload section module "${resolveType}":`, e);
     return existing;
   }
 }
@@ -125,8 +126,8 @@ export async function preloadSectionComponents(keys: string[]): Promise<void> {
         if (mod.LoadingFallback) opts.loadingFallback = mod.LoadingFallback;
         if (mod.ErrorFallback) opts.errorFallback = mod.ErrorFallback;
         sectionOptions[key] = opts;
-      } catch {
-        /* ignore — will fall back to React.lazy */
+      } catch (e) {
+        console.warn(`[Registry] Failed to preload component "${key}":`, e);
       }
     }),
   );

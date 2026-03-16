@@ -87,3 +87,18 @@ export function resolveCountryCode(name: string): string {
   // Assume it's already an ISO code
   return name.toUpperCase();
 }
+
+/**
+ * Register an additional country name → ISO code mapping at runtime.
+ * Useful for site-specific CMS values not covered by the built-in list.
+ */
+export function registerCountryMapping(name: string, code: string): void {
+  COUNTRY_NAME_TO_CODE[name] = code;
+}
+
+/**
+ * Register multiple country name → ISO code mappings at once.
+ */
+export function registerCountryMappings(mappings: Record<string, string>): void {
+  Object.assign(COUNTRY_NAME_TO_CODE, mappings);
+}

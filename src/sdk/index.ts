@@ -14,6 +14,8 @@ export {
   getCacheProfileConfig,
   registerCachePattern,
   routeCacheDefaults,
+  setCacheProfileConfig,
+  setRouteCacheDefaults,
 } from "./cacheHeaders";
 export { clx } from "./clx";
 export { decodeCookie, deleteCookie, getCookie, getServerSideCookie, setCookie } from "./cookie";
@@ -39,6 +41,7 @@ export {
   parseRedirectsCsv,
   type Redirect,
   type RedirectMap,
+  registerRedirectResolveType,
 } from "./redirects";
 export { RequestContext, type RequestContextData } from "./requestContext";
 export { createServerTimings, type ServerTimings } from "./serverTimings";
@@ -47,14 +50,21 @@ export {
   canonicalUrl,
   cleanPathForCacheKey,
   hasTrackingParams,
+  registerTrackingParam,
+  registerTrackingParams,
   stripTrackingParams,
 } from "./urlUtils";
+export { djb2, djb2Hex } from "./djb2";
+export { buildHtmlShell, type HtmlShellOptions } from "./htmlShell";
 export {
   checkDesktop,
   checkMobile,
   checkTablet,
   type Device,
   detectDevice,
+  isMobileUA,
+  MOBILE_RE,
+  TABLET_RE,
   useDevice,
 } from "./useDevice";
 export { useId } from "./useId";

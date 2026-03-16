@@ -1,4 +1,5 @@
 import * as asyncHooks from "node:async_hooks";
+import { djb2Hex } from "../sdk/djb2";
 
 export type Resolvable = {
   __resolveType?: string;
@@ -54,12 +55,7 @@ export function onChange(listener: ChangeListener) {
 // ---------------------------------------------------------------------------
 
 function computeRevision(blocks: Record<string, unknown>): string {
-  const str = JSON.stringify(blocks);
-  let hash = 5381;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) + hash + str.charCodeAt(i)) >>> 0;
-  }
-  return hash.toString(36);
+  return djb2Hex(JSON.stringify(blocks));
 }
 
 // ---------------------------------------------------------------------------

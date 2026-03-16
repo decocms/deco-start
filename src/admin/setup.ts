@@ -21,9 +21,9 @@ export {
 
 let cssHref: string | null = null;
 let fontHrefs: string[] = [];
-let themeName = "light";
-let bodyClass = "bg-base-100 text-base-content";
-let htmlLang = "pt-BR";
+let themeName = "";
+let bodyClass = "";
+let htmlLang = "en";
 
 export function setRenderShell(opts: {
   css?: string;
