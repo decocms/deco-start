@@ -16,6 +16,7 @@
     "./sdk/clx": "./src/sdk/clx.ts",
     "./sdk/useId": "./src/sdk/useId.ts",
     "./sdk/cookie": "./src/sdk/cookie.ts",
+    "./sdk/cookiePassthrough": "./src/sdk/cookiePassthrough.ts",
     "./sdk/analytics": "./src/sdk/analytics.ts",
     "./sdk/cachedLoader": "./src/sdk/cachedLoader.ts",
     "./sdk/serverTimings": "./src/sdk/serverTimings.ts",
