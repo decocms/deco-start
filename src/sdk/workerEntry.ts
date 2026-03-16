@@ -732,6 +732,9 @@ export function createDecoWorkerEntry(
       if (hasSetCookie) {
         const resp = new Response(origin.body, origin);
         resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
+        // CDN-Cache-Control takes precedence over Cache-Control on Cloudflare.
+        // If the origin set it, Cloudflare would ignore our private directive.
+        resp.headers.delete("CDN-Cache-Control");
         resp.headers.set("X-Cache", "BYPASS");
         resp.headers.set("X-Cache-Reason", "set-cookie");
         return resp;
