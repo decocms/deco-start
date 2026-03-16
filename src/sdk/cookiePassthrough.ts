@@ -1,5 +1,5 @@
 /**
- * Request ↔ Response cookie passthrough helpers for TanStack Start.
+ * Request / Response cookie passthrough helpers for TanStack Start.
  *
  * Provides two framework-bound functions that commerce apps
  * (VTEX, Shopify, etc.) can plug into their cookie provider hooks
@@ -19,6 +19,7 @@
 
 import {
 	getRequestHeader,
+	getResponseHeaders,
 	setResponseHeader,
 } from "@tanstack/react-start/server";
 
@@ -36,12 +37,21 @@ export function getRequestCookieHeader(): string | undefined {
 
 /**
  * Appends Set-Cookie headers to the current TanStack Start response.
+ * Preserves any Set-Cookie headers already set by other middleware or
+ * earlier calls, so multiple API calls in one request don't clobber
+ * each other's cookies.
+ *
  * Safe to call outside a request scope (no-op).
  */
 export function forwardResponseCookies(cookies: string[]): void {
 	if (!cookies.length) return;
 	try {
-		setResponseHeader("set-cookie", cookies);
+		const headers = getResponseHeaders();
+		const existing: string[] =
+			typeof headers.getSetCookie === "function"
+				? headers.getSetCookie()
+				: [];
+		setResponseHeader("set-cookie", [...existing, ...cookies]);
 	} catch {
 		// Outside request context (build time, etc.) — ignore.
 	}
