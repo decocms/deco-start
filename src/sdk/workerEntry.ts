@@ -69,6 +69,13 @@ export interface SegmentKey {
   loggedIn?: boolean;
   /** Commerce sales channel / price list. */
   salesChannel?: string;
+  /**
+   * VTEX region ID for regionalized pricing/availability.
+   * When present, cache entries are segmented per region.
+   * Sites without regionalization should omit this field
+   * to avoid unnecessary cache fragmentation.
+   */
+  regionId?: string;
   /** Sorted list of active A/B flag names for cache cohort splitting. */
   flags?: string[];
 }
@@ -128,6 +135,10 @@ export interface DecoWorkerEntryOptions {
    *       device: /mobile|android|iphone/i.test(request.headers.get("user-agent") ?? "") ? "mobile" : "desktop",
    *       loggedIn: vtx.isLoggedIn,
    *       salesChannel: vtx.salesChannel,
+   *       // Include regionId only if the site uses VTEX regionalization.
+   *       // When present, cache entries split by region; omit it for
+   *       // non-regionalized sites to maximize cache sharing.
+   *       regionId: vtx.regionId ?? undefined,
    *     };
    *   },
    * });
@@ -366,6 +377,7 @@ export function createDecoWorkerEntry(
     const parts: string[] = [seg.device];
     if (seg.loggedIn) parts.push("auth");
     if (seg.salesChannel) parts.push(`sc=${seg.salesChannel}`);
+    if (seg.regionId) parts.push(`r=${seg.regionId}`);
     if (seg.flags?.length) parts.push(`f=${seg.flags.sort().join(",")}`);
     return parts.join("|");
   }
@@ -415,6 +427,32 @@ export function createDecoWorkerEntry(
 
   // -- Purge handler ----------------------------------------------------------
 
+  interface PurgeRequestBody {
+    paths?: string[];
+    countries?: string[];
+    /** Sales channels to include in segment combos. Defaults to ["1"]. */
+    salesChannels?: string[];
+    /** Region IDs to include in segment combos. Each ID generates additional entries. */
+    regionIds?: string[];
+  }
+
+  function buildPurgeSegments(body: PurgeRequestBody): SegmentKey[] {
+    const devices: Array<"mobile" | "desktop"> = ["mobile", "desktop"];
+    const channels = body.salesChannels ?? ["1"];
+    const regions: Array<string | undefined> = [undefined, ...(body.regionIds ?? [])];
+
+    const segments: SegmentKey[] = [];
+    for (const device of devices) {
+      for (const salesChannel of channels) {
+        for (const regionId of regions) {
+          segments.push({ device, salesChannel, regionId });
+        }
+      }
+      segments.push({ device });
+    }
+    return segments;
+  }
+
   async function handlePurge(request: Request, env: Record<string, unknown>): Promise<Response> {
     if (purgeTokenEnv === false) {
       return new Response("Purge disabled", { status: 404 });
@@ -425,7 +463,7 @@ export function createDecoWorkerEntry(
       return new Response("Unauthorized", { status: 401 });
     }
 
-    let body: { paths?: string[]; countries?: string[] };
+    let body: PurgeRequestBody;
     try {
       body = await request.json();
     } catch {
@@ -437,10 +475,6 @@ export function createDecoWorkerEntry(
       return new Response('Body must include "paths": ["/", "/page"]', { status: 400 });
     }
 
-    // Geo strings to purge location-specific cache variants.
-    // Pass ["BR", "BR|São Paulo|Curitiba", ...] to purge specific geo variants.
-    // Each string must match the __cf_geo param format: "country|region|city".
-    // When omitted, only the non-geo cache entry is purged.
     const geoVariants = body.countries ?? [];
 
     const cache =
@@ -455,25 +489,18 @@ export function createDecoWorkerEntry(
     const baseUrl = new URL(request.url).origin;
     const purged: string[] = [];
 
-    // If using segment-based keys, purge requires known segment combos.
-    // For simplicity, purge common combos: both devices, default sales channel.
-    const segments: SegmentKey[] = buildSegment
-      ? [
-          { device: "mobile" },
-          { device: "desktop" },
-          { device: "mobile", salesChannel: "1" },
-          { device: "desktop", salesChannel: "1" },
-        ]
-      : [];
-
-    // Purge both without geo (non-geo-targeted) and with each specified geo variant
     const geoKeys: (string | null)[] = [null, ...geoVariants];
 
     for (const p of paths) {
-      if (buildSegment && segments.length > 0) {
+      if (buildSegment) {
+        const segments = buildPurgeSegments(body);
         for (const seg of segments) {
           for (const cc of geoKeys) {
             const url = new URL(p, baseUrl);
+            if (cacheVersionEnv !== false) {
+              const version = (env[cacheVersionEnv] as string) || "";
+              if (version) url.searchParams.set("__v", version);
+            }
             url.searchParams.set("__seg", hashSegment(seg));
             if (cc) url.searchParams.set("__cf_geo", cc);
             const key = new Request(url.toString(), { method: "GET" });
@@ -493,6 +520,10 @@ export function createDecoWorkerEntry(
         for (const device of devices) {
           for (const cc of geoKeys) {
             const url = new URL(p, baseUrl);
+            if (cacheVersionEnv !== false) {
+              const version = (env[cacheVersionEnv] as string) || "";
+              if (version) url.searchParams.set("__v", version);
+            }
             if (device) url.searchParams.set("__cf_device", device);
             if (cc) url.searchParams.set("__cf_geo", cc);
             const key = new Request(url.toString(), { method: "GET" });
@@ -643,16 +674,22 @@ export function createDecoWorkerEntry(
         const origin = await serverEntry.fetch(request, env, ctx);
         const profile = getProfile(url);
 
-        // If the profile is private/none/cart, strip any public cache headers
-        // the route may have set (prevents the search caching bug)
         if (profile === "private" || profile === "none" || profile === "cart") {
           const resp = new Response(origin.body, origin);
           resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
           resp.headers.delete("CDN-Cache-Control");
+          resp.headers.set("X-Cache", "BYPASS");
+          resp.headers.set("X-Cache-Reason", `non-cacheable:${profile}`);
           return resp;
         }
 
-        return origin;
+        const resp = new Response(origin.body, origin);
+        const reason = request.method !== "GET"
+          ? `method:${request.method}`
+          : "bypass-path";
+        resp.headers.set("X-Cache", "BYPASS");
+        resp.headers.set("X-Cache-Reason", reason);
+        return resp;
       }
 
       // Cacheable request — build segment-aware cache key
@@ -696,7 +733,10 @@ export function createDecoWorkerEntry(
       const origin = await serverEntry.fetch(request, env, ctx);
 
       if (origin.status !== 200) {
-        return origin;
+        const resp = new Response(origin.body, origin);
+        resp.headers.set("X-Cache", "BYPASS");
+        resp.headers.set("X-Cache-Reason", `status:${origin.status}`);
+        return resp;
       }
 
       // Responses with Set-Cookie must never be cached — they carry
@@ -717,10 +757,11 @@ export function createDecoWorkerEntry(
       const profile = getProfile(url);
       const profileConfig = getCacheProfileConfig(profile);
 
-      // Don't cache non-public profiles
       if (!profileConfig.isPublic || profileConfig.sMaxAge === 0) {
         const resp = new Response(origin.body, origin);
         resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
+        resp.headers.set("X-Cache", "BYPASS");
+        resp.headers.set("X-Cache-Reason", `profile:${profile}`);
         return resp;
       }
 

@@ -41,40 +41,71 @@ The catch-all route handles all CMS-managed pages (PDP, PLP, institutional pages
 
 ```typescript
 // src/routes/$.tsx
-import { createFileRoute, notFound } from "@tanstack/react-router";
-import { cmsRouteConfig, NotFoundPage } from "@decocms/start/routes";
+import { createFileRoute } from "@tanstack/react-router";
+import { cmsRouteConfig, loadDeferredSection } from "@decocms/start/routes";
 import { DecoPageRenderer } from "@decocms/start/hooks";
+import type { ResolvedSection, DeferredSection } from "@decocms/start/cms";
+import type { CacheProfile } from "@decocms/start/sdk/cacheHeaders";
+import { cacheHeaders, routeCacheDefaults } from "@decocms/start/sdk/cacheHeaders";
 
-const config = cmsRouteConfig({
+const routeConfig = cmsRouteConfig({
   siteName: "My Store",
   defaultTitle: "My Store - Default Title",
   ignoreSearchParams: ["skuId"],
 });
 
+type PageData = {
+  resolvedSections: ResolvedSection[];
+  deferredSections: DeferredSection[];
+  cacheProfile: CacheProfile;
+  name: string;
+  path: string;
+  params: Record<string, string>;
+} | null;
+
 export const Route = createFileRoute("/$")({
-  loaderDeps: config.loaderDeps,
-  loader: async (ctx) => {
-    const page = await config.loader(ctx);
-    if (!page) throw notFound();
-    return page;
+  ...routeCacheDefaults("listing"),
+  loaderDeps: routeConfig.loaderDeps,
+  loader: routeConfig.loader as any,
+  headers: ({ loaderData }) => {
+    const data = loaderData as PageData;
+    return cacheHeaders(data?.cacheProfile ?? "listing");
+  },
+  head: ({ loaderData }) => {
+    const data = loaderData as PageData;
+    return {
+      meta: [
+        {
+          title: data?.name
+            ? `${data.name} | My Store`
+            : "My Store - Default Title",
+        },
+      ],
+    };
   },
   component: CmsPage,
   notFoundComponent: NotFoundPage,
-  staleTime: config.staleTime,
-  gcTime: config.gcTime,
-  headers: config.headers,
-  head: config.head,
 });
 
 function CmsPage() {
-  const page = Route.useLoaderData();
+  const data = Route.useLoaderData() as PageData;
+  const { _splat } = Route.useParams();
+  const actualPath = `/${_splat ?? ""}`;
+
+  if (!data) return <NotFoundPage />;
+
   return (
-    <div>
-      <DecoPageRenderer sections={page.resolvedSections} />
-    </div>
+    <DecoPageRenderer
+      sections={data.resolvedSections ?? []}
+      deferredSections={data.deferredSections ?? []}
+      pagePath={actualPath}
+      loadDeferredSectionFn={(d) => loadDeferredSection({ data: d }) as Promise<ResolvedSection | null>}
+    />
   );
 }
 ```
+
+**CRITICAL**: The `...routeCacheDefaults("listing")` spread is essential. Without it, every SPA navigation triggers a full server re-fetch even when the data was just loaded seconds ago. This is the most common cause of perceived slow navigation.
 
 ### `cmsRouteConfig` Options
 
@@ -152,26 +183,40 @@ Hardcoded to `/` path — no params, no deps.
 ```typescript
 // src/routes/index.tsx
 import { createFileRoute } from "@tanstack/react-router";
-import { cmsHomeRouteConfig } from "@decocms/start/routes";
+import { cmsHomeRouteConfig, loadDeferredSection } from "@decocms/start/routes";
 import { DecoPageRenderer } from "@decocms/start/hooks";
+import type { ResolvedSection, DeferredSection } from "@decocms/start/cms";
 
-const config = cmsHomeRouteConfig({
+const homeConfig = cmsHomeRouteConfig({
   defaultTitle: "My Store - Homepage",
 });
 
+type HomeData = {
+  resolvedSections: ResolvedSection[];
+  deferredSections: DeferredSection[];
+} | null;
+
 export const Route = createFileRoute("/")({
-  ...config,
+  ...homeConfig,
   component: HomePage,
 });
 
 function HomePage() {
-  const page = Route.useLoaderData();
-  if (!page) {
-    return <div>Loading...</div>;
-  }
-  return <DecoPageRenderer sections={page.resolvedSections} />;
+  const data = Route.useLoaderData() as HomeData;
+  if (!data) return null;
+
+  return (
+    <DecoPageRenderer
+      sections={data.resolvedSections ?? []}
+      deferredSections={data.deferredSections ?? []}
+      pagePath="/"
+      loadDeferredSectionFn={(d) => loadDeferredSection({ data: d }) as Promise<ResolvedSection | null>}
+    />
+  );
 }
 ```
+
+`cmsHomeRouteConfig` already includes `routeCacheDefaults("static")` and `cacheHeaders("static")`, giving the homepage a 5-min client staleTime and 24h edge TTL. Do NOT add additional cache config.
 
 ### `cmsHomeRouteConfig` Options
 
@@ -308,15 +353,17 @@ The root route contains site-specific elements that should NOT be in the framewo
 
 ### Production
 
-Set by `routeCacheDefaults(profile)` based on page type:
+Set by `routeCacheDefaults(profile)` based on page type (from `cacheHeaders.ts`):
 
 | Profile | staleTime | gcTime |
 |---------|-----------|--------|
 | static | 5 min | 30 min |
-| product | 5 min | 30 min |
-| listing | 2 min | 10 min |
-| search | 60s | 5 min |
+| product | 1 min | 5 min |
+| listing | 1 min | 5 min |
+| search | 30s | 2 min |
+| cart | 0 | 0 |
 | private | 0 | 0 |
+| none | 0 | 0 |
 
 ### Development
 
