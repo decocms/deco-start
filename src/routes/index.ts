@@ -13,3 +13,5 @@ export {
   loadDeferredSection,
 } from "./cmsRoute";
 export { CmsPage, NotFoundPage } from "./components";
+export type { PageSeo } from "../cms/resolve";
+export type { Device } from "../sdk/useDevice";

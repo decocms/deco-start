@@ -997,11 +997,126 @@ export default defineConfig({
 
 ---
 
+## 25. SEO Architecture — Three Layers
+
+### Problem
+
+Sites migrated from Fresh/Deno often have broken SEO:
+- `Seo.tsx` component returns `null` (dead stub from migration)
+- Route `head()` functions only set `<title>`, missing description/canonical/OG
+- No JSON-LD structured data on PDPs
+- No Open Graph tags for social sharing
+
+### Solution — Framework + Section + Component
+
+**Layer 1: Framework head()** (`cmsRouteConfig` / `cmsHomeRouteConfig`)
+Automatically emits title, description, canonical, OG, Twitter Card, robots from `DecoPageResult.seo`. Requires `defaultDescription` option and `registerSeoSections()` in setup.
+
+**Layer 2: Section SEO** (`registerSeoSections` + `registerSectionLoaders`)
+Sections like SEOPDP register as SEO contributors. Their section loader computes title/description/canonical from commerce data (product name, product description, breadcrumb canonical). The framework extracts these into `PageSeo`.
+
+**Layer 3: Structured data** (section component renders JSON-LD)
+The `Seo.tsx` component renders `<script type="application/ld+json">` for Product, WebSite, BreadcrumbList schemas. Meta tags are NOT rendered here — the framework handles those via `head()`.
+
+### Setup Checklist
+
+```typescript
+// setup.ts
+import { registerSeoSections } from "@decocms/start/cms";
+
+registerSeoSections(["site/sections/SEOPDP.tsx"]);
+
+// Also register the SEOPDP section loader:
+registerSectionLoaders({
+  "site/sections/SEOPDP.tsx": async (props, req) => {
+    const mod = await import("./sections/SEOPDP");
+    return mod.loader(props, req, { seo: {} } as any) ?? props;
+  },
+});
+```
+
+```typescript
+// routes/$.tsx — spread full config, framework handles SEO
+const routeConfig = cmsRouteConfig({
+  siteName: "My Store",
+  defaultTitle: "My Store - Default Title",
+  defaultDescription: "My Store — best products...",
+  ignoreSearchParams: ["skuId"],
+});
+export const Route = createFileRoute("/$")({ ...routeConfig, component: CmsPage });
+```
+
+```typescript
+// __root.tsx — fallback description and OG globals
+head: () => ({
+  meta: [
+    { charSet: "utf-8" },
+    { name: "viewport", content: "width=device-width, initial-scale=1" },
+    { title: "My Store - Default Title" },
+    { name: "description", content: "My Store — default description." },
+    { property: "og:site_name", content: "My Store" },
+    { property: "og:locale", content: "pt_BR" },
+  ],
+}),
+```
+
+### Anti-Patterns
+
+- `Seo.tsx` returning `null` — must render JSON-LD at minimum
+- Custom `head()` in routes that only sets title — use `cmsRouteConfig` which handles full SEO
+- Hardcoded Device.Provider — use matchMedia for client, section loaders for server
+
+---
+
+## 26. Device Detection — No Hardcoded Provider
+
+### Problem
+
+Sites often have `<Device.Provider value={{ isMobile: false }}>` in `__root.tsx`, making ALL client-side components think they're on desktop regardless of actual viewport.
+
+### Solution — Two-Layer Detection
+
+**Server-side**: Section loaders via `registerSectionLoaders()` detect device from UA and inject `isMobile` / `device` as props. The page result also includes `device` for client use.
+
+**Client-side**: Use `useSyncExternalStore` + `window.matchMedia` instead of React context:
+
+```typescript
+// contexts/device.tsx
+import { useSyncExternalStore } from "react";
+
+const MOBILE_QUERY = "(max-width: 767px)";
+
+function subscribe(cb: () => void) {
+  if (typeof window === "undefined") return () => {};
+  const mql = window.matchMedia(MOBILE_QUERY);
+  mql.addEventListener("change", cb);
+  return () => mql.removeEventListener("change", cb);
+}
+
+function getSnapshot() { return window.matchMedia(MOBILE_QUERY).matches; }
+function getServerSnapshot() { return false; }
+
+export const useDevice = () => {
+  const isMobile = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  return { isMobile };
+};
+```
+
+### Why matchMedia > UA context
+
+- Reflects actual viewport, not a server guess
+- Reactive — updates if user resizes browser
+- No Provider needed — works anywhere in the component tree
+- SSR defaults to desktop (false), hydrates to real value
+
+---
+
 ## Related Skills
 
 | Skill | Purpose |
 |-------|---------|
 | `deco-to-tanstack-migration` | Initial migration playbook (imports, signals, architecture) |
+| `deco-cms-route-config` | Route config, SEO architecture, device detection |
 | `deco-tanstack-navigation` | SPA navigation patterns (`<Link>`, `useNavigate`, `loaderDeps`) |
 | `deco-islands-migration` | Eliminating the `src/islands/` directory |
 | `deco-edge-caching` | Edge caching with `createDecoWorkerEntry` |
