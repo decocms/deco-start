@@ -181,6 +181,116 @@ const cachedPLP = createCachedLoader("vtex/plp", vtexPLP, {
 
 This is per-isolate in-memory cache (V8 Map). Resets on cold start. Includes request deduplication (single-flight) and LRU eviction at 500 entries.
 
+## Cache Versioning with BUILD_HASH
+
+Deploy-time cache busting uses a `BUILD_HASH` environment variable (typically the git short SHA) passed to `wrangler deploy`. The worker-entry appends this to cache keys so deploying a new version automatically serves fresh content.
+
+```yaml
+# .github/workflows/deploy.yml
+- name: Deploy to Cloudflare Workers
+  run: npx wrangler deploy
+  env:
+    BUILD_HASH: ${{ github.sha }}
+```
+
+The worker-entry reads `env.BUILD_HASH` and injects it into cache keys. On new deploys, old cache entries simply expire naturally — no purge needed.
+
+## Site-Level Cache Pattern Registration
+
+For sites with known institutional/static pages that would otherwise get the conservative 2-min "listing" TTL, register explicit patterns in `setup.ts`:
+
+```ts
+// setup.ts
+import { registerCachePattern } from "@decocms/start/sdk/cacheHeaders";
+
+// Institutional pages — content changes rarely, promote to 24h edge TTL
+registerCachePattern({
+  test: (p) =>
+    p.startsWith("/institucional") ||
+    p.startsWith("/central-de-atendimento") ||
+    p.startsWith("/politica-de-") ||
+    p.startsWith("/termos-") ||
+    p === "/fale-conosco" ||
+    p === "/trabalhe-conosco" ||
+    p === "/cadastro" ||
+    p === "/televendas",
+  profile: "static",
+});
+
+// Promotional/collection pages — already listing-like, but explicit is better
+registerCachePattern({
+  test: (p) =>
+    p.startsWith("/ofertas") ||
+    p.startsWith("/b/") ||
+    p.startsWith("/festival-"),
+  profile: "listing",
+});
+```
+
+Custom patterns are evaluated before built-in ones. This is the recommended way to tune caching per-site without modifying the framework.
+
+## Client-Side Route Caching (routeCacheDefaults)
+
+Without `routeCacheDefaults`, every SPA navigation triggers a fresh server request even if the data was just loaded. This is the most common cause of "slow navigation" reports.
+
+The catch-all route `$.tsx` MUST include `routeCacheDefaults`:
+
+```ts
+export const Route = createFileRoute("/$")({
+  ...routeCacheDefaults("listing"),   // <-- client-side cache: 1min stale, 5min gc
+  loaderDeps: routeConfig.loaderDeps,
+  loader: routeConfig.loader,
+  headers: ({ loaderData }) => {
+    return cacheHeaders(loaderData?.cacheProfile ?? "listing");
+  },
+  component: CmsPage,
+});
+```
+
+The homepage should use `cmsHomeRouteConfig` which already includes `routeCacheDefaults("static")`:
+
+```ts
+export const Route = createFileRoute("/")({
+  ...cmsHomeRouteConfig({ defaultTitle: "My Store" }),
+  component: HomePage,
+});
+```
+
+## Cache Analysis & Debugging with Stats Lake
+
+Deco sites emit CDN usage data to a ClickHouse stats-lake. This enables cache performance analysis:
+
+```sql
+-- Cache status breakdown for a site
+SELECT
+  JSONExtractString(extra, 'cacheStatus') AS cache_status,
+  count() AS requests,
+  round(count() * 100.0 / sum(count()) OVER (), 2) AS pct
+FROM fact_usage_daily
+WHERE site_id = <site_id>
+  AND date >= today() - 7
+GROUP BY cache_status
+ORDER BY requests DESC;
+```
+
+### Understanding "unknown" Cache Status
+
+When the Cloudflare Worker uses `caches.default.match()/put()` to serve cached responses internally, the outer CDN reports `cf-cache-status: DYNAMIC` because the Worker is the origin. The stats-lake logs this as "unknown" or empty.
+
+This means a high "unknown" percentage does NOT indicate a caching problem — it means the Worker's internal Cache API is handling the request before it reaches the origin CDN layer. This is expected and desirable behavior.
+
+To verify actual cache performance:
+1. Check `X-Cache: HIT|MISS` header (set by the worker-entry)
+2. Check `X-Cache-Profile` header (shows which profile was detected)
+3. Query stats-lake grouping by `cacheStatus` AND response status codes
+
+### Comparing Staging vs Production Cache
+
+When migrating to TanStack Workers, compare cache metrics:
+- Production (Deno/Fresh on Kubernetes) typically shows high HIT rates because traffic volume keeps caches warm
+- Staging Workers may show lower HIT rates due to lower traffic, plus "unknown" status from internal Cache API
+- The "unknown" requests on Workers are functionally equivalent to HITs — they're served from the Worker's Cache API without hitting the origin server function
+
 ## Key Constraints
 
 - **Cache API ignores `s-maxage`** — the factory uses `max-age` equal to `sMaxAge` when storing in Cache API
@@ -188,6 +298,8 @@ This is per-isolate in-memory cache (V8 Map). Resets on cold start. Includes req
 - **Device keys add a query param** — `__cf_device=mobile|desktop` is appended to cache keys, so purging must clear both
 - **Non-200 responses are never cached** — only 200 OK goes into Cache API
 - **`/_server` paths always bypass cache** — TanStack Start RPC requests are never edge-cached
+- **UTM parameters are stripped** — `utm_*`, `gclid`, `fbclid` are removed from cache keys to improve hit rates
+- **Segment hashing** — user segments (from matchers/flags) are hashed into the cache key so different audiences get different cached responses
 
 ## Package Exports
 
