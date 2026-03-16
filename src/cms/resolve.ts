@@ -237,110 +237,6 @@ function ensureInitialized() {
 // Matcher evaluation
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Location matcher — uses Cloudflare's cf-ipcountry / cf.region headers
-// ---------------------------------------------------------------------------
-
-const COUNTRY_NAME_TO_ISO: Record<string, string> = {
-  brasil: "BR",
-  brazil: "BR",
-  argentina: "AR",
-  chile: "CL",
-  colombia: "CO",
-  mexico: "MX",
-  "méxico": "MX",
-  uruguay: "UY",
-  paraguay: "PY",
-  peru: "PE",
-  "perú": "PE",
-  "united states": "US",
-  "estados unidos": "US",
-  portugal: "PT",
-  spain: "ES",
-  "españa": "ES",
-};
-
-function normalizeCountry(name: string): string {
-  return COUNTRY_NAME_TO_ISO[name.toLowerCase()] ?? name.toUpperCase();
-}
-
-interface GeoLocation {
-  country?: string;
-  regionCode?: string;
-  city?: string;
-}
-
-function getRequestGeo(ctx: MatcherContext): GeoLocation | null {
-  const req = ctx.request;
-  if (!req) return null;
-
-  // Cloudflare Workers: request.cf contains geo data
-  const cf = (req as any).cf as Record<string, unknown> | undefined;
-  if (cf) {
-    return {
-      country: cf.country as string | undefined,
-      regionCode: cf.region as string | undefined,
-      city: cf.city as string | undefined,
-    };
-  }
-
-  // Fallback: standard geo headers (Deno Deploy, Vercel, etc.)
-  const country =
-    ctx.headers?.["cf-ipcountry"] ??
-    ctx.headers?.["x-vercel-ip-country"];
-  const region =
-    ctx.headers?.["cf-region"] ??
-    ctx.headers?.["x-vercel-ip-country-region"];
-
-  if (country || region) {
-    return { country, regionCode: region };
-  }
-
-  return null;
-}
-
-function evaluateLocationMatcher(
-  rule: Record<string, unknown>,
-  ctx: MatcherContext,
-): boolean {
-  const geo = getRequestGeo(ctx);
-  if (!geo) return false;
-
-  const includes = rule.includeLocations as GeoLocation[] | undefined;
-  const excludes = rule.excludeLocations as GeoLocation[] | undefined;
-
-  const matches = (loc: GeoLocation): boolean => {
-    if (loc.country) {
-      const expected = normalizeCountry(loc.country);
-      if (!geo.country || expected !== geo.country.toUpperCase()) return false;
-    }
-    if (loc.regionCode) {
-      if (!geo.regionCode) return false;
-      if (loc.regionCode.toLowerCase() !== geo.regionCode.toLowerCase()) return false;
-    }
-    if (loc.city) {
-      if (!geo.city) return false;
-      if (loc.city.toLowerCase() !== geo.city.toLowerCase()) return false;
-    }
-    return true;
-  };
-
-  if (excludes?.length) {
-    for (const loc of excludes) {
-      if (matches(loc)) return false;
-    }
-  }
-
-  if (includes?.length) {
-    for (const loc of includes) {
-      if (matches(loc)) return true;
-    }
-    return false;
-  }
-
-  return true;
-}
-
 export function evaluateMatcher(rule: Record<string, unknown> | undefined, ctx: MatcherContext): boolean {
   if (!rule) return true;
 
@@ -385,10 +281,6 @@ export function evaluateMatcher(rule: Record<string, unknown> | undefined, ctx: 
       const start = typeof rule.start === "string" ? new Date(rule.start).getTime() : 0;
       const end = typeof rule.end === "string" ? new Date(rule.end).getTime() : Infinity;
       return now >= start && now <= end;
-    }
-
-    case "website/matchers/location.ts": {
-      return evaluateLocationMatcher(rule, ctx);
     }
 
     default: {
