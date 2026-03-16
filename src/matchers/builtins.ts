@@ -17,6 +17,7 @@
 
 import type { MatcherContext } from "../cms/resolve";
 import { evaluateMatcher, registerMatcher } from "../cms/resolve";
+import { resolveCountryCode } from "./countryNames";
 
 // -------------------------------------------------------------------------
 // Cookie matcher
@@ -168,106 +169,90 @@ function queryStringMatcher(rule: Record<string, unknown>, ctx: MatcherContext):
 // Location matcher
 // -------------------------------------------------------------------------
 
-/**
- * CF country codes -> CMS country name mapping.
- * The CMS stores country as full names ("Brasil"), CF provides ISO codes ("BR").
- */
-const COUNTRY_NAME_TO_CODE: Record<string, string> = {
-  Brasil: "BR", Brazil: "BR",
-  Argentina: "AR", Chile: "CL",
-  Colombia: "CO", Mexico: "MX", "México": "MX",
-  Peru: "PE", "Perú": "PE",
-  Uruguay: "UY", Paraguay: "PY",
-  Bolivia: "BO", Ecuador: "EC",
-  Venezuela: "VE",
-  "United States": "US", USA: "US",
-  "Estados Unidos": "US",
-  Spain: "ES", "España": "ES",
-  Portugal: "PT",
-  Canada: "CA", "Canadá": "CA",
-  Germany: "DE", Alemania: "DE", Deutschland: "DE",
-  France: "FR", Francia: "FR",
-  Italy: "IT", Italia: "IT",
-  "United Kingdom": "GB", UK: "GB",
-  Japan: "JP", "Japón": "JP",
-  China: "CN",
-  Australia: "AU",
-  "South Korea": "KR",
-  India: "IN",
-  Netherlands: "NL",
-  Switzerland: "CH",
-  Sweden: "SE",
-  Norway: "NO",
-  Denmark: "DK",
-  Finland: "FI",
-  Belgium: "BE",
-  Austria: "AT",
-  Ireland: "IE",
-  "New Zealand": "NZ",
-  "South Africa": "ZA",
-  Israel: "IL",
-  "Saudi Arabia": "SA",
-  "United Arab Emirates": "AE",
-  Turkey: "TR", "Türkiye": "TR",
-  Poland: "PL",
-  "Czech Republic": "CZ", Czechia: "CZ",
-  Romania: "RO",
-  Hungary: "HU",
-  Greece: "GR",
-  Croatia: "HR",
-  "Costa Rica": "CR",
-  Panama: "PA", "Panamá": "PA",
-  "Dominican Republic": "DO",
-  Guatemala: "GT",
-  Honduras: "HN",
-  "El Salvador": "SV",
-  Nicaragua: "NI",
-  Cuba: "CU",
-  "Puerto Rico": "PR",
-};
-
 interface LocationRule {
   country?: string;
   regionCode?: string;
   city?: string;
 }
 
+interface GeoData {
+  country: string;
+  regionCode: string;
+  regionName: string;
+  city: string;
+}
+
+/**
+ * Extract geo data from the request context.
+ * Priority: request.cf (Cloudflare Workers) > geo cookies > geo headers.
+ */
+function getGeoData(ctx: MatcherContext): GeoData {
+  // 1. Cloudflare Workers: request.cf has authoritative geo data
+  const req = ctx.request;
+  if (req) {
+    const cf = (req as any).cf as Record<string, unknown> | undefined;
+    if (cf?.country) {
+      return {
+        country: (cf.country as string) ?? "",
+        regionCode: (cf.regionCode as string) ?? (cf.region as string) ?? "",
+        regionName: (cf.region as string) ?? "",
+        city: (cf.city as string) ?? "",
+      };
+    }
+  }
+
+  // 2. Geo cookies (set by Cloudflare middleware on Fresh/Deno sites)
+  const cookies = ctx.cookies ?? {};
+  const cookieCountry = cookies.__cf_geo_country ? decodeURIComponent(cookies.__cf_geo_country) : "";
+  if (cookieCountry) {
+    return {
+      country: cookieCountry,
+      regionCode: cookies.__cf_geo_region_code ? decodeURIComponent(cookies.__cf_geo_region_code) : "",
+      regionName: cookies.__cf_geo_region ? decodeURIComponent(cookies.__cf_geo_region) : "",
+      city: cookies.__cf_geo_city ? decodeURIComponent(cookies.__cf_geo_city) : "",
+    };
+  }
+
+  // 3. Fallback: standard geo headers (Vercel, etc.)
+  const headers = ctx.headers ?? {};
+  return {
+    country: headers["cf-ipcountry"] ?? headers["x-vercel-ip-country"] ?? "",
+    regionCode: headers["cf-region"] ?? headers["x-vercel-ip-country-region"] ?? "",
+    regionName: "",
+    city: "",
+  };
+}
+
 function matchesLocationRule(
   loc: LocationRule,
-  regionName: string,
-  regionCode: string,
-  country: string,
-  city: string,
+  geo: GeoData,
 ): boolean {
   if (loc.country) {
-    const code = COUNTRY_NAME_TO_CODE[loc.country] ?? loc.country;
-    if (code.toUpperCase() !== country.toUpperCase()) return false;
+    const code = resolveCountryCode(loc.country);
+    if (code.toUpperCase() !== geo.country.toUpperCase()) return false;
   }
   if (loc.regionCode) {
     // Match against both the short code ("SP") and full name ("São Paulo")
     // so rules authored against either format continue working.
     const ruleVal = loc.regionCode.toLowerCase();
-    if (regionCode.toLowerCase() !== ruleVal && regionName.toLowerCase() !== ruleVal) return false;
+    if (geo.regionCode.toLowerCase() !== ruleVal && geo.regionName.toLowerCase() !== ruleVal) return false;
   }
-  if (loc.city && loc.city.toLowerCase() !== city.toLowerCase()) return false;
+  if (loc.city && loc.city.toLowerCase() !== geo.city.toLowerCase()) return false;
   return true;
 }
 
 function locationMatcher(rule: Record<string, unknown>, ctx: MatcherContext): boolean {
-  const cookies = ctx.cookies ?? {};
-  const regionName = cookies.__cf_geo_region ? decodeURIComponent(cookies.__cf_geo_region) : "";
-  const regionCode = cookies.__cf_geo_region_code ? decodeURIComponent(cookies.__cf_geo_region_code) : "";
-  const country = cookies.__cf_geo_country ? decodeURIComponent(cookies.__cf_geo_country) : "";
-  const city = cookies.__cf_geo_city ? decodeURIComponent(cookies.__cf_geo_city) : "";
+  const geo = getGeoData(ctx);
+  if (!geo.country) return !((rule.includeLocations as unknown[] | undefined)?.length);
 
   const includeLocations = rule.includeLocations as LocationRule[] | undefined;
   const excludeLocations = rule.excludeLocations as LocationRule[] | undefined;
 
-  if (excludeLocations?.some((loc) => matchesLocationRule(loc, regionName, regionCode, country, city))) {
+  if (excludeLocations?.some((loc) => matchesLocationRule(loc, geo))) {
     return false;
   }
   if (includeLocations?.length) {
-    return includeLocations.some((loc) => matchesLocationRule(loc, regionName, regionCode, country, city));
+    return includeLocations.some((loc) => matchesLocationRule(loc, geo));
   }
   return true;
 }
