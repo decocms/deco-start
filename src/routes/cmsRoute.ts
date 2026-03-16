@@ -30,8 +30,13 @@ import {
 } from "@tanstack/react-start/server";
 import { createElement } from "react";
 import { preloadSectionComponents } from "../cms/registry";
-import type { DeferredSection, MatcherContext, ResolvedSection } from "../cms/resolve";
-import { resolveDecoPage, resolveDeferredSection } from "../cms/resolve";
+import type { DeferredSection, MatcherContext, PageSeo, ResolvedSection } from "../cms/resolve";
+import {
+  extractSeoFromProps,
+  extractSeoFromSections,
+  resolveDecoPage,
+  resolveDeferredSection,
+} from "../cms/resolve";
 import { runSectionLoaders, runSingleSectionLoader } from "../cms/sectionLoaders";
 import {
   type CacheProfile,
@@ -40,6 +45,7 @@ import {
   routeCacheDefaults,
 } from "../sdk/cacheHeaders";
 import { normalizeUrlsInObject } from "../sdk/normalizeUrls";
+import { type Device, detectDevice } from "../sdk/useDevice";
 
 const isServer = typeof document === "undefined";
 
@@ -87,12 +93,23 @@ async function loadCmsPageInternal(fullPath: string) {
   await preloadSectionComponents(eagerKeys);
 
   const cacheProfile = detectCacheProfile(basePath);
+  const ua = getRequestHeader("user-agent") ?? "";
+  const device = detectDevice(ua);
+
+  // Build SEO: merge page-level seo block (primary) with section-contributed SEO (secondary)
+  const seo = await buildPageSeo(page.seoSection, enrichedSections, request);
+
+  // Destructure seoSection out — it's an internal artifact, not serialized to client
+  const { seoSection: _seo, ...pageData } = page;
+
   return {
-    ...page,
+    ...pageData,
     resolvedSections: normalizeUrlsInObject(enrichedSections),
     deferredSections: normalizeUrlsInObject(page.deferredSections),
     cacheProfile,
     pageUrl: urlWithSearch,
+    seo,
+    device,
   };
 }
 
@@ -116,8 +133,9 @@ export const loadCmsPage = createServerFn({ method: "GET" })
  */
 export const loadCmsHomePage = createServerFn({ method: "GET" }).handler(async () => {
   const request = getRequest();
+  const ua = getRequestHeader("user-agent") ?? "";
   const matcherCtx: MatcherContext = {
-    userAgent: getRequestHeader("user-agent") ?? "",
+    userAgent: ua,
     url: getRequestUrl().toString(),
     path: "/",
     cookies: getCookies(),
@@ -130,10 +148,17 @@ export const loadCmsHomePage = createServerFn({ method: "GET" }).handler(async (
   const eagerKeys = enrichedSections.map((s) => s.component);
   await preloadSectionComponents(eagerKeys);
 
+  const device = detectDevice(ua);
+  const seo = await buildPageSeo(page.seoSection, enrichedSections, request);
+
+  const { seoSection: _seo, ...pageData } = page;
+
   return {
-    ...page,
+    ...pageData,
     resolvedSections: normalizeUrlsInObject(enrichedSections),
     deferredSections: normalizeUrlsInObject(page.deferredSections),
+    seo,
+    device,
   };
 });
 
@@ -208,6 +233,8 @@ export interface CmsRouteOptions {
   siteName: string;
   /** Default page title when CMS page has no name. */
   defaultTitle: string;
+  /** Default description for pages without section-contributed SEO. */
+  defaultDescription?: string;
   /**
    * Search params to exclude from loader deps.
    * These params won't trigger a server re-fetch when they change.
@@ -218,15 +245,148 @@ export interface CmsRouteOptions {
   pendingComponent?: () => any;
 }
 
+type CmsPageLoaderData = {
+  name?: string;
+  cacheProfile?: CacheProfile;
+  seo?: PageSeo;
+  device?: Device;
+} | null;
+
+// ---------------------------------------------------------------------------
+// Page SEO assembly — merges page.seo block with section-contributed SEO
+// ---------------------------------------------------------------------------
+
+/**
+ * Process the resolved SEO section from page.seo, run its section loader
+ * if registered, apply title/description templates, and merge with
+ * section-contributed SEO.
+ */
+async function buildPageSeo(
+  seoSection: ResolvedSection | null | undefined,
+  enrichedSections: ResolvedSection[],
+  request: Request,
+): Promise<PageSeo> {
+  // Secondary source: SEO sections embedded in the sections array
+  const sectionSeo = extractSeoFromSections(enrichedSections);
+
+  if (!seoSection) return sectionSeo;
+
+  // Run the section loader on the seo section if one is registered
+  // (e.g., SEOPDP loader transforms {jsonLD: ProductDetailsPage} → {title, description, ...})
+  let enrichedProps = seoSection.props;
+  try {
+    const enriched = await runSingleSectionLoader(seoSection, request);
+    if (enriched) enrichedProps = enriched.props;
+  } catch {
+    // Section loader failed — use the raw resolved props
+  }
+
+  const pageSeo = extractSeoFromProps(enrichedProps);
+
+  // Apply title/description templates from the SEO block config.
+  // SeoV2 blocks carry templates like "%s | CASA & VIDEO" that wrap
+  // the computed title. Template "%s" is a no-op.
+  const rawProps = seoSection.props;
+  const titleTemplate = rawProps.titleTemplate as string | undefined;
+  const descTemplate = rawProps.descriptionTemplate as string | undefined;
+  if (titleTemplate && titleTemplate !== "%s" && pageSeo.title) {
+    pageSeo.title = titleTemplate.replace("%s", pageSeo.title);
+  }
+  if (descTemplate && descTemplate !== "%s" && pageSeo.description) {
+    pageSeo.description = descTemplate.replace("%s", pageSeo.description);
+  }
+
+  // Primary source (page.seo) overrides secondary (section-contributed).
+  // Only truthy fields in pageSeo override — undefined keys don't clear sectionSeo.
+  return { ...sectionSeo, ...pageSeo };
+}
+
+// ---------------------------------------------------------------------------
+// Head metadata builder
+// ---------------------------------------------------------------------------
+
+/**
+ * Build TanStack Router `head()` metadata from page-level and section-contributed SEO.
+ * Emits: title, description, canonical, OG tags, Twitter Card, robots directive.
+ */
+function buildHead(
+  loaderData: CmsPageLoaderData | undefined,
+  siteName: string,
+  defaultTitle: string,
+  defaultDescription?: string,
+) {
+  const seo = loaderData?.seo;
+  const title = seo?.title
+    ? seo.title
+    : loaderData?.name
+      ? `${loaderData.name} | ${siteName}`
+      : defaultTitle;
+  const description = seo?.description || defaultDescription;
+  const image = seo?.image;
+  const canonical = seo?.canonical;
+  const noIndex = seo?.noIndexing;
+
+  const meta: Record<string, string>[] = [{ title }];
+
+  if (description) {
+    meta.push({ name: "description", content: description });
+  }
+
+  // Robots
+  if (noIndex) {
+    meta.push({ name: "robots", content: "noindex, nofollow" });
+  }
+
+  // Open Graph
+  meta.push({ property: "og:title", content: title });
+  if (description) meta.push({ property: "og:description", content: description });
+  if (image) meta.push({ property: "og:image", content: image });
+  meta.push({ property: "og:type", content: seo?.type || "website" });
+  if (canonical) meta.push({ property: "og:url", content: canonical });
+
+  // Twitter Card
+  meta.push({ name: "twitter:card", content: image ? "summary_large_image" : "summary" });
+  meta.push({ name: "twitter:title", content: title });
+  if (description) meta.push({ name: "twitter:description", content: description });
+  if (image) meta.push({ name: "twitter:image", content: image });
+
+  const links: Record<string, string>[] = [];
+  if (canonical) {
+    links.push({ rel: "canonical", href: canonical });
+  }
+
+  // JSON-LD structured data — rendered as <script type="application/ld+json"> in <head>
+  const scripts: Array<{ type: string; children: string }> = [];
+  if (seo?.jsonLDs?.length) {
+    for (const jsonLD of seo.jsonLDs) {
+      scripts.push({
+        type: "application/ld+json",
+        children: JSON.stringify(jsonLD),
+      });
+    }
+  }
+
+  return { meta, links, scripts };
+}
+
 /**
  * Returns a TanStack Router route config object for a CMS catch-all route.
  * Spread the result into your `createFileRoute("/$")({...})` call.
  *
- * Includes: loaderDeps, loader, headers, head, staleTime/gcTime.
+ * Includes: loaderDeps, loader, headers, head (with full SEO), staleTime/gcTime.
  * Does NOT include: component, notFoundComponent (site provides these).
+ *
+ * SEO metadata is extracted from sections registered via `registerSeoSections()`.
+ * The `head()` function emits title, description, canonical, OG tags, and robots.
  */
 export function cmsRouteConfig(options: CmsRouteOptions) {
-  const { siteName, defaultTitle, ignoreSearchParams = ["skuId"], pendingComponent } = options;
+  const {
+    siteName,
+    defaultTitle,
+    defaultDescription,
+    ignoreSearchParams = ["skuId"],
+    pendingComponent,
+  } = options;
 
   const ignoreSet = new Set(ignoreSearchParams);
 
@@ -253,9 +413,6 @@ export function cmsRouteConfig(options: CmsRouteOptions) {
         : "";
       const page = await loadCmsPage({ data: basePath + searchStr });
 
-      // On the client (SPA navigation or initial hydration), pre-import
-      // eager section modules BEFORE React renders. This ensures
-      // getResolvedComponent() returns a value and we skip React.lazy.
       if (!isServer && page?.resolvedSections) {
         const keys = page.resolvedSections.map((s: ResolvedSection) => s.component);
         await preloadSectionComponents(keys);
@@ -267,29 +424,31 @@ export function cmsRouteConfig(options: CmsRouteOptions) {
 
     ...routeCacheDefaults("product"),
 
-    headers: ({ loaderData }: { loaderData?: { cacheProfile?: CacheProfile } }) => {
+    headers: ({ loaderData }: { loaderData?: CmsPageLoaderData }) => {
       const profile = loaderData?.cacheProfile ?? "listing";
       return cacheHeaders(profile);
     },
 
-    head: ({ loaderData }: { loaderData?: { name?: string } }) => ({
-      meta: [
-        {
-          title: loaderData?.name ? `${loaderData.name} | ${siteName}` : defaultTitle,
-        },
-      ],
-    }),
+    head: ({ loaderData }: { loaderData?: CmsPageLoaderData }) =>
+      buildHead(loaderData, siteName, defaultTitle, defaultDescription),
   };
 }
 
 /**
  * Returns a TanStack Router route config for the CMS homepage route.
  * Spread into `createFileRoute("/")({...})`.
+ *
+ * Like `cmsRouteConfig`, emits full SEO head metadata from section-contributed data.
  */
 export function cmsHomeRouteConfig(options: {
   defaultTitle: string;
+  defaultDescription?: string;
+  /** Site name for OG title composition. Defaults to defaultTitle. */
+  siteName?: string;
   pendingComponent?: () => any;
 }) {
+  const { defaultTitle, defaultDescription, siteName } = options;
+
   return {
     loader: async () => {
       const page = await loadCmsHomePage();
@@ -302,8 +461,7 @@ export function cmsHomeRouteConfig(options: {
     ...(options.pendingComponent ? { pendingComponent: options.pendingComponent } : {}),
     ...routeCacheDefaults("static"),
     headers: () => cacheHeaders("static"),
-    head: () => ({
-      meta: [{ title: options.defaultTitle }],
-    }),
+    head: ({ loaderData }: { loaderData?: CmsPageLoaderData }) =>
+      buildHead(loaderData, siteName ?? defaultTitle, defaultTitle, defaultDescription),
   };
 }

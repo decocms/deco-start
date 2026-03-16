@@ -615,6 +615,104 @@ async function resolveRawSection(
   return results;
 }
 
+// ---------------------------------------------------------------------------
+// Page-level SEO block resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the page-level `seo` field from the CMS page JSON.
+ *
+ * The CMS stores SEO config in `page.seo` as a separate field from
+ * `page.sections`. This field is typically a SeoV2.tsx block (homepage)
+ * or a site SEO section like SEOPDP.tsx wrapped in Lazy (PDP).
+ *
+ * This function always resolves eagerly — SEO metadata must never be
+ * deferred because search engine crawlers need it in the initial HTML.
+ * Lazy/Deferred wrappers are unwrapped, block references are followed,
+ * and commerce loader refs (e.g. PDP jsonLD) are resolved.
+ *
+ * Returns a ResolvedSection with the final component key and resolved props,
+ * or null if the seo field is absent/unresolvable.
+ */
+export async function resolvePageSeoBlock(
+  seoBlock: Record<string, unknown> | undefined,
+  rctx: ResolveContext,
+): Promise<ResolvedSection | null> {
+  if (!seoBlock || typeof seoBlock !== "object") return null;
+
+  const blocks = loadBlocks();
+  let current = seoBlock;
+
+  for (let depth = 0; depth < 10; depth++) {
+    const rt = current.__resolveType as string | undefined;
+    if (!rt) return null;
+
+    // Lazy wrapper — always unwrap for SEO (never defer)
+    if (rt === "website/sections/Rendering/Lazy.tsx") {
+      const inner = current.section;
+      if (!inner || typeof inner !== "object") return null;
+      current = inner as Record<string, unknown>;
+      continue;
+    }
+
+    // Deferred wrapper — unwrap
+    if (rt === "website/sections/Rendering/Deferred.tsx") {
+      const inner = current.sections;
+      if (!inner || typeof inner !== "object") return null;
+      if (Array.isArray(inner) && inner.length === 1 && inner[0] && typeof inner[0] === "object") {
+        current = inner[0] as Record<string, unknown>;
+        continue;
+      }
+      return null;
+    }
+
+    // Multivariate flag — evaluate matcher and follow matched variant
+    if (
+      rt === "website/flags/multivariate.ts" ||
+      rt === "website/flags/multivariate/section.ts"
+    ) {
+      const variants = current.variants as Array<{ value: unknown; rule?: unknown }> | undefined;
+      if (!variants?.length) return null;
+      let matched: unknown = null;
+      for (const variant of variants) {
+        const rule = variant.rule as Record<string, unknown> | undefined;
+        if (evaluateMatcher(rule, rctx.matcherCtx)) {
+          matched = variant.value;
+          break;
+        }
+      }
+      if (!matched || typeof matched !== "object") return null;
+      current = matched as Record<string, unknown>;
+      continue;
+    }
+
+    // Named block reference — follow the chain
+    const block = blocks[rt] as Record<string, unknown> | undefined;
+    if (block) {
+      const { __resolveType: _, ...overrides } = current;
+      current = { ...block, ...overrides };
+      continue;
+    }
+
+    // Terminal section (site section or framework SEO type).
+    // Resolve all nested prop __resolveType refs (commerce loaders, etc.).
+    const { __resolveType: _, ...rawProps } = current;
+    try {
+      const resolvedProps = await resolveProps(rawProps, rctx);
+      return {
+        component: rt,
+        props: resolvedProps as Record<string, unknown>,
+        key: `seo:${rt}`,
+      };
+    } catch (e) {
+      onResolveError(e, rt, "Page SEO resolution");
+      return null;
+    }
+  }
+
+  return null;
+}
+
 /**
  * Check if a raw CMS section block will produce a layout section.
  * Walks the block reference chain (up to 5 levels) to find the final
@@ -960,12 +1058,94 @@ async function resolveSectionsList(
   return [];
 }
 
+// ---------------------------------------------------------------------------
+// Page-level SEO — extracted from registered SEO sections after resolution
+// ---------------------------------------------------------------------------
+
+export interface PageSeo {
+  title?: string;
+  description?: string;
+  canonical?: string;
+  image?: string;
+  noIndexing?: boolean;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  jsonLDs?: Record<string, any>[];
+  /** Open Graph type — "website" (default), "product", etc. */
+  type?: string;
+}
+
+const seoSectionKeys: Set<string> = G.__deco.seoSections ?? (G.__deco.seoSections = new Set());
+
+/**
+ * Register section component keys whose resolved props contribute page-level
+ * SEO metadata (title, description, canonical, image, jsonLDs, noIndexing).
+ *
+ * After section loaders run, the framework scans these sections and extracts
+ * their SEO fields into `DecoPageResult.seo`, which `cmsRouteConfig` uses
+ * to generate `<head>` metadata (meta tags, OG, canonical, robots).
+ *
+ * JSON-LD structured data stays in the section props for the section
+ * component to render as `<script type="application/ld+json">`.
+ */
+export function registerSeoSections(keys: string[]): void {
+  for (const k of keys) seoSectionKeys.add(k);
+}
+
+/** Check if a section key is registered as an SEO section. */
+export function isSeoSection(key: string): boolean {
+  return seoSectionKeys.has(key);
+}
+
+/**
+ * Pick standard SEO fields from a props object.
+ * Works for both framework SEO types (SeoV2) and site SEO sections (SEOPDP).
+ */
+export function extractSeoFromProps(props: Record<string, unknown>): PageSeo {
+  const seo: PageSeo = {};
+  if (props.title) seo.title = props.title as string;
+  if (props.description) seo.description = props.description as string;
+  if (props.canonical) seo.canonical = props.canonical as string;
+  if (props.image) seo.image = props.image as string;
+  if (props.noIndexing !== undefined) seo.noIndexing = props.noIndexing as boolean;
+  if (props.type) seo.type = props.type as string;
+  if (Array.isArray(props.jsonLDs) && props.jsonLDs.length) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    seo.jsonLDs = props.jsonLDs as Record<string, any>[];
+  }
+  return seo;
+}
+
+/**
+ * Extract SEO metadata from resolved sections registered via
+ * `registerSeoSections`. Later sections override earlier ones
+ * (e.g., a PDP SEO section overrides a generic page SEO).
+ */
+export function extractSeoFromSections(sections: ResolvedSection[]): PageSeo {
+  const seo: PageSeo = {};
+  for (const section of sections) {
+    if (!seoSectionKeys.has(section.component)) continue;
+    const extracted = extractSeoFromProps(section.props);
+    if (extracted.jsonLDs) {
+      extracted.jsonLDs = [...(seo.jsonLDs ?? []), ...extracted.jsonLDs];
+    }
+    Object.assign(seo, extracted);
+  }
+  return seo;
+}
+
 export interface DecoPageResult {
   name: string;
   path: string;
   params: Record<string, string>;
   resolvedSections: ResolvedSection[];
   deferredSections: DeferredSection[];
+  /**
+   * Resolved SEO block from the page-level `seo` field in the CMS JSON.
+   * Contains the section component key and resolved props (with commerce
+   * loader data already fetched). Needs section loader enrichment in
+   * cmsRoute before SEO fields can be extracted.
+   */
+  seoSection?: ResolvedSection | null;
 }
 
 export async function resolveDecoPage(
@@ -1072,12 +1252,27 @@ export async function resolveDecoPage(
 
   const allResults = await Promise.all(eagerResults);
 
+  // Resolve page-level SEO block (page.seo field) — always eager.
+  // Runs after sections to benefit from memoized commerce loader results.
+  let seoSection: ResolvedSection | null = null;
+  if (page.seo) {
+    try {
+      seoSection = await resolvePageSeoBlock(
+        page.seo as Record<string, unknown>,
+        rctx,
+      );
+    } catch (e) {
+      onResolveError(e, "page.seo", "Page SEO block resolution");
+    }
+  }
+
   return {
     name: page.name,
     path: page.path || targetPath,
     params,
     resolvedSections: allResults.flat(),
     deferredSections,
+    seoSection,
   };
 }
 

@@ -235,6 +235,7 @@ See: skill `deco-islands-migration`
 6. Wire `onBeforeResolve()` → `initVtexFromBlocks()` for VTEX config
 7. Configure `setAsyncRenderingConfig()` with `alwaysEager` for critical sections
 8. Configure admin: `setMetaData()`, `setRenderShell()`, `setInvokeLoaders()`
+9. **Register SEO sections via `registerSeoSections()`** — identify sections that produce title/description/canonical (typically SEOPDP, SEOPLP). Register their loaders in `registerSectionLoaders` too.
 
 **Template**: `templates/setup-ts.md`
 
@@ -250,15 +251,17 @@ See: skill `deco-async-rendering-site-guide`
 
 **Actions**:
 1. Create `src/router.tsx` with scroll restoration
-2. Create `src/routes/__root.tsx` with QueryClient, LiveControls, NavigationProgress, analytics
-3. Create `src/routes/index.tsx` using `cmsHomeRouteConfig()`
-4. Create `src/routes/$.tsx` using `cmsRouteConfig()`
+2. Create `src/routes/__root.tsx` with QueryClient, LiveControls, NavigationProgress, analytics. **Include fallback `description`, `og:site_name`, `og:locale` in root `head()`.** Do NOT include a hardcoded `Device.Provider`.
+3. Create `src/routes/index.tsx` using `cmsHomeRouteConfig({ defaultTitle, defaultDescription, siteName })`
+4. Create `src/routes/$.tsx` using `cmsRouteConfig({ siteName, defaultTitle, defaultDescription })` — spread the full config, do NOT cherry-pick fields. The framework handles SEO head, cache headers, and staleTime/gcTime.
+5. **Create/port `Seo.tsx` component** — must render JSON-LD structured data (NOT return null). Meta tags are handled by the framework's `head()`.
+6. **Port device detection** — use `useSyncExternalStore` + `matchMedia` for client-side. Use `registerSectionLoaders` for server-side UA detection. Do NOT use a hardcoded `Device.Provider`.
 
 **Templates**: `templates/root-route.md`, `templates/router.md`
 
-**Exit**: Routes compile, CMS pages resolve
+**Exit**: Routes compile, CMS pages resolve, PDPs have JSON-LD + meta description in `<head>`
 
-See: skill `deco-tanstack-navigation`
+See: skills `deco-tanstack-navigation`, `deco-cms-route-config`
 
 ---
 
@@ -566,6 +569,7 @@ The conductor approach that worked (836 errors → 0 across 213 files) treated e
 | deco-apps-vtex-porting | Understanding VTEX loader internals (Phase 4-5) |
 | deco-islands-migration | Eliminating islands/ (Phase 6) |
 | deco-async-rendering-site-guide | Lazy wrappers, LoadingFallback (Phase 7, 10) |
+| deco-cms-route-config | Route config, SEO architecture, device detection (Phase 7-8) |
 | deco-tanstack-navigation | Link, prefetch, scroll issues (Phase 8) |
 | deco-edge-caching | Worker caching, cache profiles (Phase 9) |
 | deco-tanstack-hydration-fixes | Hydration mismatches post-migration |

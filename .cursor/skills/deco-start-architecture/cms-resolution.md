@@ -190,6 +190,82 @@ import { addSkipResolveType } from "@decocms/start/cms";
 addSkipResolveType("custom/loaders/myCustomLoader.ts");
 ```
 
+### Page-Level SEO Resolution (`page.seo`)
+
+CMS page JSONs have a top-level `seo` field separate from `sections`:
+
+```json
+{
+  "name": "Home",
+  "path": "/",
+  "sections": [ ... ],
+  "seo": {
+    "__resolveType": "website/sections/Seo/SeoV2.tsx",
+    "title": "My Store",
+    "description": "Best prices",
+    "canonical": "https://example.com/",
+    "jsonLDs": [{ "@type": "Organization", ... }],
+    "titleTemplate": "%s",
+    "descriptionTemplate": "%s",
+    "type": "website"
+  }
+}
+```
+
+For PDP pages, `page.seo` is often wrapped in `Lazy.tsx` with a commerce loader:
+
+```json
+{
+  "seo": {
+    "__resolveType": "website/sections/Rendering/Lazy.tsx",
+    "section": {
+      "__resolveType": "site/sections/SEOPDP.tsx",
+      "jsonLD": { "__resolveType": "Intelligent Search PDP Loader" },
+      "titleTemplate": "%s | STORE NAME",
+      "descriptionTemplate": "%s | STORE NAME"
+    }
+  }
+}
+```
+
+`resolvePageSeoBlock()` handles this by:
+1. **Always unwrapping Lazy/Deferred** — SEO must never be deferred for crawlers
+2. Following named block references and multivariate flags
+3. Resolving all nested `__resolveType` props (commerce loaders for PDP product data)
+4. Returning a `ResolvedSection` with the component key and resolved props
+
+The result is stored in `DecoPageResult.seoSection` and processed in `cmsRoute.ts`:
+1. Run the registered section loader (e.g., SEOPDP transforms `{jsonLD: ProductDetailsPage}` → `{title, description, canonical, image, jsonLDs}`)
+2. Extract `PageSeo` fields via `extractSeoFromProps()`
+3. Apply `titleTemplate`/`descriptionTemplate` from the CMS config (e.g., `"%s | STORE NAME"`)
+4. Merge with section-contributed SEO (page.seo is primary, sections are secondary)
+
+```typescript
+interface PageSeo {
+  title?: string;
+  description?: string;
+  canonical?: string;
+  image?: string;
+  noIndexing?: boolean;
+  jsonLDs?: Record<string, any>[];
+  type?: string;  // og:type: "website", "product", etc.
+}
+```
+
+`buildHead()` in `cmsRouteConfig` generates full `<head>` metadata from `PageSeo`: `<title>`, `<meta name="description">`, `<link rel="canonical">`, Open Graph (including `og:url`, `og:type`), Twitter Card, and robots directives.
+
+### SEO Section Registry (secondary source)
+
+Sections in `page.sections` that also contribute SEO metadata are registered via `registerSeoSections()`:
+
+```typescript
+registerSeoSections(["site/sections/SEOPDP.tsx"]);
+```
+
+`extractSeoFromSections()` scans registered sections and extracts SEO fields. This is the **secondary** source — `page.seo` always takes precedence when both are present.
+
+Note: PLP and search pages typically lack a `page.seo` field. For these, `cmsRouteConfig` falls back to composing a title from the page name and `siteName` option.
+
 ### PostHog Matchers (`matchers/posthog.ts`)
 
 Server-side PostHog feature flag evaluation:
