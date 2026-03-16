@@ -726,6 +726,17 @@ export function createDecoWorkerEntry(
         return origin;
       }
 
+      // Responses with Set-Cookie must never be cached — they carry
+      // per-user session/auth tokens that would leak to other users.
+      const hasSetCookie = origin.headers.has("set-cookie");
+      if (hasSetCookie) {
+        const resp = new Response(origin.body, origin);
+        resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
+        resp.headers.set("X-Cache", "BYPASS");
+        resp.headers.set("X-Cache-Reason", "set-cookie");
+        return resp;
+      }
+
       // Determine the right cache profile for this URL
       const profile = getProfile(url);
       const profileConfig = getCacheProfileConfig(profile);

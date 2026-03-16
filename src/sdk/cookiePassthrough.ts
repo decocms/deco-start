@@ -52,10 +52,6 @@ export function forwardResponseCookies(cookies: string[]): void {
 				? headers.getSetCookie()
 				: [];
 		setResponseHeader("set-cookie", [...existing, ...cookies]);
-
-		// Responses with Set-Cookie must not be cached by CDN/edge,
-		// otherwise one user's session cookies could be served to another.
-		setResponseHeader("cache-control", "no-store, no-cache");
 	} catch {
 		// Outside request context (build time, etc.) — ignore.
 	}
