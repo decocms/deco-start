@@ -237,6 +237,110 @@ function ensureInitialized() {
 // Matcher evaluation
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Location matcher — uses Cloudflare's cf-ipcountry / cf.region headers
+// ---------------------------------------------------------------------------
+
+const COUNTRY_NAME_TO_ISO: Record<string, string> = {
+  brasil: "BR",
+  brazil: "BR",
+  argentina: "AR",
+  chile: "CL",
+  colombia: "CO",
+  mexico: "MX",
+  "méxico": "MX",
+  uruguay: "UY",
+  paraguay: "PY",
+  peru: "PE",
+  "perú": "PE",
+  "united states": "US",
+  "estados unidos": "US",
+  portugal: "PT",
+  spain: "ES",
+  "españa": "ES",
+};
+
+function normalizeCountry(name: string): string {
+  return COUNTRY_NAME_TO_ISO[name.toLowerCase()] ?? name.toUpperCase();
+}
+
+interface GeoLocation {
+  country?: string;
+  regionCode?: string;
+  city?: string;
+}
+
+function getRequestGeo(ctx: MatcherContext): GeoLocation | null {
+  const req = ctx.request;
+  if (!req) return null;
+
+  // Cloudflare Workers: request.cf contains geo data
+  const cf = (req as any).cf as Record<string, unknown> | undefined;
+  if (cf) {
+    return {
+      country: cf.country as string | undefined,
+      regionCode: cf.region as string | undefined,
+      city: cf.city as string | undefined,
+    };
+  }
+
+  // Fallback: standard geo headers (Deno Deploy, Vercel, etc.)
+  const country =
+    ctx.headers?.["cf-ipcountry"] ??
+    ctx.headers?.["x-vercel-ip-country"];
+  const region =
+    ctx.headers?.["cf-region"] ??
+    ctx.headers?.["x-vercel-ip-country-region"];
+
+  if (country || region) {
+    return { country, regionCode: region };
+  }
+
+  return null;
+}
+
+function evaluateLocationMatcher(
+  rule: Record<string, unknown>,
+  ctx: MatcherContext,
+): boolean {
+  const geo = getRequestGeo(ctx);
+  if (!geo) return false;
+
+  const includes = rule.includeLocations as GeoLocation[] | undefined;
+  const excludes = rule.excludeLocations as GeoLocation[] | undefined;
+
+  const matches = (loc: GeoLocation): boolean => {
+    if (loc.country) {
+      const expected = normalizeCountry(loc.country);
+      if (!geo.country || expected !== geo.country.toUpperCase()) return false;
+    }
+    if (loc.regionCode) {
+      if (!geo.regionCode) return false;
+      if (loc.regionCode.toLowerCase() !== geo.regionCode.toLowerCase()) return false;
+    }
+    if (loc.city) {
+      if (!geo.city) return false;
+      if (loc.city.toLowerCase() !== geo.city.toLowerCase()) return false;
+    }
+    return true;
+  };
+
+  if (excludes?.length) {
+    for (const loc of excludes) {
+      if (matches(loc)) return false;
+    }
+  }
+
+  if (includes?.length) {
+    for (const loc of includes) {
+      if (matches(loc)) return true;
+    }
+    return false;
+  }
+
+  return true;
+}
+
 export function evaluateMatcher(rule: Record<string, unknown> | undefined, ctx: MatcherContext): boolean {
   if (!rule) return true;
 
@@ -281,6 +385,10 @@ export function evaluateMatcher(rule: Record<string, unknown> | undefined, ctx: 
       const start = typeof rule.start === "string" ? new Date(rule.start).getTime() : 0;
       const end = typeof rule.end === "string" ? new Date(rule.end).getTime() : Infinity;
       return now >= start && now <= end;
+    }
+
+    case "website/matchers/location.ts": {
+      return evaluateLocationMatcher(rule, ctx);
     }
 
     default: {
@@ -356,9 +464,14 @@ async function internalResolve(value: unknown, rctx: ResolveContext): Promise<un
   // "resolved" short-circuit
   if (resolveType === "resolved") return obj.data ?? null;
 
-  // Lazy section wrapper
+  // Lazy section wrapper — unwrap single inner section
   if (resolveType === "website/sections/Rendering/Lazy.tsx") {
     return obj.section ? internalResolve(obj.section, childCtx) : null;
+  }
+
+  // Deferred section wrapper (legacy Fresh/HTMX) — unwrap inner sections array
+  if (resolveType === "website/sections/Rendering/Deferred.tsx") {
+    return obj.sections ? internalResolve(obj.sections, childCtx) : null;
   }
 
   // Request param extraction
@@ -609,7 +722,7 @@ function isRawSectionLayout(section: unknown): string | null {
 
 /**
  * Resolve the final section component key by walking block references,
- * unwrapping Lazy wrappers, and evaluating multivariate flags.
+ * unwrapping Lazy/Deferred wrappers, and evaluating multivariate flags.
  * Returns null if not determinable.
  */
 function resolveFinalSectionKey(
@@ -625,9 +738,26 @@ function resolveFinalSectionKey(
     const rt = current.__resolveType as string | undefined;
     if (!rt) return null;
 
+    // Lazy wrapper — unwrap single inner section
     if (rt === "website/sections/Rendering/Lazy.tsx") {
       const inner = current.section;
       if (!inner || typeof inner !== "object") return null;
+      current = inner as Record<string, unknown>;
+      continue;
+    }
+
+    // Deferred wrapper (legacy) — unwrap first inner section if deterministic
+    if (rt === "website/sections/Rendering/Deferred.tsx") {
+      const inner = current.sections;
+      if (!inner || typeof inner !== "object") return null;
+      if (Array.isArray(inner)) {
+        if (inner.length === 1 && inner[0] && typeof inner[0] === "object") {
+          current = inner[0] as Record<string, unknown>;
+          continue;
+        }
+        return null;
+      }
+      // sections is an object (e.g. a flag) — follow it
       current = inner as Record<string, unknown>;
       continue;
     }
@@ -670,20 +800,61 @@ function resolveFinalSectionKey(
 }
 
 /**
- * Check if a raw CMS section is directly wrapped in `Lazy.tsx`.
- * Checks both the section itself and one level of block reference.
+ * Walk the full wrapper chain (block refs, multivariate flags, Lazy, Deferred)
+ * and return true if a deferral wrapper (Lazy.tsx or Deferred.tsx) is found
+ * at any level. This is used by shouldDeferSection to determine if the CMS
+ * editor intended this section to be deferred.
  */
-function isCmsLazyWrapped(section: unknown): boolean {
+function isCmsDeferralWrapped(section: unknown, matcherCtx?: MatcherContext): boolean {
   if (!section || typeof section !== "object") return false;
-  const obj = section as Record<string, unknown>;
-  const rt = obj.__resolveType as string | undefined;
-  if (!rt) return false;
-
-  if (rt === "website/sections/Rendering/Lazy.tsx") return true;
 
   const blocks = loadBlocks();
-  const block = blocks[rt] as Record<string, unknown> | undefined;
-  if (block && block.__resolveType === "website/sections/Rendering/Lazy.tsx") return true;
+  let current = section as Record<string, unknown>;
+
+  for (let depth = 0; depth < 10; depth++) {
+    const rt = current.__resolveType as string | undefined;
+    if (!rt) return false;
+
+    if (
+      rt === "website/sections/Rendering/Lazy.tsx" ||
+      rt === "website/sections/Rendering/Deferred.tsx"
+    ) {
+      return true;
+    }
+
+    // Walk through multivariate flags to check the matched variant
+    if (
+      rt === "website/flags/multivariate.ts" ||
+      rt === "website/flags/multivariate/section.ts"
+    ) {
+      const variants = current.variants as
+        | Array<{ value: unknown; rule?: unknown }>
+        | undefined;
+      if (!variants?.length) return false;
+
+      let matched: unknown = null;
+      for (const variant of variants) {
+        const rule = variant.rule as Record<string, unknown> | undefined;
+        if (evaluateMatcher(rule, matcherCtx ?? {})) {
+          matched = variant.value;
+          break;
+        }
+      }
+      if (!matched || typeof matched !== "object") return false;
+      current = matched as Record<string, unknown>;
+      continue;
+    }
+
+    // Named block reference — follow the chain
+    const block = blocks[rt] as Record<string, unknown> | undefined;
+    if (block) {
+      const { __resolveType: _, ...overrides } = current;
+      current = { ...block, ...overrides, __resolveType: block.__resolveType as string };
+      continue;
+    }
+
+    return false;
+  }
 
   return false;
 }
@@ -702,19 +873,15 @@ function shouldDeferSection(
   const rt = obj.__resolveType as string | undefined;
   if (!rt) return false;
 
-  // Top-level flags (not wrapped in Lazy) — keep eager for safety
-  if (rt === "website/flags/multivariate.ts" || rt === "website/flags/multivariate/section.ts") {
-    return false;
-  }
-
   const finalKey = resolveFinalSectionKey(section, matcherCtx);
   if (!finalKey) return false;
 
   if (cfg.alwaysEager.has(finalKey)) return false;
   if (isLayoutSection(finalKey)) return false;
 
-  // Primary: respect CMS Lazy wrapper as source of truth
-  if (cfg.respectCmsLazy && isCmsLazyWrapped(section)) return true;
+  // Walk the full wrapper chain (including multivariate flags) to detect
+  // Lazy.tsx or Deferred.tsx wrappers at any nesting level.
+  if (cfg.respectCmsLazy && isCmsDeferralWrapped(section, matcherCtx)) return true;
 
   // Fallback: threshold-based deferral for non-Lazy sections
   if (flatIndex >= cfg.foldThreshold) return true;
@@ -725,7 +892,10 @@ function shouldDeferSection(
 /**
  * Follow the block reference chain to find the final section component
  * and collect the CMS props WITHOUT running commerce loaders.
- * Resolves named block references, lazy wrappers, and multivariate flags.
+ * Resolves named block references, Lazy/Deferred wrappers, and multivariate flags.
+ *
+ * For Deferred.tsx with a single inner section, the inner section is returned.
+ * For Deferred.tsx with multiple inner sections, returns null (falls back to eager).
  */
 function resolveSectionShallow(
   section: unknown,
@@ -747,6 +917,23 @@ function resolveSectionShallow(
     if (rt === "website/sections/Rendering/Lazy.tsx") {
       const inner = current.section;
       if (!inner || typeof inner !== "object") return null;
+      current = inner as Record<string, unknown>;
+      continue;
+    }
+
+    // Deferred wrapper (legacy) — unwrap if it contains a single section
+    if (rt === "website/sections/Rendering/Deferred.tsx") {
+      const inner = current.sections;
+      if (!inner || typeof inner !== "object") return null;
+      if (Array.isArray(inner)) {
+        if (inner.length === 1 && inner[0] && typeof inner[0] === "object") {
+          current = inner[0] as Record<string, unknown>;
+          continue;
+        }
+        // Multiple inner sections can't be represented as a single DeferredSection
+        return null;
+      }
+      // sections is an object (e.g. a flag) — follow it
       current = inner as Record<string, unknown>;
       continue;
     }

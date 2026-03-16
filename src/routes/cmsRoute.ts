@@ -64,17 +64,19 @@ async function loadCmsPageInternal(fullPath: string) {
         ? new URL(fullPath, serverUrl.origin).toString()
         : serverUrl.toString();
 
+  const originRequest = getRequest();
   const matcherCtx: MatcherContext = {
     userAgent: getRequestHeader("user-agent") ?? "",
     url: urlWithSearch,
     path: basePath,
     cookies: getCookies(),
+    request: originRequest,
   };
   const page = await resolveDecoPage(basePath, matcherCtx);
   if (!page) return null;
 
   const request = new Request(urlWithSearch, {
-    headers: getRequest().headers,
+    headers: originRequest.headers,
   });
   const enrichedSections = await runSectionLoaders(page.resolvedSections, request);
 
@@ -113,16 +115,16 @@ export const loadCmsPage = createServerFn({ method: "GET" })
  * Avoids passing data through the server function for the homepage.
  */
 export const loadCmsHomePage = createServerFn({ method: "GET" }).handler(async () => {
+  const request = getRequest();
   const matcherCtx: MatcherContext = {
     userAgent: getRequestHeader("user-agent") ?? "",
     url: getRequestUrl().toString(),
     path: "/",
     cookies: getCookies(),
+    request,
   };
   const page = await resolveDecoPage("/", matcherCtx);
   if (!page) return null;
-
-  const request = getRequest();
   const enrichedSections = await runSectionLoaders(page.resolvedSections, request);
 
   const eagerKeys = enrichedSections.map((s) => s.component);
@@ -147,19 +149,21 @@ export const loadDeferredSection = createServerFn({ method: "POST" })
   .handler(async (ctx) => {
     const { component, rawProps, pagePath, pageUrl } = ctx.data;
 
+    const originRequest = getRequest();
     const serverUrl = getRequestUrl().toString();
     const matcherCtx: MatcherContext = {
       userAgent: getRequestHeader("user-agent") ?? "",
       url: pageUrl || serverUrl,
       path: pagePath,
       cookies: getCookies(),
+      request: originRequest,
     };
 
     const section = await resolveDeferredSection(component, rawProps, pagePath, matcherCtx);
     if (!section) return null;
 
     const request = new Request(pageUrl || serverUrl, {
-      headers: getRequest().headers,
+      headers: originRequest.headers,
     });
     const enriched = await runSingleSectionLoader(section, request);
     return normalizeUrlsInObject(enriched);
