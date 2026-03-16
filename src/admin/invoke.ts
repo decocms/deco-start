@@ -126,6 +126,13 @@ export async function handleInvoke(request: Request): Promise<Response> {
 
     try {
       const result = await found.handler(body, request);
+      // Response passthrough: if the loader/action returns a Response object,
+      // forward it as-is (preserving headers like Set-Cookie). This matches
+      // deco-cx/deco's invokeToHttpResponse behavior where auth loaders return
+      // Response objects with Set-Cookie headers for HttpOnly cookies.
+      if (result instanceof Response) {
+        return result;
+      }
       const filtered = selectFields(result, select);
       return new Response(JSON.stringify(filtered), { status: 200, headers: JSON_HEADERS });
     } catch (error) {
@@ -145,7 +152,13 @@ export async function handleInvoke(request: Request): Promise<Response> {
 
         if (found) {
           try {
-            const result = await found.handler(payload, request);
+            let result = await found.handler(payload, request);
+            // If a loader returns a Response, extract its JSON body for batching.
+            // Set-Cookie headers from batch items are not forwarded individually
+            // (use single invoke for auth loaders that need cookie passthrough).
+            if (result instanceof Response) {
+              try { result = await result.json(); } catch { result = null; }
+            }
             results[key] = selectFields(result, select);
           } catch (error) {
             results[key] = { error: (error as Error).message };
