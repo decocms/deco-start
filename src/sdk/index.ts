@@ -60,6 +60,7 @@ export {
 export { useId } from "./useId";
 export { usePartialSection, useScript, useScriptAsDataURI, useSection } from "./useScript";
 export { createDecoWorkerEntry, type DecoWorkerEntryOptions } from "./workerEntry";
+export { initVtexCookieProviders } from "./vtexCookieProviders";
 export {
   isWrappedError,
   unwrapError,
