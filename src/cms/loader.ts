@@ -97,7 +97,15 @@ export function loadBlocks(): Record<string, unknown> {
 
   const override = blocksOverrideStorage.getStore();
   if (override) {
-    return { ...blockData, ...override };
+    const merged = { ...blockData };
+    for (const [key, value] of Object.entries(override)) {
+      if (value === null || value === undefined) {
+        delete merged[key];
+      } else {
+        merged[key] = value;
+      }
+    }
+    return merged;
   }
   return blockData;
 }

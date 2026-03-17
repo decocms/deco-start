@@ -24,6 +24,7 @@ export interface MetaResponse {
   };
   platform?: string;
   cloudProvider?: string;
+  framework?: string;
   etag?: string;
 }
 
@@ -796,6 +797,7 @@ export function composeMeta(siteMeta: MetaResponse): MetaResponse {
 
   return {
     ...siteMeta,
+    framework: "tanstack-start",
     manifest: {
       blocks: {
         ...(siteMeta.manifest?.blocks || {}),
