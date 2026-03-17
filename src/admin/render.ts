@@ -4,8 +4,9 @@ import { getSection } from "../cms/registry";
 import { resolveValue, WELL_KNOWN_TYPES } from "../cms/resolve";
 import { buildHtmlShell } from "../sdk/htmlShell";
 import { LIVE_CONTROLS_SCRIPT } from "./liveControls";
+import { getPreviewWrapper } from "./setup";
 
-export { setRenderShell } from "./setup";
+export { setRenderShell, setPreviewWrapper } from "./setup";
 
 function wrapInHtmlShell(sectionHtml: string): string {
   return buildHtmlShell({ body: sectionHtml, script: LIVE_CONTROLS_SCRIPT });
@@ -28,7 +29,10 @@ async function renderOneSection(section: Record<string, unknown>): Promise<strin
     const { __resolveType: _, ...sectionProps } = section;
     const { renderToString } = await import("react-dom/server");
     const mod = await sectionLoader();
-    return renderToString(createElement(mod.default, sectionProps));
+    const element = createElement(mod.default, sectionProps);
+    const Wrapper = getPreviewWrapper();
+    const wrapped = Wrapper ? createElement(Wrapper, null, element) : element;
+    return renderToString(wrapped);
   } catch (error) {
     return `<div style="padding:8px;color:red;font-size:12px;">Error rendering ${resolveType}: ${(error as Error).message}</div>`;
   }
@@ -161,7 +165,10 @@ export async function handleRender(request: Request): Promise<Response> {
       const { __resolveType: _, ...cleanProps } = resolvedProps;
       const { renderToString } = await import("react-dom/server");
       const mod = await sectionLoader();
-      const sectionHtml = renderToString(createElement(mod.default, cleanProps));
+      const element = createElement(mod.default, cleanProps);
+      const Wrapper = getPreviewWrapper();
+      const wrapped = Wrapper ? createElement(Wrapper, null, element) : element;
+      const sectionHtml = renderToString(wrapped);
       return new Response(wrapInHtmlShell(sectionHtml), {
         status: 200,
         headers: { "Content-Type": "text/html; charset=utf-8" },
