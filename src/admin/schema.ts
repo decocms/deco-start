@@ -555,6 +555,11 @@ function buildFrameworkSections(sectionAnyOf: any[]) {
       type: { type: "string", title: "Page Type" },
       image: { type: "string", title: "OG Image", format: "image-uri" },
       themeColor: { type: "string", title: "Theme Color", format: "color" },
+      jsonLDs: {
+        type: "array",
+        title: "JSON-LD Structured Data",
+        items: { type: "object", additionalProperties: true },
+      },
     },
   };
   manifestBlocks[SEO_TYPE] = {
@@ -562,6 +567,42 @@ function buildFrameworkSections(sectionAnyOf: any[]) {
     namespace: "website",
   };
   extraAnyOf.push({ $ref: `#/definitions/${seoKey}` });
+
+  // --- website/sections/Seo/SeoV2.tsx ---
+  const SEOV2_TYPE = "website/sections/Seo/SeoV2.tsx";
+  const seoV2Key = toBase64(SEOV2_TYPE);
+  definitions[seoV2Key] = {
+    title: SEOV2_TYPE,
+    type: "object",
+    required: ["__resolveType"],
+    properties: {
+      __resolveType: {
+        type: "string",
+        enum: [SEOV2_TYPE],
+        default: SEOV2_TYPE,
+      },
+      title: { type: "string", title: "Title" },
+      description: { type: "string", title: "Description" },
+      canonical: { type: "string", title: "Canonical URL" },
+      favicon: { type: "string", title: "Favicon", format: "image-uri" },
+      noIndexing: { type: "boolean", title: "No Indexing" },
+      titleTemplate: { type: "string", title: "Title Template" },
+      descriptionTemplate: { type: "string", title: "Description Template" },
+      type: { type: "string", title: "Page Type" },
+      image: { type: "string", title: "OG Image", format: "image-uri" },
+      themeColor: { type: "string", title: "Theme Color", format: "color" },
+      jsonLDs: {
+        type: "array",
+        title: "JSON-LD Structured Data",
+        items: { type: "object", additionalProperties: true },
+      },
+    },
+  };
+  manifestBlocks[SEOV2_TYPE] = {
+    $ref: `#/definitions/${seoV2Key}`,
+    namespace: "website",
+  };
+  extraAnyOf.push({ $ref: `#/definitions/${seoV2Key}` });
 
   // --- website/flags/multivariate/section.ts ---
   const MV_SECTION_TYPE = "website/flags/multivariate/section.ts";
