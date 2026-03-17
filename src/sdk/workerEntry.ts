@@ -722,6 +722,20 @@ export function createDecoWorkerEntry(
               const v = (env[cacheVersionEnv] as string) || "";
               if (v) hit.headers.set("X-Cache-Version", v);
             }
+            // Restore client-facing Cache-Control (the stored version uses sMaxAge
+            // as max-age for Cache API TTL, which would leak to the CDN auto-cache
+            // and cause stale HTML after deploys — the CDN caches under the raw URL,
+            // bypassing BUILD_HASH versioned keys).
+            const hitProfile = getProfile(url);
+            const hitHeaders = cacheHeaders(hitProfile);
+            for (const [k, v] of Object.entries(hitHeaders)) {
+              hit.headers.set(k, v);
+            }
+            // Prevent CDN from auto-caching this response under the raw URL.
+            // The Worker manages edge caching via caches.default with versioned keys;
+            // CDN auto-caching would bypass that versioning and serve stale HTML
+            // after deploys (referencing old CSS/JS fingerprinted filenames).
+            hit.headers.set("CDN-Cache-Control", "no-store");
             return hit;
           }
         } catch {
@@ -785,12 +799,21 @@ export function createDecoWorkerEntry(
         if (v) toReturn.headers.set("X-Cache-Version", v);
       }
 
+      // Prevent CDN from auto-caching this response under the raw URL.
+      // Edge caching is managed by the Worker via caches.default with
+      // BUILD_HASH-versioned keys; CDN auto-caching would bypass versioning
+      // and serve stale HTML after deploys.
+      toReturn.headers.set("CDN-Cache-Control", "no-store");
+
       // For Cache API storage, use sMaxAge as max-age since the Cache API
       // ignores s-maxage and only respects max-age for TTL decisions.
       if (cache) {
         try {
           const toStore = toReturn.clone();
           toStore.headers.set("Cache-Control", `public, max-age=${profileConfig.sMaxAge}`);
+          // Remove CDN-Cache-Control from stored version — it's only needed
+          // on the response to the client to prevent CDN auto-caching.
+          toStore.headers.delete("CDN-Cache-Control");
           ctx.waitUntil(cache.put(cacheKey, toStore));
         } catch {
           // Cache API unavailable — skip storing
