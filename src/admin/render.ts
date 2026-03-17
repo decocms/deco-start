@@ -1,20 +1,60 @@
 import { createElement } from "react";
 import { loadBlocks, withBlocksOverride } from "../cms/loader";
 import { getSection } from "../cms/registry";
-import { resolveValue, WELL_KNOWN_TYPES } from "../cms/resolve";
+import {
+  type MatcherContext,
+  type ResolvedSection,
+  resolvePageSections,
+  resolveValue,
+  WELL_KNOWN_TYPES,
+} from "../cms/resolve";
+import { runSingleSectionLoader } from "../cms/sectionLoaders";
 import { buildHtmlShell } from "../sdk/htmlShell";
 import { LIVE_CONTROLS_SCRIPT } from "./liveControls";
 import { getPreviewWrapper } from "./setup";
 
 export { setRenderShell, setPreviewWrapper } from "./setup";
 
+// Cache the dynamic import — avoids re-importing per section render
+let _renderToString: ((element: any) => string) | null = null;
+async function getRenderToString() {
+  if (!_renderToString) {
+    const mod = await import("react-dom/server");
+    _renderToString = mod.renderToString;
+  }
+  return _renderToString;
+}
+
 function wrapInHtmlShell(sectionHtml: string): string {
   return buildHtmlShell({ body: sectionHtml, script: LIVE_CONTROLS_SCRIPT });
 }
 
 /**
- * Render a single resolved section object to an HTML string.
- * Returns empty string for unknown or SEO-only sections.
+ * Render a single ResolvedSection to an HTML string.
+ * Uses the pre-cached renderToString and the preview wrapper.
+ */
+async function renderResolvedSection(section: ResolvedSection): Promise<string> {
+  const sectionLoader = getSection(section.component);
+  if (!sectionLoader) {
+    return `<div style="padding:8px;color:orange;font-size:12px;border:1px dashed orange;margin:4px 0;">Unsupported: ${section.component}</div>`;
+  }
+
+  try {
+    const renderToString = await getRenderToString();
+    const mod = await sectionLoader();
+    const element = createElement(mod.default, section.props);
+    const Wrapper = getPreviewWrapper();
+    const wrapped = Wrapper ? createElement(Wrapper, null, element) : element;
+    return renderToString(wrapped);
+  } catch (error) {
+    return `<div style="padding:8px;color:red;font-size:12px;">Error rendering ${section.component}: ${(error as Error).message}</div>`;
+  }
+}
+
+/**
+ * Render a single raw section object (with __resolveType) to HTML.
+ * Kept for the single-section preview path where we don't go through
+ * resolvePageSections.
  */
 async function renderOneSection(section: Record<string, unknown>): Promise<string> {
   const resolveType = section.__resolveType as string | undefined;
@@ -27,7 +67,7 @@ async function renderOneSection(section: Record<string, unknown>): Promise<strin
 
   try {
     const { __resolveType: _, ...sectionProps } = section;
-    const { renderToString } = await import("react-dom/server");
+    const renderToString = await getRenderToString();
     const mod = await sectionLoader();
     const element = createElement(mod.default, sectionProps);
     const Wrapper = getPreviewWrapper();
@@ -36,6 +76,37 @@ async function renderOneSection(section: Record<string, unknown>): Promise<strin
   } catch (error) {
     return `<div style="padding:8px;color:red;font-size:12px;">Error rendering ${resolveType}: ${(error as Error).message}</div>`;
   }
+}
+
+/**
+ * Build a MatcherContext from the preview request.
+ * Enables matchers (device, date, cookie, etc.) to evaluate correctly
+ * during preview resolution.
+ */
+function buildPreviewMatcherCtx(request: Request): MatcherContext {
+  const url = new URL(request.url);
+  const deviceHint = url.searchParams.get("deviceHint");
+  const path = url.searchParams.get("path") || "/";
+
+  let userAgent = request.headers.get("user-agent") ?? "";
+  if (deviceHint === "mobile" && !/mobile/i.test(userAgent)) {
+    userAgent += " Mobile";
+  }
+
+  const cookieHeader = request.headers.get("cookie") ?? "";
+  const cookies: Record<string, string> = {};
+  for (const part of cookieHeader.split(";")) {
+    const [k, ...v] = part.trim().split("=");
+    if (k) cookies[k.trim()] = v.join("=").trim();
+  }
+
+  return {
+    userAgent,
+    url: url.toString(),
+    path,
+    cookies,
+    request,
+  };
 }
 
 /**
@@ -121,28 +192,30 @@ export async function handleRender(request: Request): Promise<Response> {
       }
     }
 
-    // Page compositor: resolve + render all child sections
+    // Page compositor: resolve + render all child sections in parallel
     if (component === WELL_KNOWN_TYPES.PAGE) {
-      const rawSections = props.sections;
-      const resolvedSections = await resolveValue(rawSections);
-      const sectionsList = Array.isArray(resolvedSections)
-        ? resolvedSections
-        : resolvedSections
-          ? [resolvedSections]
-          : [];
+      const matcherCtx = buildPreviewMatcherCtx(request);
 
-      const htmlParts: string[] = [];
-      for (const section of sectionsList) {
-        if (!section || typeof section !== "object" || Array.isArray(section)) {
-          continue;
-        }
-        const sectionObj = section as Record<string, unknown>;
-        if (!sectionObj.__resolveType) continue;
-        const html = await renderOneSection(sectionObj);
-        if (html) htmlParts.push(html);
-      }
+      // resolvePageSections uses the same strategy as resolveDecoPage:
+      // parallel section resolution, layout caching, in-flight dedup, memoization
+      const resolvedSections = await resolvePageSections(
+        props.sections,
+        matcherCtx,
+      );
 
-      return new Response(wrapInHtmlShell(htmlParts.join("\n")), {
+      // Run section loaders in parallel — benefits from layout and cacheable caches
+      const enrichedSections = await Promise.all(
+        resolvedSections.map((section) =>
+          runSingleSectionLoader(section, request).catch(() => section),
+        ),
+      );
+
+      // Render all sections in parallel
+      const htmlParts = await Promise.all(
+        enrichedSections.map((section) => renderResolvedSection(section)),
+      );
+
+      return new Response(wrapInHtmlShell(htmlParts.filter(Boolean).join("\n")), {
         status: 200,
         headers: { "Content-Type": "text/html; charset=utf-8" },
       });
@@ -163,7 +236,7 @@ export async function handleRender(request: Request): Promise<Response> {
     try {
       const resolvedProps = (await resolveValue(props)) as Record<string, unknown>;
       const { __resolveType: _, ...cleanProps } = resolvedProps;
-      const { renderToString } = await import("react-dom/server");
+      const renderToString = await getRenderToString();
       const mod = await sectionLoader();
       const element = createElement(mod.default, cleanProps);
       const Wrapper = getPreviewWrapper();

@@ -1277,6 +1277,71 @@ export async function resolveDecoPage(
 }
 
 /**
+ * Resolve a raw sections array into ResolvedSection[] with the same
+ * optimizations as resolveDecoPage: parallel resolution, layout caching,
+ * in-flight dedup, and memoization.
+ *
+ * Unlike resolveDecoPage, this does NOT look up a page by path — the
+ * caller provides the raw section array directly. Used by the admin
+ * preview renderer where page data comes from the POST body.
+ *
+ * All sections are resolved eagerly (no deferred/async split) since
+ * admin previews need the full rendered output.
+ */
+export async function resolvePageSections(
+  rawSectionsInput: unknown,
+  matcherCtx?: MatcherContext,
+): Promise<ResolvedSection[]> {
+  ensureInitialized();
+
+  const ctx: MatcherContext = matcherCtx ?? {};
+  const rctx: ResolveContext = { matcherCtx: ctx, memo: new Map(), depth: 0 };
+
+  let rawSections: unknown[];
+  if (Array.isArray(rawSectionsInput)) {
+    rawSections = rawSectionsInput;
+  } else {
+    rawSections = await resolveSectionsList(rawSectionsInput, rctx);
+  }
+
+  const eagerResults: Promise<ResolvedSection[]>[] = [];
+
+  for (const section of rawSections) {
+    const promise = (async (): Promise<ResolvedSection[]> => {
+      try {
+        const layoutKey = isRawSectionLayout(section);
+
+        if (layoutKey) {
+          const cached = getCachedResolvedLayout(layoutKey);
+          if (cached) return cached;
+
+          const inflight = resolvedLayoutInflight.get(layoutKey);
+          if (inflight) return inflight;
+
+          const p = resolveRawSection(section, rctx).then((results) => {
+            setCachedResolvedLayout(layoutKey, results);
+            return results;
+          });
+          resolvedLayoutInflight.set(layoutKey, p);
+          p.finally(() => resolvedLayoutInflight.delete(layoutKey));
+          return p;
+        }
+
+        return resolveRawSection(section, rctx);
+      } catch (e) {
+        onResolveError(e, "section", "Preview section resolution");
+        return [];
+      }
+    })();
+
+    eagerResults.push(promise);
+  }
+
+  const allResults = await Promise.all(eagerResults);
+  return allResults.flat();
+}
+
+/**
  * Resolve a single deferred section's raw props into a fully resolved section.
  * Called by the loadDeferredSection server function when a section scrolls into view.
  *

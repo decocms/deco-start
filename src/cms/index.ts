@@ -49,6 +49,7 @@ export {
   registerMatcher,
   registerSeoSections,
   resolveDecoPage,
+  resolvePageSections,
   resolvePageSeoBlock,
   resolveDeferredSection,
   resolveValue,
