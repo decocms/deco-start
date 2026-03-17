@@ -6,7 +6,7 @@ export function handleDecofileRead(): Response {
   const blocks = loadBlocks();
   const revision = getRevision();
 
-  return new Response(JSON.stringify({ blocks, revision }), {
+  return new Response(JSON.stringify(blocks), {
     status: 200,
     headers: {
       "Content-Type": "application/json",
