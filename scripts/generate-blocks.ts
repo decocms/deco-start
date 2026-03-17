@@ -22,7 +22,17 @@ const blocksDir = path.resolve(process.cwd(), arg("blocks-dir", ".deco/blocks"))
 const outFile = path.resolve(process.cwd(), arg("out-file", "src/server/cms/blocks.gen.ts"));
 
 function decodeBlockName(filename: string): string {
-  return decodeURIComponent(decodeURIComponent(filename)).replace(/\.json$/, "");
+  let name = filename.replace(/\.json$/, "");
+  while (name.includes("%")) {
+    try {
+      const next = decodeURIComponent(name);
+      if (next === name) break;
+      name = next;
+    } catch {
+      break; // literal % in the decoded name — nothing left to decode
+    }
+  }
+  return name;
 }
 
 if (!fs.existsSync(blocksDir)) {
