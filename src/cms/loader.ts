@@ -161,6 +161,31 @@ function matchPath(pattern: string, urlPath: string): Record<string, string> | n
   return params;
 }
 
+/**
+ * Extract the site-wide SEO config from the "Site" app block.
+ *
+ * In the original deco-cx/deco framework this is `ctx.seo` — the app-level
+ * SEO configuration that provides fallback title, description, and templates
+ * when page-level seo blocks don't supply them.
+ */
+export function getSiteSeo(): {
+  title?: string;
+  description?: string;
+  titleTemplate?: string;
+  descriptionTemplate?: string;
+  image?: string;
+  favicon?: string;
+  themeColor?: string;
+  noIndexing?: boolean;
+} {
+  const blocks = loadBlocks();
+  const site = blocks["Site"] as Record<string, unknown> | undefined;
+  if (!site) return {};
+  const seo = site.seo as Record<string, unknown> | undefined;
+  if (!seo) return {};
+  return seo as ReturnType<typeof getSiteSeo>;
+}
+
 export function findPageByPath(
   targetPath: string,
 ): { page: DecoPage; params: Record<string, string> } | null {

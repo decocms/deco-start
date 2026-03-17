@@ -3,6 +3,7 @@ export {
   findPageByPath,
   getAllPages,
   getRevision,
+  getSiteSeo,
   loadBlocks,
   onChange,
   setBlocks,

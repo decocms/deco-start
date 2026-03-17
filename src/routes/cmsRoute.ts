@@ -37,6 +37,7 @@ import {
   resolveDecoPage,
   resolveDeferredSection,
 } from "../cms/resolve";
+import { getSiteSeo } from "../cms/loader";
 import { runSectionLoaders, runSingleSectionLoader } from "../cms/sectionLoaders";
 import {
   type CacheProfile,
@@ -269,7 +270,19 @@ async function buildPageSeo(
   // Secondary source: SEO sections embedded in the sections array
   const sectionSeo = extractSeoFromSections(enrichedSections);
 
-  if (!seoSection) return sectionSeo;
+  // Site-wide SEO config from the "Site" app block — mirrors ctx.seo in
+  // the original deco-cx/deco framework. Provides fallback title,
+  // description, and templates when page-level seo doesn't supply them.
+  const siteSeo = getSiteSeo();
+
+  if (!seoSection) {
+    // No page.seo block — use site-wide SEO as primary, section-contributed as secondary
+    const merged: PageSeo = { ...sectionSeo };
+    if (siteSeo.title && !merged.title) merged.title = siteSeo.title;
+    if (siteSeo.description && !merged.description) merged.description = siteSeo.description;
+    if (siteSeo.image && !merged.image) merged.image = siteSeo.image;
+    return merged;
+  }
 
   // Run the section loader on the seo section if one is registered
   // (e.g., SEOPDP loader transforms {jsonLD: ProductDetailsPage} → {title, description, ...})
@@ -283,22 +296,40 @@ async function buildPageSeo(
 
   const pageSeo = extractSeoFromProps(enrichedProps);
 
-  // Apply title/description templates from the SEO block config.
-  // SeoV2 blocks carry templates like "%s | CASA & VIDEO" that wrap
-  // the computed title. Template "%s" is a no-op.
+  // Replicate original SeoV2 loader logic: `_title ?? appTitle`
+  // When the page's seo block doesn't have a title/description,
+  // fall back to the Site app's seo config.
+  if (!pageSeo.title && siteSeo.title) pageSeo.title = siteSeo.title;
+  if (!pageSeo.description && siteSeo.description) pageSeo.description = siteSeo.description;
+  if (!pageSeo.image && siteSeo.image) pageSeo.image = siteSeo.image;
+
+  // Apply title/description templates.
+  // Priority: page-level template → site-level template → no-op.
+  // This mirrors the original: `(titleTemplate ?? "").trim().length === 0 ? "%s" : titleTemplate`
   const rawProps = seoSection.props;
-  const titleTemplate = rawProps.titleTemplate as string | undefined;
-  const descTemplate = rawProps.descriptionTemplate as string | undefined;
-  if (titleTemplate && titleTemplate !== "%s" && pageSeo.title) {
+  const titleTemplate =
+    effectiveTemplate(rawProps.titleTemplate as string | undefined) ??
+    effectiveTemplate(siteSeo.titleTemplate);
+  const descTemplate =
+    effectiveTemplate(rawProps.descriptionTemplate as string | undefined) ??
+    effectiveTemplate(siteSeo.descriptionTemplate);
+
+  if (titleTemplate && pageSeo.title) {
     pageSeo.title = titleTemplate.replace("%s", pageSeo.title);
   }
-  if (descTemplate && descTemplate !== "%s" && pageSeo.description) {
+  if (descTemplate && pageSeo.description) {
     pageSeo.description = descTemplate.replace("%s", pageSeo.description);
   }
 
   // Primary source (page.seo) overrides secondary (section-contributed).
   // Only truthy fields in pageSeo override — undefined keys don't clear sectionSeo.
   return { ...sectionSeo, ...pageSeo };
+}
+
+/** Returns a non-trivial template string, or undefined for "%s" / empty / blank. */
+function effectiveTemplate(tmpl: string | undefined): string | undefined {
+  if (!tmpl || tmpl.trim() === "" || tmpl.trim() === "%s") return undefined;
+  return tmpl;
 }
 
 // ---------------------------------------------------------------------------
