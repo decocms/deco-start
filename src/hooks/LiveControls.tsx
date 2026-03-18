@@ -39,10 +39,19 @@ function LiveControlsScript() {
       if (window.__DECO_LIVE_CONTROLS__) return;
       window.__DECO_LIVE_CONTROLS__ = true;
 
+      var TRUSTED_ORIGINS = ["https://deco.cx", "https://admin.deco.cx", "https://play.deco.cx"];
+      function isTrustedOrigin(origin) {
+        return TRUSTED_ORIGINS.indexOf(origin) !== -1 ||
+          (origin.startsWith("https://") && origin.endsWith(".deco.cx")) ||
+          origin === window.location.origin;
+      }
+
       var LIVE = JSON.parse(document.getElementById("__DECO_STATE")?.textContent || "{}");
       window.LIVE = { ...window.LIVE, ...LIVE };
 
       window.addEventListener("message", function(event) {
+        if (!isTrustedOrigin(event.origin)) return;
+
         var data = event.data;
         if (!data || typeof data !== "object") return;
 
@@ -54,7 +63,7 @@ function LiveControlsScript() {
             break;
 
           case "scrollToComponent":
-            var el = document.querySelector('[data-manifest-key="' + data.args?.id + '"]');
+            var el = document.querySelector('[data-manifest-key="' + CSS.escape(data.args?.id || "") + '"]');
             if (!el) el = document.getElementById(data.args?.id);
             if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
             break;
@@ -64,7 +73,12 @@ function LiveControlsScript() {
 
           case "editor::rerender":
             if (data.args?.url) {
-              window.location.href = data.args.url;
+              try {
+                var targetUrl = new URL(data.args.url, window.location.origin);
+                if (targetUrl.origin === window.location.origin) {
+                  window.location.href = targetUrl.href;
+                }
+              } catch(e) {}
             }
             break;
         }
