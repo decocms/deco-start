@@ -42,7 +42,7 @@ function LiveControlsScript() {
       var TRUSTED_ORIGINS = ["https://deco.cx", "https://admin.deco.cx", "https://play.deco.cx"];
       function isTrustedOrigin(origin) {
         return TRUSTED_ORIGINS.indexOf(origin) !== -1 ||
-          origin.endsWith(".deco.cx") ||
+          (origin.startsWith("https://") && origin.endsWith(".deco.cx")) ||
           origin === window.location.origin;
       }
 
