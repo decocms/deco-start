@@ -172,8 +172,17 @@ export function SectionRenderer({ section }: { section: Section | null | undefin
     return null;
   }
 
+  // Use the section's registered loadingFallback (if available) instead of
+  // the generic NestedSectionFallback. This lets parent sections (e.g.
+  // NotFoundChallenge) show a meaningful skeleton for nested children
+  // (e.g. MountedPDP) while the lazy chunk loads.
+  const options = getSectionOptions(section.Component);
+  const fallback = options?.loadingFallback
+    ? createElement(options.loadingFallback, section.props ?? {})
+    : <NestedSectionFallback />;
+
   return (
-    <Suspense fallback={<NestedSectionFallback />}>
+    <Suspense fallback={fallback}>
       <Lazy {...(section.props ?? {})} />
     </Suspense>
   );
