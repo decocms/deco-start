@@ -240,8 +240,11 @@ function DeferredSectionWrapper({
     getSectionOptions(deferred.component),
   );
   const isSSR = typeof document === "undefined";
+  // Allow SSR to render the loadingFallback when it was registered
+  // synchronously via registerSection(). The previous `isSSR ? false`
+  // guard always returned null on the server, hiding the skeleton.
   const [optionsReady, setOptionsReady] = useState(() =>
-    isSSR ? false : !!getSectionOptions(deferred.component),
+    !!getSectionOptions(deferred.component),
   );
   const ref = useRef<HTMLDivElement>(null);
   const triggered = useRef(false);
