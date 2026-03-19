@@ -43,7 +43,7 @@
     "./scripts/generate-blocks": "./scripts/generate-blocks.ts",
     "./scripts/generate-schema": "./scripts/generate-schema.ts",
     "./scripts/generate-invoke": "./scripts/generate-invoke.ts",
-    "./vite": "./src/vite/plugin.ts"
+    "./vite": "./src/vite/plugin.js"
   },
   "scripts": {
     "build": "tsc",

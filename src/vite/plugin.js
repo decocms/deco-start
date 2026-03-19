@@ -12,10 +12,9 @@
  * ```
  */
 
-import type { Plugin, PluginOption } from "vite";
-
 // Bare-specifier stubs resolved by ID before Vite touches them.
-const CLIENT_STUBS: Record<string, string> = {
+/** @type {Record<string, string>} */
+const CLIENT_STUBS = {
   "react-dom/server": "\0stub:react-dom-server",
   "react-dom/server.browser": "\0stub:react-dom-server",
   "node:stream": "\0stub:node-stream",
@@ -25,7 +24,8 @@ const CLIENT_STUBS: Record<string, string> = {
 };
 
 // Minimal stub source for each virtual module.
-const STUB_SOURCE: Record<string, string> = {
+/** @type {Record<string, string>} */
+const STUB_SOURCE = {
   "\0stub:react-dom-server": [
     "const noop = () => '';",
     "export const renderToString = noop;",
@@ -55,8 +55,10 @@ const STUB_SOURCE: Record<string, string> = {
     "export const injectedHeadScripts = undefined;",
 };
 
-export function decoVitePlugin(): PluginOption {
-  const plugin: Plugin = {
+/** @returns {import("vite").PluginOption} */
+export function decoVitePlugin() {
+  /** @type {import("vite").Plugin} */
+  const plugin = {
     name: "deco-server-only-stubs",
     enforce: "pre",
 
@@ -67,11 +69,8 @@ export function decoVitePlugin(): PluginOption {
     },
 
     load(id, options) {
-      // ------------------------------------------------------------------
       // blocks.gen.ts — the CMS block registry (often 500KB+ compiled).
       // Only the server needs it; the client receives pre-resolved sections.
-      // Match on resolved file path (relative imports resolve to absolute).
-      // ------------------------------------------------------------------
       if (!options?.ssr && id.endsWith("blocks.gen.ts")) {
         return "export const blocks = {};";
       }
@@ -80,7 +79,7 @@ export function decoVitePlugin(): PluginOption {
       return STUB_SOURCE[id];
     },
 
-    configEnvironment(name: string, env: any) {
+    configEnvironment(name, env) {
       if (name === "ssr" || name === "client") {
         env.optimizeDeps = env.optimizeDeps || {};
         env.optimizeDeps.esbuildOptions =
