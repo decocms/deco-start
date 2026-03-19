@@ -414,24 +414,6 @@ function mergeSections(resolved: ResolvedSection[], deferred: DeferredSection[])
 // DecoPageRenderer — renders top-level resolved sections from a CMS page
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// IdleHydrationBoundary — delays hydration of below-fold sections until idle
-// ---------------------------------------------------------------------------
-
-function IdleHydrationBoundary({ children }: { children: ReactNode }) {
-  const [ready, setReady] = useState(typeof document === "undefined"); // SSR: always ready
-  useEffect(() => {
-    if (typeof requestIdleCallback === "function") {
-      const id = requestIdleCallback(() => setReady(true));
-      return () => cancelIdleCallback(id);
-    }
-    // Fallback for browsers without requestIdleCallback
-    const id = setTimeout(() => setReady(true), 50);
-    return () => clearTimeout(id);
-  }, []);
-  // Before ready, return null — React preserves SSR HTML via Suspense fallback={null}
-  return ready ? <>{children}</> : null;
-}
 
 interface Props {
   sections: ResolvedSection[];
@@ -503,8 +485,6 @@ export function DecoPageRenderer({
         // registerSectionsSync.
         const LazyComponent = getLazyComponent(section.component);
         if (!LazyComponent) return null;
-
-        const isAboveFold = item.originalIndex < 3;
         const content = (
           <Suspense fallback={null}>
             <LazyComponent {...section.props} />
@@ -514,7 +494,7 @@ export function DecoPageRenderer({
         return (
           <section key={`${section.key}-${index}`} id={sectionId} data-manifest-key={section.key}>
             <SectionErrorBoundary sectionKey={section.key} fallback={errFallback}>
-              {isAboveFold ? content : <IdleHydrationBoundary>{content}</IdleHydrationBoundary>}
+              {content}
             </SectionErrorBoundary>
           </section>
         );
