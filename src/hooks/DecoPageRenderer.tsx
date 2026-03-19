@@ -42,15 +42,20 @@ function syncThenable(mod: {
 
 function getLazyComponent(key: string) {
   if (!lazyCache.has(key)) {
+    // If sync-registered, wrap in a pre-fulfilled lazy so React.lazy
+    // resolves synchronously — same tree structure as lazy-only path.
+    const sync = getSyncComponent(key);
+    if (sync) {
+      lazyCache.set(key, lazy(() => syncThenable({ default: sync })));
+      return lazyCache.get(key)!;
+    }
+
     const registry = getSectionRegistry();
     const loader = registry[key];
     if (!loader) return null;
     lazyCache.set(
       key,
       lazy(() => {
-        // If already resolved (from preloadSectionComponents on server,
-        // or from route loader on client SPA), return a sync thenable.
-        // React reads thenable.status/value synchronously — no Suspense.
         const resolved = getResolvedComponent(key);
         if (resolved) {
           return syncThenable({ default: resolved });
@@ -409,6 +414,25 @@ function mergeSections(resolved: ResolvedSection[], deferred: DeferredSection[])
 // DecoPageRenderer — renders top-level resolved sections from a CMS page
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// IdleHydrationBoundary — delays hydration of below-fold sections until idle
+// ---------------------------------------------------------------------------
+
+function IdleHydrationBoundary({ children }: { children: ReactNode }) {
+  const [ready, setReady] = useState(typeof document === "undefined"); // SSR: always ready
+  useEffect(() => {
+    if (typeof requestIdleCallback === "function") {
+      const id = requestIdleCallback(() => setReady(true));
+      return () => cancelIdleCallback(id);
+    }
+    // Fallback for browsers without requestIdleCallback
+    const id = setTimeout(() => setReady(true), 50);
+    return () => clearTimeout(id);
+  }, []);
+  // Before ready, return null — React preserves SSR HTML via Suspense fallback={null}
+  return ready ? <>{children}</> : null;
+}
+
 interface Props {
   sections: ResolvedSection[];
   deferredSections?: DeferredSection[];
@@ -470,32 +494,27 @@ export function DecoPageRenderer({
           .replace(/\.tsx$/, "")
           .replace(/^site-sections-/, "");
 
-        // Only use sync path for sections explicitly registered via registerSectionsSync.
-        // DO NOT fallback to getResolvedComponent: that is populated server-side by
-        // preloadSectionComponents but NOT on the client, causing hydration mismatches
-        // (server renders <ul>, client renders <Suspense> for the same component).
-        const SyncComp = getSyncComponent(section.component);
-        if (SyncComp) {
-          return (
-            <section key={`${section.key}-${index}`} id={sectionId} data-manifest-key={section.key}>
-              <SectionErrorBoundary sectionKey={section.key} fallback={errFallback}>
-                <SyncComp {...section.props} />
-              </SectionErrorBoundary>
-            </section>
-          );
-        }
-
-        // Fallback: React.lazy with syncThenable for pre-loaded modules.
-        // fallback={null} preserves server HTML during hydration.
+        // Unified render path: always use React.lazy + Suspense.
+        // For sync-registered components, getLazyComponent wraps them in a
+        // pre-fulfilled lazy (via syncThenable) so React renders them
+        // synchronously — same behavior as the old sync path, but with an
+        // identical tree structure on both server and client (always has
+        // <Suspense>). This prevents hydration mismatches when sites remove
+        // registerSectionsSync.
         const LazyComponent = getLazyComponent(section.component);
         if (!LazyComponent) return null;
+
+        const isAboveFold = item.originalIndex < 3;
+        const content = (
+          <Suspense fallback={null}>
+            <LazyComponent {...section.props} />
+          </Suspense>
+        );
 
         return (
           <section key={`${section.key}-${index}`} id={sectionId} data-manifest-key={section.key}>
             <SectionErrorBoundary sectionKey={section.key} fallback={errFallback}>
-              <Suspense fallback={null}>
-                <LazyComponent {...section.props} />
-              </Suspense>
+              {isAboveFold ? content : <IdleHydrationBoundary>{content}</IdleHydrationBoundary>}
             </SectionErrorBoundary>
           </section>
         );
