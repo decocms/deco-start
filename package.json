@@ -76,7 +76,7 @@
     "@tanstack/store": ">=0.7.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "vite": ">=6.0.0"
+    "vite": ">=6.0.0 || >=7.0.0 || >=8.0.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.6",
@@ -88,6 +88,6 @@
     "knip": "^5.86.0",
     "ts-morph": "^27.0.0",
     "typescript": "^5.9.0",
-    "vite": "^6.0.0"
+    "vite": ">=6.0.0"
   }
 }
