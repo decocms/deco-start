@@ -42,7 +42,8 @@
     "./routes": "./src/routes/index.ts",
     "./scripts/generate-blocks": "./scripts/generate-blocks.ts",
     "./scripts/generate-schema": "./scripts/generate-schema.ts",
-    "./scripts/generate-invoke": "./scripts/generate-invoke.ts"
+    "./scripts/generate-invoke": "./scripts/generate-invoke.ts",
+    "./vite": "./src/vite/plugin.ts"
   },
   "scripts": {
     "build": "tsc",
@@ -74,7 +75,8 @@
     "@tanstack/react-start": ">=1.0.0",
     "@tanstack/store": ">=0.7.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "vite": ">=6.0.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.6",
@@ -85,6 +87,7 @@
     "@types/react-dom": "^19.0.0",
     "knip": "^5.86.0",
     "ts-morph": "^27.0.0",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "vite": "^6.0.0"
   }
 }
