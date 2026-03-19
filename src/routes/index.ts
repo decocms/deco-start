@@ -11,6 +11,7 @@ export {
   loadCmsHomePage,
   loadCmsPage,
   loadDeferredSection,
+  setSectionChunkMap,
 } from "./cmsRoute";
 export { CmsPage, NotFoundPage } from "./components";
 export type { PageSeo } from "../cms/resolve";

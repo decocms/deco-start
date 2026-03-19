@@ -88,6 +88,27 @@ export function decoVitePlugin() {
         env.optimizeDeps.esbuildOptions.jsxImportSource = "react";
       }
     },
+
+    generateBundle(_, bundle) {
+      // Build a mapping from section key to chunk filename.
+      // Sites use this to emit <link rel="modulepreload"> for eager sections.
+      const map = {};
+      for (const [fileName, chunk] of Object.entries(bundle)) {
+        if (chunk.type === "chunk" && chunk.facadeModuleId) {
+          const match = chunk.facadeModuleId.match(/\/(sections\/.+\.tsx)$/);
+          if (match) {
+            map["site/" + match[1]] = fileName;
+          }
+        }
+      }
+      if (Object.keys(map).length > 0) {
+        this.emitFile({
+          type: "asset",
+          fileName: "section-chunks.json",
+          source: JSON.stringify(map),
+        });
+      }
+    },
   };
 
   return plugin;
