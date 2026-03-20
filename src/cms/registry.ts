@@ -14,6 +14,13 @@ export interface SectionOptions {
   loadingFallback?: ComponentType<any>;
   /** Custom error fallback component for this section. */
   errorFallback?: ComponentType<{ error: Error }>;
+  /**
+   * When true, the section is wrapped in `<ClientOnly>` from TanStack Router.
+   * It renders only on the client — no SSR, no hydration mismatch.
+   * Use for analytics scripts, GTM, third-party widgets, and other
+   * browser-dependent components.
+   */
+  clientOnly?: boolean;
 }
 
 // globalThis-backed: server function split modules need access to the registry

@@ -1,6 +1,7 @@
 import { findPageByPath, loadBlocks } from "./loader";
 import { getSection } from "./registry";
-import { isLayoutSection } from "./sectionLoaders";
+import { isLayoutSection, runSingleSectionLoader } from "./sectionLoaders";
+import { normalizeUrlsInObject } from "../sdk/normalizeUrls";
 
 // globalThis-backed: share state across Vite server function split modules
 const G = globalThis as any;
@@ -1374,4 +1375,31 @@ export async function resolveDeferredSection(
     props: normalizedProps,
     key: component,
   };
+}
+
+/**
+ * Resolve AND enrich a deferred section in one call.
+ * Combines CMS prop resolution (resolveDeferredSection) with section loader
+ * enrichment (runSingleSectionLoader) and URL normalization.
+ *
+ * Used by the route loader to create streaming promises for TanStack's
+ * native deferred data pattern — each deferred section becomes an unawaited
+ * promise that TanStack streams via SSR.
+ */
+export async function resolveDeferredSectionFull(
+  ds: DeferredSection,
+  pagePath: string,
+  request: Request,
+  matcherCtx?: MatcherContext,
+): Promise<ResolvedSection | null> {
+  const section = await resolveDeferredSection(
+    ds.component,
+    ds.rawProps,
+    pagePath,
+    matcherCtx,
+  );
+  if (!section) return null;
+  section.index = ds.index;
+  const enriched = await runSingleSectionLoader(section, request);
+  return normalizeUrlsInObject(enriched);
 }

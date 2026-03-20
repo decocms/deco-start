@@ -57,15 +57,42 @@ function minifyJs(code: string): string {
 /**
  * Serializes a function and its arguments into a self-executing inline script.
  *
+ * @deprecated `fn.toString()` produces different output in SSR vs client Vite
+ * builds (React Compiler transforms differ), causing hydration mismatches on
+ * `dangerouslySetInnerHTML.__html`. Use {@link inlineScript} with a plain
+ * string constant instead.
+ *
  * @example
  * ```tsx
- * <script dangerouslySetInnerHTML={{ __html: useScript(onLoad, elementId, config) }} />
+ * // BEFORE (causes hydration mismatch):
+ * <script dangerouslySetInnerHTML={{ __html: useScript(onLoad, elementId) }} />
+ *
+ * // AFTER (safe):
+ * <script {...inlineScript(`(${MY_SCRIPT_STRING})("${elementId}")`)} />
  * ```
  */
 export function useScript<T extends (...args: any[]) => void>(
   fn: T,
   ...args: Parameters<T>
 ): string {
+  if (typeof (globalThis as any).__DECO_USE_SCRIPT_WARNED === "undefined") {
+    (globalThis as any).__DECO_USE_SCRIPT_WARNED = new Set<string>();
+  }
+  const warnedSet = (globalThis as any).__DECO_USE_SCRIPT_WARNED as Set<string>;
+  const fnName = fn.name || "anonymous";
+  if (
+    typeof process !== "undefined" &&
+    process.env?.NODE_ENV !== "production" &&
+    !warnedSet.has(fnName)
+  ) {
+    warnedSet.add(fnName);
+    console.warn(
+      `[useScript] Using fn.toString() for "${fnName}". ` +
+        `This may produce different output in SSR vs client builds, causing hydration mismatch. ` +
+        `Consider using inlineScript() with a plain string constant instead.`,
+    );
+  }
+
   const fnStr = fn.toString();
   let minified = cacheGet(fnStr);
   if (minified === undefined) {
@@ -79,6 +106,8 @@ export function useScript<T extends (...args: any[]) => void>(
 
 /**
  * Like useScript, but returns a data: URI suitable for `<script src="...">`.
+ *
+ * @deprecated Same hydration issues as {@link useScript}. Use {@link inlineScript} instead.
  */
 export function useScriptAsDataURI<T extends (...args: any[]) => void>(
   fn: T,
@@ -86,6 +115,25 @@ export function useScriptAsDataURI<T extends (...args: any[]) => void>(
 ): string {
   const code = useScript(fn, ...args);
   return `data:text/javascript;charset=utf-8,${encodeURIComponent(code)}`;
+}
+
+/**
+ * Returns props for a `<script>` element with safe inline JavaScript.
+ * Unlike {@link useScript}, this accepts a plain string — no `fn.toString()`
+ * means no SSR/client divergence and no hydration mismatch.
+ *
+ * @example
+ * ```tsx
+ * const SCROLL_SCRIPT = `document.getElementById("btn").addEventListener("click", () => { ... })`;
+ * <script {...inlineScript(SCROLL_SCRIPT)} />
+ *
+ * // With arguments:
+ * const INIT_SCRIPT = (id: string) => `document.getElementById("${id}").dataset.ready = "true"`;
+ * <script {...inlineScript(INIT_SCRIPT("my-element"))} />
+ * ```
+ */
+export function inlineScript(js: string) {
+  return { dangerouslySetInnerHTML: { __html: js } } as const;
 }
 
 /**

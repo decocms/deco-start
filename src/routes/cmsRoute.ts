@@ -36,6 +36,7 @@ import {
   extractSeoFromSections,
   resolveDecoPage,
   resolveDeferredSection,
+  resolveDeferredSectionFull,
 } from "../cms/resolve";
 import { getSiteSeo } from "../cms/loader";
 import { runSectionLoaders, runSingleSectionLoader } from "../cms/sectionLoaders";
@@ -122,6 +123,7 @@ async function loadCmsPageInternal(fullPath: string) {
     deferredSections: normalizeUrlsInObject(page.deferredSections),
     cacheProfile,
     pageUrl: urlWithSearch,
+    pagePath: basePath,
     seo,
     device,
   };
@@ -148,9 +150,10 @@ export const loadCmsPage = createServerFn({ method: "GET" })
 export const loadCmsHomePage = createServerFn({ method: "GET" }).handler(async () => {
   const request = getRequest();
   const ua = getRequestHeader("user-agent") ?? "";
+  const serverUrl = getRequestUrl();
   const matcherCtx: MatcherContext = {
     userAgent: ua,
-    url: getRequestUrl().toString(),
+    url: serverUrl.toString(),
     path: "/",
     cookies: getCookies(),
     request,
@@ -171,6 +174,8 @@ export const loadCmsHomePage = createServerFn({ method: "GET" }).handler(async (
     ...pageData,
     resolvedSections: normalizeUrlsInObject(enrichedSections),
     deferredSections: normalizeUrlsInObject(page.deferredSections),
+    pagePath: "/",
+    pageUrl: serverUrl.toString(),
     seo,
     device,
   };
@@ -180,6 +185,11 @@ export const loadCmsHomePage = createServerFn({ method: "GET" }).handler(async (
 // Deferred section loader — resolves + enriches a single section on demand
 // ---------------------------------------------------------------------------
 
+/**
+ * @deprecated Prefer TanStack native streaming via `deferredPromises` in the
+ * route loader. This POST server function is kept for backward compatibility
+ * and as a fallback for SPA navigations.
+ */
 export const loadDeferredSection = createServerFn({ method: "POST" })
   .inputValidator(
     (data: unknown) =>
@@ -257,6 +267,26 @@ export interface CmsRouteOptions {
   ignoreSearchParams?: string[];
   /** Custom pending component shown during SPA navigation. */
   pendingComponent?: () => any;
+  /**
+   * Delay (ms) before showing the pending component during SPA navigation.
+   * If the loader resolves before this threshold, no pending UI is shown.
+   * Prevents skeleton flash on fast cache-hit navigations. Default: 200.
+   */
+  pendingMs?: number;
+  /**
+   * Minimum display time (ms) for the pending component once shown.
+   * Prevents jarring flash when data arrives shortly after the threshold.
+   * Default: 300.
+   */
+  pendingMinMs?: number;
+  /**
+   * SSR mode for this route.
+   * - `true` (default): Full SSR — loader + component render on server.
+   * - `'data-only'`: Loader runs on server, component renders on client only.
+   *   Use for interactive-heavy pages (PDP with zoom/variant selector).
+   * - `false`: Everything runs on client only.
+   */
+  ssr?: boolean | "data-only";
 }
 
 type CmsPageLoaderData = {
@@ -441,6 +471,9 @@ export function cmsRouteConfig(options: CmsRouteOptions) {
     defaultDescription,
     ignoreSearchParams = ["skuId"],
     pendingComponent,
+    pendingMs = 200,
+    pendingMinMs = 300,
+    ssr: ssrMode,
   } = options;
 
   const ignoreSet = new Set(ignoreSearchParams);
@@ -467,15 +500,63 @@ export function cmsRouteConfig(options: CmsRouteOptions) {
         ? "?" + new URLSearchParams(deps.search as Record<string, string>).toString()
         : "";
       const page = await loadCmsPage({ data: basePath + searchStr });
+      if (!page) return page;
 
-      if (!isServer && page?.resolvedSections) {
+      if (!isServer && page.resolvedSections) {
         const keys = page.resolvedSections.map((s: ResolvedSection) => s.component);
         await preloadSectionComponents(keys);
       }
+
+      // SSR: create unawaited promises for TanStack native streaming.
+      // Each deferred section becomes a promise that TanStack streams
+      // via SSR chunked transfer — all resolved in the SAME request.
+      if (isServer && page.deferredSections?.length) {
+        const deferredPromises: Record<string, Promise<ResolvedSection | null>> = {};
+        for (const ds of page.deferredSections) {
+          deferredPromises[`d_${ds.index}`] = loadDeferredSection({
+            data: {
+              component: ds.component,
+              rawProps: ds.rawProps,
+              pagePath: page.pagePath ?? basePath,
+              pageUrl: page.pageUrl,
+            },
+          }).catch((e) => {
+            console.error(`[CMS] Deferred section "${ds.component}" failed:`, e);
+            return null;
+          });
+        }
+        return { ...page, deferredPromises };
+      }
+
+      // Client SPA navigation: resolve all deferred sections via server
+      // function batch and merge into resolvedSections for immediate render.
+      if (!isServer && page.deferredSections?.length) {
+        const resolved = await Promise.all(
+          page.deferredSections.map((ds: DeferredSection) =>
+            loadDeferredSection({
+              data: {
+                component: ds.component,
+                rawProps: ds.rawProps,
+                pagePath: page.pagePath ?? basePath,
+                pageUrl: page.pageUrl,
+              },
+            }).catch(() => null),
+          ),
+        );
+        const all = [
+          ...page.resolvedSections,
+          ...resolved.filter((s): s is ResolvedSection => s != null),
+        ].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+        return { ...page, resolvedSections: all, deferredSections: [] };
+      }
+
       return page;
     },
 
     ...(pendingComponent ? { pendingComponent } : {}),
+    pendingMs,
+    pendingMinMs,
+    ...(ssrMode !== undefined ? { ssr: ssrMode } : {}),
 
     ...routeCacheDefaults("product"),
 
@@ -501,19 +582,68 @@ export function cmsHomeRouteConfig(options: {
   /** Site name for OG title composition. Defaults to defaultTitle. */
   siteName?: string;
   pendingComponent?: () => any;
+  /** Delay (ms) before showing pending component. Default: 200. */
+  pendingMs?: number;
+  /** Minimum display time (ms) for pending component. Default: 300. */
+  pendingMinMs?: number;
 }) {
-  const { defaultTitle, defaultDescription, siteName } = options;
+  const { defaultTitle, defaultDescription, siteName, pendingMs = 200, pendingMinMs = 300 } = options;
 
   return {
     loader: async () => {
       const page = await loadCmsHomePage();
-      if (!isServer && page?.resolvedSections) {
+      if (!page) return page;
+
+      if (!isServer && page.resolvedSections) {
         const keys = page.resolvedSections.map((s: ResolvedSection) => s.component);
         await preloadSectionComponents(keys);
       }
+
+      // SSR: create unawaited promises for TanStack native streaming
+      if (isServer && page.deferredSections?.length) {
+        const deferredPromises: Record<string, Promise<ResolvedSection | null>> = {};
+        for (const ds of page.deferredSections) {
+          deferredPromises[`d_${ds.index}`] = loadDeferredSection({
+            data: {
+              component: ds.component,
+              rawProps: ds.rawProps,
+              pagePath: "/",
+              pageUrl: page.pageUrl,
+            },
+          }).catch((e) => {
+            console.error(`[CMS] Deferred section "${ds.component}" failed:`, e);
+            return null;
+          });
+        }
+        return { ...page, deferredPromises };
+      }
+
+      // Client SPA navigation: resolve all deferred via server function batch
+      if (!isServer && page.deferredSections?.length) {
+        const resolved = await Promise.all(
+          page.deferredSections.map((ds: DeferredSection) =>
+            loadDeferredSection({
+              data: {
+                component: ds.component,
+                rawProps: ds.rawProps,
+                pagePath: "/",
+                pageUrl: page.pageUrl,
+              },
+            }).catch(() => null),
+          ),
+        );
+        const all = [
+          ...page.resolvedSections,
+          ...resolved.filter((s): s is ResolvedSection => s != null),
+        ].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+        return { ...page, resolvedSections: all, deferredSections: [] };
+      }
+
       return page;
     },
     ...(options.pendingComponent ? { pendingComponent: options.pendingComponent } : {}),
+    pendingMs,
+    pendingMinMs,
     ...routeCacheDefaults("static"),
     headers: () => cacheHeaders("static"),
     head: ({ loaderData }: { loaderData?: CmsPageLoaderData }) =>

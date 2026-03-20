@@ -67,8 +67,9 @@ export {
   TABLET_RE,
   useDevice,
 } from "./useDevice";
+export { useHydrated } from "./useHydrated";
 export { useId } from "./useId";
-export { usePartialSection, useScript, useScriptAsDataURI, useSection } from "./useScript";
+export { inlineScript, usePartialSection, useScript, useScriptAsDataURI, useSection } from "./useScript";
 export { createDecoWorkerEntry, type DecoWorkerEntryOptions } from "./workerEntry";
 export { forwardResponseCookies, getRequestCookieHeader } from "./cookiePassthrough";
 export {

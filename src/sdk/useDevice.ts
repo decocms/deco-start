@@ -51,15 +51,36 @@ export function detectDevice(userAgent: string): Device {
 }
 
 /**
- * Get the current device type via RequestContext.
+ * Get the current device type. Works everywhere:
+ * - Server (loader, middleware, server function): reads User-Agent from RequestContext.
+ * - Client (component, event handler): uses `window.innerWidth` breakpoints.
  *
- * Must be called within a `RequestContext.run()` scope (i.e., during
- * request handling). Falls back to "desktop" outside request scope.
+ * @example
+ * ```tsx
+ * import { useDevice } from "@decocms/start/sdk/useDevice";
+ *
+ * // In a component:
+ * const device = useDevice(); // "mobile" | "tablet" | "desktop"
+ *
+ * // In a loader:
+ * export function loader(props: Props) {
+ *   const device = useDevice();
+ *   return { ...props, isMobile: device === "mobile" };
+ * }
+ * ```
  */
 export function useDevice(): Device {
-  const ctx = RequestContext.current;
-  if (!ctx) return "desktop";
-  const ua = ctx.request.headers.get("user-agent") ?? "";
+  // Server: use RequestContext UA header
+  if (typeof document === "undefined") {
+    const ctx = RequestContext.current;
+    if (!ctx) return "desktop";
+    const ua = ctx.request.headers.get("user-agent") ?? "";
+    return detectDevice(ua);
+  }
+  // Client: use navigator.userAgent for consistency with server-side UA detection.
+  // Using viewport width would produce different results between SSR and
+  // hydration (server sees UA, client sees pixels), causing hydration mismatch.
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
   return detectDevice(ua);
 }
 
@@ -89,3 +110,4 @@ export function checkDesktop(): boolean {
   if (!ctx) return true;
   return detectDevice(ctx.request.headers.get("user-agent") ?? "") === "desktop";
 }
+

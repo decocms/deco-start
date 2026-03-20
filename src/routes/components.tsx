@@ -1,15 +1,33 @@
 import { Link } from "@tanstack/react-router";
-import type { ResolvedSection } from "../cms/resolve";
+import type { DeferredSection, ResolvedSection } from "../cms/resolve";
 import { DecoPageRenderer } from "../hooks/DecoPageRenderer";
 
 /**
  * Default CMS page component. Renders all resolved sections.
  * Sites can use this directly or build their own.
  */
-export function CmsPage({ sections }: { sections: ResolvedSection[] }) {
+export function CmsPage({
+  sections,
+  deferredSections,
+  deferredPromises,
+  pagePath,
+  pageUrl,
+}: {
+  sections: ResolvedSection[];
+  deferredSections?: DeferredSection[];
+  deferredPromises?: Record<string, Promise<ResolvedSection | null>>;
+  pagePath?: string;
+  pageUrl?: string;
+}) {
   return (
     <div>
-      <DecoPageRenderer sections={sections} />
+      <DecoPageRenderer
+        sections={sections}
+        deferredSections={deferredSections}
+        deferredPromises={deferredPromises}
+        pagePath={pagePath}
+        pageUrl={pageUrl}
+      />
     </div>
   );
 }
