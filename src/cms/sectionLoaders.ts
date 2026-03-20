@@ -239,6 +239,22 @@ export async function runSectionLoaders(
   sections: ResolvedSection[],
   request: Request,
 ): Promise<ResolvedSection[]> {
+  // Dev warning: detect likely layout sections not registered via registerLayoutSections.
+  // Without registration, Header/Footer won't be cached across navigations.
+  if (typeof process !== "undefined" && process.env?.NODE_ENV !== "production") {
+    for (const s of sections) {
+      const key = s.component.toLowerCase();
+      if (
+        (key.includes("header") || key.includes("footer")) &&
+        !layoutSections.has(s.component)
+      ) {
+        console.warn(
+          `[SectionLoaders] "${s.component}" looks like a layout section but is not in registerLayoutSections(). ` +
+            `Add it to registerLayoutSections() in setup.ts for consistent caching across navigations.`,
+        );
+      }
+    }
+  }
   return Promise.all(sections.map((section) => runSingleSectionLoader(section, request)));
 }
 

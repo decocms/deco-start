@@ -193,10 +193,17 @@ export const loadCmsHomePage = createServerFn({ method: "GET" }).handler(async (
 export const loadDeferredSection = createServerFn({ method: "POST" })
   .inputValidator(
     (data: unknown) =>
-      data as { component: string; rawProps: Record<string, any>; pagePath: string; pageUrl?: string },
+      data as {
+        component: string;
+        rawProps: Record<string, any>;
+        pagePath: string;
+        pageUrl?: string;
+        /** Original position in the page section list — preserved for correct SPA ordering. */
+        index?: number;
+      },
   )
   .handler(async (ctx) => {
-    const { component, rawProps, pagePath, pageUrl } = ctx.data;
+    const { component, rawProps, pagePath, pageUrl, index } = ctx.data;
 
     const originRequest = getRequest();
     const serverUrl = getRequestUrl().toString();
@@ -210,6 +217,9 @@ export const loadDeferredSection = createServerFn({ method: "POST" })
 
     const section = await resolveDeferredSection(component, rawProps, pagePath, matcherCtx);
     if (!section) return null;
+
+    // Preserve original index for correct ordering in SPA navigation merge
+    if (index !== undefined) section.index = index;
 
     const request = new Request(pageUrl || serverUrl, {
       headers: originRequest.headers,
@@ -510,17 +520,33 @@ export function cmsRouteConfig(options: CmsRouteOptions) {
       // SSR: create unawaited promises for TanStack native streaming.
       // Each deferred section becomes a promise that TanStack streams
       // via SSR chunked transfer — all resolved in the SAME request.
+      //
+      // IMPORTANT: We call resolveDeferredSectionFull directly instead of
+      // loadDeferredSection (server function). Server functions serialize
+      // their return via JSON-RPC — TanStack only streams promises that
+      // are directly in the loader return, not serialized server fn results.
       if (isServer && page.deferredSections?.length) {
+        const originRequest = getRequest();
+        const serverUrl = getRequestUrl();
+        const matcherCtx: MatcherContext = {
+          userAgent: getRequestHeader("user-agent") ?? "",
+          url: page.pageUrl ?? serverUrl.toString(),
+          path: page.pagePath ?? basePath,
+          cookies: getCookies(),
+          request: originRequest,
+        };
+        const deferredRequest = new Request(page.pageUrl ?? serverUrl.toString(), {
+          headers: originRequest.headers,
+        });
+
         const deferredPromises: Record<string, Promise<ResolvedSection | null>> = {};
         for (const ds of page.deferredSections) {
-          deferredPromises[`d_${ds.index}`] = loadDeferredSection({
-            data: {
-              component: ds.component,
-              rawProps: ds.rawProps,
-              pagePath: page.pagePath ?? basePath,
-              pageUrl: page.pageUrl,
-            },
-          }).catch((e) => {
+          deferredPromises[`d_${ds.index}`] = resolveDeferredSectionFull(
+            ds,
+            page.pagePath ?? basePath,
+            deferredRequest,
+            matcherCtx,
+          ).catch((e) => {
             console.error(`[CMS] Deferred section "${ds.component}" failed:`, e);
             return null;
           });
@@ -539,6 +565,7 @@ export function cmsRouteConfig(options: CmsRouteOptions) {
                 rawProps: ds.rawProps,
                 pagePath: page.pagePath ?? basePath,
                 pageUrl: page.pageUrl,
+                index: ds.index,
               },
             }).catch(() => null),
           ),
@@ -601,16 +628,24 @@ export function cmsHomeRouteConfig(options: {
 
       // SSR: create unawaited promises for TanStack native streaming
       if (isServer && page.deferredSections?.length) {
+        const originRequest = getRequest();
+        const serverUrl = getRequestUrl();
+        const matcherCtx: MatcherContext = {
+          userAgent: getRequestHeader("user-agent") ?? "",
+          url: page.pageUrl ?? serverUrl.toString(),
+          path: "/",
+          cookies: getCookies(),
+          request: originRequest,
+        };
+        const deferredRequest = new Request(page.pageUrl ?? serverUrl.toString(), {
+          headers: originRequest.headers,
+        });
+
         const deferredPromises: Record<string, Promise<ResolvedSection | null>> = {};
         for (const ds of page.deferredSections) {
-          deferredPromises[`d_${ds.index}`] = loadDeferredSection({
-            data: {
-              component: ds.component,
-              rawProps: ds.rawProps,
-              pagePath: "/",
-              pageUrl: page.pageUrl,
-            },
-          }).catch((e) => {
+          deferredPromises[`d_${ds.index}`] = resolveDeferredSectionFull(
+            ds, "/", deferredRequest, matcherCtx,
+          ).catch((e) => {
             console.error(`[CMS] Deferred section "${ds.component}" failed:`, e);
             return null;
           });
@@ -628,6 +663,7 @@ export function cmsHomeRouteConfig(options: {
                 rawProps: ds.rawProps,
                 pagePath: "/",
                 pageUrl: page.pageUrl,
+                index: ds.index,
               },
             }).catch(() => null),
           ),
