@@ -172,16 +172,18 @@ export function SectionRenderer({ section }: { section: Section | null | undefin
     return <Comp {...(section.props ?? {})} />;
   }
 
+  // Sync path: render directly if available — avoids React.lazy SSR streaming issue
+  const SyncComp = getSyncComponent(section.Component);
+  if (SyncComp) {
+    return createElement(SyncComp, section.props ?? {});
+  }
+
   const Lazy = getLazyComponent(section.Component);
   if (!Lazy) {
     console.warn(`[SectionRenderer] No component registered for: ${section.Component}`);
     return null;
   }
 
-  // Use the section's registered loadingFallback (if available) instead of
-  // the generic NestedSectionFallback. This lets parent sections (e.g.
-  // NotFoundChallenge) show a meaningful skeleton for nested children
-  // (e.g. MountedPDP) while the lazy chunk loads.
   const options = getSectionOptions(section.Component);
   const fallback = options?.loadingFallback
     ? createElement(options.loadingFallback, section.props ?? {})
@@ -501,20 +503,39 @@ export function DecoPageRenderer({
                   <Await promise={promise}>
                     {(resolved) => {
                       if (!resolved) return null;
-                      const LazyComponent = getLazyComponent(resolved.component);
-                      if (!LazyComponent) return null;
                       const resolvedOptions = getSectionOptions(resolved.component);
                       const isClientOnly = resolvedOptions?.clientOnly === true;
+                      const SyncComp = getSyncComponent(resolved.component);
                       const sectionId = resolved.key
                         .replace(/\//g, "-")
                         .replace(/\.tsx$/, "")
                         .replace(/^site-sections-/, "");
 
-                      const inner = (
-                        <Suspense fallback={null}>
-                          <LazyComponent {...resolved.props} />
-                        </Suspense>
-                      );
+                      let inner: ReactNode;
+
+                      if (SyncComp && !isClientOnly) {
+                        // Sync path: direct render, no lazy/Suspense.
+                        inner = createElement(SyncComp, resolved.props);
+                      } else {
+                        const LazyComponent = getLazyComponent(resolved.component);
+                        if (!LazyComponent) return null;
+
+                        const fallbackEl = resolvedOptions?.loadingFallback
+                          ? createElement(resolvedOptions.loadingFallback, resolved.props)
+                          : null;
+
+                        inner = isClientOnly ? (
+                          <ClientOnly fallback={fallbackEl}>
+                            <Suspense fallback={null}>
+                              <LazyComponent {...resolved.props} />
+                            </Suspense>
+                          </ClientOnly>
+                        ) : (
+                          <Suspense fallback={null}>
+                            <LazyComponent {...resolved.props} />
+                          </Suspense>
+                        );
+                      }
 
                       return (
                         <section
@@ -522,11 +543,7 @@ export function DecoPageRenderer({
                           data-manifest-key={resolved.key}
                           style={{ animation: "decoFadeIn 0.3s ease-out" }}
                         >
-                          {isClientOnly ? (
-                            <ClientOnly fallback={null}>{inner}</ClientOnly>
-                          ) : (
-                            inner
-                          )}
+                          {inner}
                         </section>
                       );
                     }}
@@ -565,34 +582,36 @@ export function DecoPageRenderer({
           .replace(/\.tsx$/, "")
           .replace(/^site-sections-/, "");
 
-        // Unified render path: always use React.lazy + Suspense.
-        // For sync-registered components, getLazyComponent wraps them in a
-        // pre-fulfilled lazy (via syncThenable) so React renders them
-        // synchronously — same behavior as the old sync path, but with an
-        // identical tree structure on both server and client (always has
-        // <Suspense>). This prevents hydration mismatches when sites remove
-        // registerSectionsSync.
-        const LazyComponent = getLazyComponent(section.component);
-        if (!LazyComponent) return null;
-
-        // ClientOnly sections: render only on client, no SSR, no hydration mismatch.
-        // Used for analytics scripts, GTM, third-party widgets.
         const isClientOnly = options?.clientOnly === true;
-        const fallbackEl = options?.loadingFallback
-          ? createElement(options.loadingFallback, section.props)
-          : null;
+        const SyncComponent = getSyncComponent(section.component);
 
-        const content = isClientOnly ? (
-          <ClientOnly fallback={fallbackEl}>
+        let content: ReactNode;
+
+        if (SyncComponent && !isClientOnly) {
+          // Sync path: render directly — no Suspense, no lazy.
+          // React SSR streaming ignores syncThenable's pre-fulfilled status
+          // and creates empty <template> placeholders. Direct createElement avoids this.
+          content = createElement(SyncComponent, section.props);
+        } else {
+          const LazyComponent = getLazyComponent(section.component);
+          if (!LazyComponent) return null;
+
+          const fallbackEl = options?.loadingFallback
+            ? createElement(options.loadingFallback, section.props)
+            : null;
+
+          content = isClientOnly ? (
+            <ClientOnly fallback={fallbackEl}>
+              <Suspense fallback={null}>
+                <LazyComponent {...section.props} />
+              </Suspense>
+            </ClientOnly>
+          ) : (
             <Suspense fallback={null}>
               <LazyComponent {...section.props} />
             </Suspense>
-          </ClientOnly>
-        ) : (
-          <Suspense fallback={null}>
-            <LazyComponent {...section.props} />
-          </Suspense>
-        );
+          );
+        }
 
         // Dev warning: eager section not sync-registered may blank during hydration
         if (isDev && !isClientOnly && !getSyncComponent(section.component)) {
