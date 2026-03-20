@@ -173,8 +173,10 @@ export function SectionRenderer({ section }: { section: Section | null | undefin
   }
 
   // Sync path: render directly if available — avoids React.lazy SSR streaming issue
+  const options = getSectionOptions(section.Component);
+  const isClientOnly = options?.clientOnly === true;
   const SyncComp = getSyncComponent(section.Component);
-  if (SyncComp) {
+  if (SyncComp && !isClientOnly) {
     return createElement(SyncComp, section.props ?? {});
   }
 
@@ -184,10 +186,19 @@ export function SectionRenderer({ section }: { section: Section | null | undefin
     return null;
   }
 
-  const options = getSectionOptions(section.Component);
   const fallback = options?.loadingFallback
     ? createElement(options.loadingFallback, section.props ?? {})
     : <NestedSectionFallback />;
+
+  if (isClientOnly) {
+    return (
+      <ClientOnly fallback={fallback}>
+        <Suspense fallback={null}>
+          <Lazy {...(section.props ?? {})} />
+        </Suspense>
+      </ClientOnly>
+    );
+  }
 
   return (
     <Suspense fallback={fallback}>
