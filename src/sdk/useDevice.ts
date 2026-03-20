@@ -51,16 +51,37 @@ export function detectDevice(userAgent: string): Device {
 }
 
 /**
- * Get the current device type via RequestContext.
+ * Get the current device type. Works everywhere:
+ * - Server (loader, middleware, server function): reads User-Agent from RequestContext.
+ * - Client (component, event handler): uses `window.innerWidth` breakpoints.
  *
- * Must be called within a `RequestContext.run()` scope (i.e., during
- * request handling). Falls back to "desktop" outside request scope.
+ * @example
+ * ```tsx
+ * import { useDevice } from "@decocms/start/sdk/useDevice";
+ *
+ * // In a component:
+ * const device = useDevice(); // "mobile" | "tablet" | "desktop"
+ *
+ * // In a loader:
+ * export function loader(props: Props) {
+ *   const device = useDevice();
+ *   return { ...props, isMobile: device === "mobile" };
+ * }
+ * ```
  */
 export function useDevice(): Device {
-  const ctx = RequestContext.current;
-  if (!ctx) return "desktop";
-  const ua = ctx.request.headers.get("user-agent") ?? "";
-  return detectDevice(ua);
+  // Server: use RequestContext UA header
+  if (typeof document === "undefined") {
+    const ctx = RequestContext.current;
+    if (!ctx) return "desktop";
+    const ua = ctx.request.headers.get("user-agent") ?? "";
+    return detectDevice(ua);
+  }
+  // Client: use viewport width
+  const w = typeof window !== "undefined" ? window.innerWidth : 1024;
+  if (w < 768) return "mobile";
+  if (w < 1024) return "tablet";
+  return "desktop";
 }
 
 /**
@@ -89,3 +110,4 @@ export function checkDesktop(): boolean {
   if (!ctx) return true;
   return detectDevice(ctx.request.headers.get("user-agent") ?? "") === "desktop";
 }
+

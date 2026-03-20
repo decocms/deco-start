@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { Await, ClientOnly } from "@tanstack/react-router";
 import type { SectionOptions } from "../cms/registry";
 import {
   getResolvedComponent,
@@ -376,6 +377,26 @@ function DeferredSectionWrapper({
 }
 
 // ---------------------------------------------------------------------------
+// DeferredSectionSkeleton — resolves the best fallback for a deferred section
+// ---------------------------------------------------------------------------
+
+function DeferredSectionSkeleton({
+  deferred,
+  fallback,
+}: {
+  deferred: DeferredSection;
+  fallback?: ReactNode;
+}) {
+  const options = getSectionOptions(deferred.component);
+  if (options?.loadingFallback) {
+    return createElement(options.loadingFallback, deferred.rawProps);
+  }
+  if (fallback) return <>{fallback}</>;
+  if (isDev) return <DevMissingFallbackWarning component={deferred.component} />;
+  return <DefaultSectionFallback />;
+}
+
+// ---------------------------------------------------------------------------
 // Merge helper — combines eager and deferred sections in original order
 // ---------------------------------------------------------------------------
 
@@ -418,11 +439,18 @@ function mergeSections(resolved: ResolvedSection[], deferred: DeferredSection[])
 interface Props {
   sections: ResolvedSection[];
   deferredSections?: DeferredSection[];
+  /**
+   * Unawaited promises for deferred sections, keyed by `d_<index>`.
+   * Created by the route loader for TanStack native SSR streaming.
+   * When provided, takes precedence over `loadDeferredSectionFn`.
+   */
+  deferredPromises?: Record<string, Promise<ResolvedSection | null>>;
   pagePath?: string;
   /** Original page URL (with query params) — forwarded to deferred section loaders. */
   pageUrl?: string;
   loadingFallback?: ReactNode;
   errorFallback?: ReactNode;
+  /** @deprecated Use deferredPromises instead (TanStack native streaming). */
   loadDeferredSectionFn?: (data: {
     component: string;
     rawProps: Record<string, unknown>;
@@ -434,6 +462,7 @@ interface Props {
 export function DecoPageRenderer({
   sections,
   deferredSections,
+  deferredPromises,
   pagePath = "/",
   pageUrl,
   loadingFallback,
@@ -448,20 +477,69 @@ export function DecoPageRenderer({
       {hasDeferred && <FadeInStyle />}
       {items.map((item, index) => {
         if (item.type === "deferred") {
-          if (!loadDeferredSectionFn) {
-            return null;
+          const promiseKey = `d_${item.deferred.index}`;
+          const promise = deferredPromises?.[promiseKey];
+
+          // TanStack native streaming path — uses <Await> for SSR-streamed data
+          if (promise) {
+            const deferredSectionId = item.deferred.key
+              .replace(/\//g, "-")
+              .replace(/\.tsx$/, "")
+              .replace(/^site-sections-/, "");
+
+            return (
+              <SectionErrorBoundary
+                key={`deferred-${pagePath}-${item.deferred.key}-${item.deferred.index}`}
+                sectionKey={item.deferred.key}
+                fallback={errorFallback}
+              >
+                <Suspense fallback={
+                  <section id={deferredSectionId} data-manifest-key={item.deferred.key} data-deferred="true">
+                    <DeferredSectionSkeleton deferred={item.deferred} fallback={loadingFallback} />
+                  </section>
+                }>
+                  <Await promise={promise}>
+                    {(resolved) => {
+                      if (!resolved) return null;
+                      const LazyComponent = getLazyComponent(resolved.component);
+                      if (!LazyComponent) return null;
+                      const sectionId = resolved.key
+                        .replace(/\//g, "-")
+                        .replace(/\.tsx$/, "")
+                        .replace(/^site-sections-/, "");
+                      return (
+                        <section
+                          id={sectionId}
+                          data-manifest-key={resolved.key}
+                          style={{ animation: "decoFadeIn 0.3s ease-out" }}
+                        >
+                          <Suspense fallback={null}>
+                            <LazyComponent {...resolved.props} />
+                          </Suspense>
+                        </section>
+                      );
+                    }}
+                  </Await>
+                </Suspense>
+              </SectionErrorBoundary>
+            );
           }
-          return (
-            <DeferredSectionWrapper
-              key={`deferred-${pagePath}-${item.deferred.key}-${item.deferred.index}`}
-              deferred={item.deferred}
-              pagePath={pagePath}
-              pageUrl={pageUrl}
-              loadingFallback={loadingFallback}
-              errorFallback={errorFallback}
-              loadFn={loadDeferredSectionFn}
-            />
-          );
+
+          // Fallback: legacy POST-based IntersectionObserver path
+          if (loadDeferredSectionFn) {
+            return (
+              <DeferredSectionWrapper
+                key={`deferred-${pagePath}-${item.deferred.key}-${item.deferred.index}`}
+                deferred={item.deferred}
+                pagePath={pagePath}
+                pageUrl={pageUrl}
+                loadingFallback={loadingFallback}
+                errorFallback={errorFallback}
+                loadFn={loadDeferredSectionFn}
+              />
+            );
+          }
+          return null;
         }
 
         const { section } = item;
@@ -485,11 +563,33 @@ export function DecoPageRenderer({
         // registerSectionsSync.
         const LazyComponent = getLazyComponent(section.component);
         if (!LazyComponent) return null;
-        const content = (
+
+        // ClientOnly sections: render only on client, no SSR, no hydration mismatch.
+        // Used for analytics scripts, GTM, third-party widgets.
+        const isClientOnly = options?.clientOnly === true;
+        const fallbackEl = options?.loadingFallback
+          ? createElement(options.loadingFallback, section.props)
+          : null;
+
+        const content = isClientOnly ? (
+          <ClientOnly fallback={fallbackEl}>
+            <Suspense fallback={null}>
+              <LazyComponent {...section.props} />
+            </Suspense>
+          </ClientOnly>
+        ) : (
           <Suspense fallback={null}>
             <LazyComponent {...section.props} />
           </Suspense>
         );
+
+        // Dev warning: eager section not sync-registered may blank during hydration
+        if (isDev && !isClientOnly && !getSyncComponent(section.component)) {
+          console.warn(
+            `[DecoPageRenderer] Eager section "${section.component}" is not in registerSectionsSync(). ` +
+              `This may cause blank content during hydration. Add it to registerSectionsSync() in setup.ts.`,
+          );
+        }
 
         return (
           <section key={`${section.key}-${index}`} id={sectionId} data-manifest-key={section.key}>

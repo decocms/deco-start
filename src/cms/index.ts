@@ -52,6 +52,7 @@ export {
   resolvePageSections,
   resolvePageSeoBlock,
   resolveDeferredSection,
+  resolveDeferredSectionFull,
   resolveValue,
   setAsyncRenderingConfig,
   setDanglingReferenceHandler,

@@ -55,6 +55,13 @@ export {
   withTracing,
 } from "./observability";
 
+export { buildHydrationContext, type HydrationContext } from "./hydrationContext";
+export {
+  createSectionValidator,
+  type DeferredSectionInput,
+  validateDeferredSectionInput,
+} from "./validateSection";
+
 /**
  * Appends Server-Timing header to a response from the accumulated timings.
  */
