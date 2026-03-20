@@ -21,6 +21,8 @@ export interface DeferredSectionInput {
   rawProps: Record<string, unknown>;
   pagePath: string;
   pageUrl?: string;
+  /** Original position in the page section list — for correct ordering after resolution. */
+  index?: number;
 }
 
 /**
@@ -57,11 +59,18 @@ export function validateDeferredSectionInput(data: unknown): DeferredSectionInpu
     );
   }
 
+  if (obj.index !== undefined && typeof obj.index !== "number") {
+    throw new Error(
+      "[validateDeferredSectionInput] Invalid 'index' field (expected number or undefined)",
+    );
+  }
+
   return {
     component: obj.component as string,
     rawProps: obj.rawProps as Record<string, unknown>,
     pagePath: obj.pagePath as string,
     pageUrl: obj.pageUrl as string | undefined,
+    index: obj.index as number | undefined,
   };
 }
 

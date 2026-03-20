@@ -27,6 +27,25 @@ describe("validateDeferredSectionInput", () => {
     expect(result.pageUrl).toBe("https://store.com/home?ref=nav");
   });
 
+  it("accepts input with index for SPA navigation ordering", () => {
+    const result = validateDeferredSectionInput({
+      component: "site/sections/Shelf.tsx",
+      rawProps: {},
+      pagePath: "/",
+      index: 5,
+    });
+    expect(result.index).toBe(5);
+  });
+
+  it("index is undefined when not provided", () => {
+    const result = validateDeferredSectionInput({
+      component: "site/sections/Shelf.tsx",
+      rawProps: {},
+      pagePath: "/",
+    });
+    expect(result.index).toBeUndefined();
+  });
+
   it("throws on null input", () => {
     expect(() => validateDeferredSectionInput(null)).toThrow("Expected an object");
   });
@@ -84,6 +103,17 @@ describe("validateDeferredSectionInput", () => {
         pageUrl: 42,
       }),
     ).toThrow("pageUrl");
+  });
+
+  it("throws when index is not a number", () => {
+    expect(() =>
+      validateDeferredSectionInput({
+        component: "X",
+        rawProps: {},
+        pagePath: "/",
+        index: "three" as any,
+      }),
+    ).toThrow("index");
   });
 });
 
