@@ -82,10 +82,23 @@ describe("isMobileUA", () => {
 });
 
 describe("useDevice (isomorphic)", () => {
-  it("returns a valid device type in jsdom (client context)", () => {
-    // In jsdom, document exists so useDevice takes the client path.
-    // window.innerWidth defaults to 0 in jsdom → should return "mobile"
+  it("uses navigator.userAgent on client, not viewport width", () => {
+    // In jsdom, document exists → useDevice takes the client path.
+    // It should use navigator.userAgent (same mechanism as server-side)
+    // to ensure consistent values between SSR and hydration.
+    // jsdom's navigator.userAgent is a desktop-like string.
     const device = useDevice();
-    expect(["mobile", "tablet", "desktop"]).toContain(device);
+    const expected = detectDevice(navigator.userAgent);
+    expect(device).toBe(expected);
+  });
+
+  it("returns consistent result with detectDevice(navigator.userAgent)", () => {
+    // This is the key SSR/hydration consistency check:
+    // server calls detectDevice(req.headers["user-agent"])
+    // client calls detectDevice(navigator.userAgent)
+    // Both use the same detectDevice() function → same result for same UA.
+    const clientResult = useDevice();
+    const directResult = detectDevice(navigator.userAgent);
+    expect(clientResult).toBe(directResult);
   });
 });

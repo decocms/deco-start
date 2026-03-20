@@ -55,6 +55,28 @@ describe("registerSection with options", () => {
     expect(opts?.clientOnly).toBe(true);
   });
 
+  it("clientOnly defaults to undefined when not set", () => {
+    registerSection(
+      "site/sections/Normal.tsx",
+      async () => ({ default: () => null }),
+      { loadingFallback: () => null },
+    );
+
+    const opts = getSectionOptions("site/sections/Normal.tsx");
+    expect(opts?.clientOnly).toBeUndefined();
+  });
+
+  it("clientOnly false is preserved", () => {
+    registerSection(
+      "site/sections/Explicit.tsx",
+      async () => ({ default: () => null }),
+      { clientOnly: false },
+    );
+
+    const opts = getSectionOptions("site/sections/Explicit.tsx");
+    expect(opts?.clientOnly).toBe(false);
+  });
+
   it("returns undefined options for section without options", () => {
     registerSection("site/sections/Plain.tsx", async () => ({ default: () => null }));
     expect(getSectionOptions("site/sections/Plain.tsx")).toBeUndefined();
