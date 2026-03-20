@@ -507,6 +507,103 @@ const response = await vtexLimit(() => fetch(vtexUrl));
 
 ---
 
+## 6. TanStack CLI — Querying Official Docs
+
+The `@tanstack/cli` package provides direct access to official TanStack documentation from the terminal. Use it to research implementation details, find examples, and verify patterns before coding.
+
+### Installation
+
+```bash
+npm install -g @tanstack/cli
+# or use without installing:
+npx -y @tanstack/cli <command>
+```
+
+### Key Commands
+
+#### Search docs by topic
+
+```bash
+# Search across a specific library
+tanstack search-docs "server functions" --library start --json
+tanstack search-docs "hydration SSR" --library start --json
+tanstack search-docs "deferred data streaming" --library router --json
+tanstack search-docs "ClientOnly" --library router --json
+tanstack search-docs "createServerFn middleware" --library start --json
+
+# Useful searches for this migration:
+tanstack search-docs "Await defer" --library router --json
+tanstack search-docs "useHydrated" --library router --json
+tanstack search-docs "Selective SSR data-only" --library start --json
+tanstack search-docs "code execution patterns" --library start --json
+tanstack search-docs "external data loading" --library router --json
+```
+
+#### Read a specific doc page
+
+```bash
+# Format: tanstack doc <library> <path> --json
+tanstack doc start framework/react/guide/hydration-errors --json
+tanstack doc start framework/react/guide/selective-ssr --json
+tanstack doc start framework/react/guide/execution-model --json
+tanstack doc start framework/react/guide/server-functions --json
+tanstack doc start framework/react/guide/middleware --json
+tanstack doc router guide/deferred-data-loading --json
+tanstack doc router guide/ssr --json
+tanstack doc router guide/external-data-loading --json
+tanstack doc router guide/data-loading --json
+```
+
+#### List available libraries
+
+```bash
+tanstack libraries --json
+```
+
+#### Explore ecosystem tools
+
+```bash
+tanstack ecosystem --category database --json
+tanstack ecosystem --category auth --json
+```
+
+### Recommended Research Workflow
+
+When implementing a phase of this migration:
+
+```bash
+# 1. Search for the topic
+tanstack search-docs "defer Await streaming" --library router --json
+
+# 2. Read the most relevant result
+tanstack doc router guide/deferred-data-loading --json
+
+# 3. Check for related patterns in Start
+tanstack search-docs "streaming SSR" --library start --json
+
+# 4. Look for API reference
+tanstack doc router api/router/awaitComponent --json
+
+# 5. Check for breaking changes or version-specific notes
+tanstack search-docs "migration breaking changes" --library start --json
+```
+
+### Key Doc Pages for This Migration
+
+| Phase | Doc Page | Command |
+|-------|----------|---------|
+| Phase 1 | Hydration Errors | `tanstack doc start framework/react/guide/hydration-errors --json` |
+| Phase 2 | Code Execution Patterns | `tanstack doc start framework/react/guide/code-execution-patterns --json` |
+| Phase 3 | Deferred Data Loading | `tanstack doc router guide/deferred-data-loading --json` |
+| Phase 3 | SSR Streaming | `tanstack doc router guide/ssr --json` |
+| Phase 3 | External Data Loading | `tanstack doc router guide/external-data-loading --json` |
+| Phase 4 | ClientOnly Component | `tanstack doc router api/router/clientOnlyComponent --json` |
+| Phase 4 | Execution Model | `tanstack doc start framework/react/guide/execution-model --json` |
+| All | Server Functions | `tanstack doc start framework/react/guide/server-functions --json` |
+| All | Middleware | `tanstack doc start framework/react/guide/middleware --json` |
+
+---
+
 ## References
 
 - [TanStack Router — Deferred Data Loading](https://tanstack.com/router/latest/docs/guide/deferred-data-loading)
@@ -516,3 +613,4 @@ const response = await vtexLimit(() => fetch(vtexUrl));
 - [TanStack Router — ClientOnly Component](https://tanstack.com/router/latest/docs/api/router/clientOnlyComponent)
 - [TanStack Router — SSR Guide](https://tanstack.com/router/latest/docs/guide/ssr)
 - [Cloudflare Workers — Cross-Request I/O](https://developers.cloudflare.com/workers/runtime-apis/context/)
+- [TanStack CLI (`@tanstack/cli`)](https://www.npmjs.com/package/@tanstack/cli) — Query official docs from the terminal
