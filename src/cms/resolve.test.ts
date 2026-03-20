@@ -19,7 +19,7 @@ vi.mock("./registry", () => ({
   getSection: vi.fn(),
 }));
 
-import { resolveDeferredSectionFull } from "./resolve";
+import { resolveDeferredSectionFull, resolveSectionsList } from "./resolve";
 import { runSingleSectionLoader } from "./sectionLoaders";
 import { normalizeUrlsInObject } from "../sdk/normalizeUrls";
 import type { DeferredSection } from "./resolve";
@@ -63,5 +63,106 @@ describe("resolveDeferredSectionFull", () => {
     const input = { url: "https://store.com/image.jpg" };
     const result = (normalizeUrlsInObject as any)(input);
     expect(result).toEqual(input); // mock passes through
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveSectionsList — page-level variant wrapper support
+// ---------------------------------------------------------------------------
+
+describe("resolveSectionsList", () => {
+  const makeRctx = (matcherCtx = {}) => ({
+    routeParams: {},
+    matcherCtx,
+    memo: new Map(),
+    depth: 0,
+  });
+
+  it("returns array as-is when value is already an array", async () => {
+    const sections = [{ __resolveType: "section-A" }, { __resolveType: "section-B" }];
+    const result = await resolveSectionsList(sections, makeRctx());
+    expect(result).toEqual(sections);
+  });
+
+  it("returns empty array for null/undefined/non-object", async () => {
+    expect(await resolveSectionsList(null, makeRctx())).toEqual([]);
+    expect(await resolveSectionsList(undefined, makeRctx())).toEqual([]);
+    expect(await resolveSectionsList("string", makeRctx())).toEqual([]);
+    expect(await resolveSectionsList(42, makeRctx())).toEqual([]);
+  });
+
+  it("resolves page-level variant wrapper without __resolveType", async () => {
+    // Simulates CMS admin wrapping all sections in a device variant
+    // Rule has no __resolveType → evaluateMatcher returns true (match-all)
+    const sectionsArray = [
+      { __resolveType: "Header - 01" },
+      { __resolveType: "site/sections/Account/PersonalData.tsx" },
+      { __resolveType: "Footer - 01" },
+    ];
+
+    const variantWrapper = {
+      variants: [
+        {
+          rule: { mobile: true, tablet: true, desktop: true },
+          value: sectionsArray,
+        },
+      ],
+    };
+
+    const result = await resolveSectionsList(variantWrapper, makeRctx());
+    expect(result).toEqual(sectionsArray);
+  });
+
+  it("returns empty when no variant matches in page-level wrapper", async () => {
+    // All variants have __resolveType in rule → evaluateMatcher returns false
+    // (unregistered matcher defaults to false)
+    const variantWrapper = {
+      variants: [
+        {
+          rule: { __resolveType: "website/matchers/device.ts", mobile: true },
+          value: [{ __resolveType: "MobileOnly" }],
+        },
+      ],
+    };
+
+    const result = await resolveSectionsList(variantWrapper, makeRctx());
+    expect(result).toEqual([]);
+  });
+
+  it("picks first matching variant in page-level wrapper", async () => {
+    const desktopSections = [{ __resolveType: "DesktopLayout" }];
+    const mobileSections = [{ __resolveType: "MobileLayout" }];
+
+    const variantWrapper = {
+      variants: [
+        {
+          // No __resolveType → evaluateMatcher returns true (first match wins)
+          rule: { desktop: true },
+          value: desktopSections,
+        },
+        {
+          rule: { mobile: true },
+          value: mobileSections,
+        },
+      ],
+    };
+
+    const result = await resolveSectionsList(variantWrapper, makeRctx());
+    expect(result).toEqual(desktopSections);
+  });
+
+  it("returns empty for object without __resolveType and without variants", async () => {
+    const result = await resolveSectionsList({ someKey: "value" }, makeRctx());
+    expect(result).toEqual([]);
+  });
+
+  it("respects max depth limit (20)", async () => {
+    // Build 21 levels of nested variant wrappers to exceed MAX_RESOLVE_DEPTH=20
+    let wrapper: any = [{ __resolveType: "deep" }];
+    for (let i = 0; i < 21; i++) {
+      wrapper = { variants: [{ rule: {}, value: wrapper }] };
+    }
+    const result = await resolveSectionsList(wrapper, makeRctx());
+    expect(result).toEqual([]);
   });
 });
