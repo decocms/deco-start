@@ -1015,7 +1015,7 @@ function resolveSectionShallow(
  * to get the raw section array without resolving each individual section.
  * This allows the eager/deferred split to happen before section resolution.
  */
-export async function resolveSectionsList(
+async function resolveSectionsList(
   value: unknown,
   rctx: ResolveContext,
   depth = 0,
@@ -1026,20 +1026,6 @@ export async function resolveSectionsList(
 
   const obj = value as Record<string, unknown>;
   const rt = obj.__resolveType as string | undefined;
-
-  // Page-level variant wrapper without __resolveType
-  // (CMS admin wraps ALL sections in a variant object with { variants: [...] })
-  if (!rt && Array.isArray(obj.variants)) {
-    const variants = obj.variants as Array<{ value: unknown; rule?: unknown }>;
-    for (const variant of variants) {
-      const rule = variant.rule as Record<string, unknown> | undefined;
-      if (evaluateMatcher(rule, rctx.matcherCtx)) {
-        return resolveSectionsList(variant.value, rctx, depth + 1);
-      }
-    }
-    return [];
-  }
-
   if (!rt) return [];
 
   // Multivariate flags — evaluate matchers and recurse into matched variant
