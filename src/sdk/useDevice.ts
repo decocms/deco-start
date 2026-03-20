@@ -77,11 +77,11 @@ export function useDevice(): Device {
     const ua = ctx.request.headers.get("user-agent") ?? "";
     return detectDevice(ua);
   }
-  // Client: use viewport width
-  const w = typeof window !== "undefined" ? window.innerWidth : 1024;
-  if (w < 768) return "mobile";
-  if (w < 1024) return "tablet";
-  return "desktop";
+  // Client: use navigator.userAgent for consistency with server-side UA detection.
+  // Using viewport width would produce different results between SSR and
+  // hydration (server sees UA, client sees pixels), causing hydration mismatch.
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+  return detectDevice(ua);
 }
 
 /**

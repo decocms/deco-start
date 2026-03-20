@@ -503,19 +503,30 @@ export function DecoPageRenderer({
                       if (!resolved) return null;
                       const LazyComponent = getLazyComponent(resolved.component);
                       if (!LazyComponent) return null;
+                      const resolvedOptions = getSectionOptions(resolved.component);
+                      const isClientOnly = resolvedOptions?.clientOnly === true;
                       const sectionId = resolved.key
                         .replace(/\//g, "-")
                         .replace(/\.tsx$/, "")
                         .replace(/^site-sections-/, "");
+
+                      const inner = (
+                        <Suspense fallback={null}>
+                          <LazyComponent {...resolved.props} />
+                        </Suspense>
+                      );
+
                       return (
                         <section
                           id={sectionId}
                           data-manifest-key={resolved.key}
                           style={{ animation: "decoFadeIn 0.3s ease-out" }}
                         >
-                          <Suspense fallback={null}>
-                            <LazyComponent {...resolved.props} />
-                          </Suspense>
+                          {isClientOnly ? (
+                            <ClientOnly fallback={null}>{inner}</ClientOnly>
+                          ) : (
+                            inner
+                          )}
                         </section>
                       );
                     }}
