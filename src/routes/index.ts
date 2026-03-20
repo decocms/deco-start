@@ -8,6 +8,7 @@ export {
   type CmsRouteOptions,
   cmsHomeRouteConfig,
   cmsRouteConfig,
+  deferredSectionLoader,
   loadCmsHomePage,
   loadCmsPage,
   loadDeferredSection,
