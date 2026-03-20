@@ -1,6 +1,6 @@
 {
   "name": "@decocms/start",
-  "version": "0.29.3",
+  "version": "0.30.0",
   "type": "module",
   "description": "Deco framework for TanStack Start - CMS bridge, admin protocol, hooks, schema generation",
   "main": "./src/index.ts",
