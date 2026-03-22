@@ -34,6 +34,23 @@ import {
 import { buildHtmlShell } from "./htmlShell";
 import { cleanPathForCacheKey } from "./urlUtils";
 import { isMobileUA } from "./useDevice";
+import { getRenderShellConfig } from "../admin/setup";
+
+/**
+ * Append Link preload headers for CSS and fonts so the browser starts
+ * fetching them before parsing HTML. Only applied to HTML responses.
+ */
+function appendResourceHints(resp: Response): void {
+  const ct = resp.headers.get("content-type");
+  if (!ct || !ct.includes("text/html")) return;
+  const { cssHref, fontHrefs } = getRenderShellConfig();
+  if (cssHref) {
+    resp.headers.append("Link", `<${cssHref}>; rel=preload; as=style`);
+  }
+  for (const href of fontHrefs) {
+    resp.headers.append("Link", `<${href}>; rel=preload; as=font; crossorigin`);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -736,6 +753,7 @@ export function createDecoWorkerEntry(
             // CDN auto-caching would bypass that versioning and serve stale HTML
             // after deploys (referencing old CSS/JS fingerprinted filenames).
             hit.headers.set("CDN-Cache-Control", "no-store");
+            appendResourceHints(hit);
             return hit;
           }
         } catch {
@@ -750,6 +768,7 @@ export function createDecoWorkerEntry(
         const resp = new Response(origin.body, origin);
         resp.headers.set("X-Cache", "BYPASS");
         resp.headers.set("X-Cache-Reason", `status:${origin.status}`);
+        appendResourceHints(resp);
         return resp;
       }
 
@@ -764,6 +783,7 @@ export function createDecoWorkerEntry(
         resp.headers.delete("CDN-Cache-Control");
         resp.headers.set("X-Cache", "BYPASS");
         resp.headers.set("X-Cache-Reason", "set-cookie");
+        appendResourceHints(resp);
         return resp;
       }
 
@@ -776,6 +796,7 @@ export function createDecoWorkerEntry(
         resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
         resp.headers.set("X-Cache", "BYPASS");
         resp.headers.set("X-Cache-Reason", `profile:${profile}`);
+        appendResourceHints(resp);
         return resp;
       }
 
@@ -804,6 +825,7 @@ export function createDecoWorkerEntry(
       // BUILD_HASH-versioned keys; CDN auto-caching would bypass versioning
       // and serve stale HTML after deploys.
       toReturn.headers.set("CDN-Cache-Control", "no-store");
+      appendResourceHints(toReturn);
 
       // For Cache API storage, use sMaxAge as max-age since the Cache API
       // ignores s-maxage and only respects max-age for TTL decisions.

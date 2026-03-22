@@ -117,6 +117,42 @@ export function decoVitePlugin() {
       });
     },
 
+    config(_cfg, { command }) {
+      // Only split chunks for production builds — dev uses unbundled ESM.
+      if (command !== "build") return;
+      return {
+        build: {
+          rollupOptions: {
+            output: {
+              manualChunks(id) {
+                if (
+                  id.includes("node_modules/react-dom") ||
+                  id.includes("node_modules/react/")
+                ) {
+                  return "vendor-react";
+                }
+                if (
+                  id.includes("@tanstack/react-router") ||
+                  id.includes("@tanstack/start")
+                ) {
+                  return "vendor-router";
+                }
+                if (id.includes("@tanstack/react-query")) {
+                  return "vendor-query";
+                }
+                if (id.includes("@decocms/start")) {
+                  return "vendor-deco";
+                }
+                if (id.includes("@decocms/apps")) {
+                  return "vendor-commerce";
+                }
+              },
+            },
+          },
+        },
+      };
+    },
+
     configEnvironment(name, env) {
       if (name === "ssr" || name === "client") {
         env.optimizeDeps = env.optimizeDeps || {};

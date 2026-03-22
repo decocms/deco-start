@@ -61,7 +61,12 @@ export const ANALYTICS_SCRIPT = `
   }
 
   observeAll();
-  new MutationObserver(observeAll).observe(document.body, { childList: true, subtree: true });
+  var mo = new MutationObserver(observeAll);
+  if (typeof requestIdleCallback !== 'undefined') {
+    requestIdleCallback(function() { mo.observe(document.body, { childList: true, subtree: true }); });
+  } else {
+    setTimeout(function() { mo.observe(document.body, { childList: true, subtree: true }); }, 0);
+  }
 })();
 `;
 
