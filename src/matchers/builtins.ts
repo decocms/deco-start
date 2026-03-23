@@ -94,11 +94,28 @@ function isSafePattern(pattern: string): boolean {
 }
 
 function pathnameMatcher(rule: Record<string, unknown>, ctx: MatcherContext): boolean {
+  const path = ctx.path ?? "";
+
+  // CMS "case" format: { type: "Includes" | "Equals" | "Not Includes" | "Starts With", pathname: "/..." }
+  const caseObj = rule.case as { type?: string; pathname?: string } | undefined;
+  if (caseObj?.pathname) {
+    switch (caseObj.type) {
+      case "Equals":
+        return path === caseObj.pathname;
+      case "Not Includes":
+        return !path.includes(caseObj.pathname);
+      case "Starts With":
+        return path.startsWith(caseObj.pathname);
+      case "Includes":
+      default:
+        return path.includes(caseObj.pathname);
+    }
+  }
+
+  // Standard format: pattern (regex), includes (exact/glob), excludes (exact/glob)
   const pattern = rule.pattern as string | undefined;
   const includes = rule.includes as string[] | undefined;
   const excludes = rule.excludes as string[] | undefined;
-
-  const path = ctx.path ?? "";
 
   if (pattern) {
     if (!isSafePattern(pattern)) {
@@ -136,6 +153,9 @@ function pathnameMatcher(rule: Record<string, unknown>, ctx: MatcherContext): bo
     });
     if (excluded) return false;
   }
+
+  // No constraints specified — vacuously true
+  if (!pattern && !includes?.length && !excludes?.length) return false;
 
   return true;
 }
