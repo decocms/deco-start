@@ -227,13 +227,13 @@ if (!G.__deco._builtinMatchersRegistered) {
     "$live/matchers/MatchAlways.ts": () => true,
     "website/matchers/never.ts": () => false,
     "website/matchers/device.ts": (rule, ctx) => {
-      // If all devices are enabled, always match
-      if (rule.mobile && rule.tablet && rule.desktop) return true;
       const ua = (ctx.userAgent || "").toLowerCase();
-      const isMobile = /mobile|android|iphone|ipad|ipod|webos|blackberry|opera mini|iemobile/i.test(ua);
-      if (rule.mobile) return isMobile;
-      if (rule.desktop) return !isMobile;
-      return true;
+      const isTablet = /ipad|android(?!.*mobile)|tablet/i.test(ua);
+      const isMobile = !isTablet && /mobile|android|iphone|ipod|webos|blackberry|opera mini|iemobile/i.test(ua);
+      const isDesktop = !isMobile && !isTablet;
+      // If no flags are set, match everything (permissive default)
+      if (!rule.mobile && !rule.tablet && !rule.desktop) return true;
+      return !!(rule.mobile && isMobile) || !!(rule.tablet && isTablet) || !!(rule.desktop && isDesktop);
     },
     "website/matchers/random.ts": (rule) => {
       const traffic = typeof rule.traffic === "number" ? rule.traffic : 0.5;
