@@ -228,7 +228,7 @@ if (!G.__deco._builtinMatchersRegistered) {
     "website/matchers/never.ts": () => false,
     "website/matchers/device.ts": (rule, ctx) => {
       // If all devices are enabled, always match
-      if (rule.mobile && rule.desktop) return true;
+      if (rule.mobile && rule.tablet && rule.desktop) return true;
       const ua = (ctx.userAgent || "").toLowerCase();
       const isMobile = /mobile|android|iphone|ipad|ipod|webos|blackberry|opera mini|iemobile/i.test(ua);
       if (rule.mobile) return isMobile;
