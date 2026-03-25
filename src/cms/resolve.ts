@@ -1,5 +1,5 @@
 import { findPageByPath, loadBlocks } from "./loader";
-import { getSection } from "./registry";
+import { getOnBeforeResolveProps, getSection } from "./registry";
 import { isLayoutSection, runSingleSectionLoader } from "./sectionLoaders";
 import { normalizeUrlsInObject } from "../sdk/normalizeUrls";
 
@@ -479,7 +479,14 @@ async function internalResolve(value: unknown, rctx: ResolveContext): Promise<un
 
   // Unknown type — resolve props but preserve __resolveType (it's a section)
   const { __resolveType: _, ...rest } = obj;
-  const resolvedRest = await resolveProps(rest, childCtx);
+
+  // onBeforeResolveProps: let sections transform raw props before resolution.
+  // This runs with unresolved props (containing __resolveType refs) so sections
+  // can extract metadata that would be lost after resolution (e.g., collection IDs).
+  const beforeResolve = getOnBeforeResolveProps(resolveType);
+  const propsToResolve = beforeResolve ? beforeResolve(rest) : rest;
+
+  const resolvedRest = await resolveProps(propsToResolve, childCtx);
   return { __resolveType: resolveType, ...resolvedRest };
 }
 
@@ -1383,7 +1390,11 @@ export async function resolveDeferredSection(
     depth: 0,
   };
 
-  const resolvedProps = await resolveProps(rawProps, rctx);
+  // onBeforeResolveProps: let sections transform raw props before resolution.
+  const beforeResolve = getOnBeforeResolveProps(component);
+  const propsToResolve = beforeResolve ? beforeResolve(rawProps) : rawProps;
+
+  const resolvedProps = await resolveProps(propsToResolve, rctx);
   const normalizedProps = normalizeNestedSections(resolvedProps) as Record<string, unknown>;
 
   return {

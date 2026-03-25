@@ -9,7 +9,7 @@ export {
   setBlocks,
   withBlocksOverride,
 } from "./loader";
-export type { SectionModule, SectionOptions } from "./registry";
+export type { OnBeforeResolveProps, SectionModule, SectionOptions } from "./registry";
 export {
   getResolvedComponent,
   getSection,
@@ -19,6 +19,7 @@ export {
   listRegisteredSections,
   preloadSectionComponents,
   preloadSectionModule,
+  registerOnBeforeResolveProps,
   registerSection,
   registerSections,
   registerSectionsSync,
