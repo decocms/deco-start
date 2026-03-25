@@ -1,8 +1,13 @@
 import type { ComponentType } from "react";
 
+export type OnBeforeResolveProps = (
+  props: Record<string, unknown>,
+) => Record<string, unknown>;
+
 export type SectionModule = {
   default: ComponentType<any>;
   loader?: (props: any) => Promise<any> | any;
+  onBeforeResolveProps?: OnBeforeResolveProps;
   LoadingFallback?: ComponentType<any>;
   ErrorFallback?: ComponentType<{ error: Error }>;
 };
@@ -30,6 +35,8 @@ if (!G.__deco.sectionRegistry) G.__deco.sectionRegistry = {};
 if (!G.__deco.sectionOptions) G.__deco.sectionOptions = {};
 if (!G.__deco.resolvedComponents) G.__deco.resolvedComponents = {};
 if (!G.__deco.syncComponents) G.__deco.syncComponents = {};
+if (!G.__deco.onBeforeResolvePropsRegistry)
+  G.__deco.onBeforeResolvePropsRegistry = {};
 
 const registry: Record<string, RegistryEntry> = G.__deco.sectionRegistry;
 const sectionOptions: Record<string, SectionOptions> = G.__deco.sectionOptions;
@@ -45,6 +52,13 @@ const resolvedComponents: Record<string, ComponentType<any>> = G.__deco.resolved
 // are guaranteed available on BOTH server and client without any async import.
 // These never need React.lazy/Suspense and render identically on SSR and hydration.
 const syncComponents: Record<string, ComponentType<any>> = G.__deco.syncComponents;
+
+// onBeforeResolveProps registry — functions that transform raw CMS props
+// BEFORE resolvables are resolved. Allows sections to extract data from
+// raw resolvable structures (e.g., collection IDs from loader refs) that
+// would be lost after resolution.
+const onBeforeResolvePropsRegistry: Record<string, OnBeforeResolveProps> =
+  G.__deco.onBeforeResolvePropsRegistry;
 
 export function registerSection(key: string, loader: RegistryEntry, options?: SectionOptions) {
   registry[key] = loader;
@@ -129,6 +143,9 @@ export async function preloadSectionComponents(keys: string[]): Promise<void> {
         if (mod?.default) {
           resolvedComponents[key] = mod.default;
         }
+        if (mod?.onBeforeResolveProps && !onBeforeResolvePropsRegistry[key]) {
+          onBeforeResolvePropsRegistry[key] = mod.onBeforeResolveProps;
+        }
         const opts: SectionOptions = { ...sectionOptions[key] };
         if (mod.LoadingFallback) opts.loadingFallback = mod.LoadingFallback;
         if (mod.ErrorFallback) opts.errorFallback = mod.ErrorFallback;
@@ -204,6 +221,26 @@ export function registerSectionsSync(sections: Record<string, SyncSectionEntry>)
  */
 export function getSyncComponent(key: string): ComponentType<any> | undefined {
   return syncComponents[key];
+}
+
+/**
+ * Register an onBeforeResolveProps function for a section.
+ * Called with raw CMS props (containing unresolved `__resolveType` references)
+ * BEFORE the resolution engine resolves them. Use to extract metadata from
+ * resolvable structures that would be lost after resolution.
+ */
+export function registerOnBeforeResolveProps(
+  sectionKey: string,
+  fn: OnBeforeResolveProps,
+): void {
+  onBeforeResolvePropsRegistry[sectionKey] = fn;
+}
+
+/** Get the registered onBeforeResolveProps for a section, if any. */
+export function getOnBeforeResolveProps(
+  sectionKey: string,
+): OnBeforeResolveProps | undefined {
+  return onBeforeResolvePropsRegistry[sectionKey];
 }
 
 export function listRegisteredSections(): string[] {
