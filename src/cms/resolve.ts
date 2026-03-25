@@ -1,5 +1,5 @@
 import { findPageByPath, loadBlocks } from "./loader";
-import { getOnBeforeResolveProps, getSection } from "./registry";
+import { getOnBeforeResolveProps, getSection, registerOnBeforeResolveProps } from "./registry";
 import { isLayoutSection, runSingleSectionLoader } from "./sectionLoaders";
 import { normalizeUrlsInObject } from "../sdk/normalizeUrls";
 
@@ -483,7 +483,20 @@ async function internalResolve(value: unknown, rctx: ResolveContext): Promise<un
   // onBeforeResolveProps: let sections transform raw props before resolution.
   // This runs with unresolved props (containing __resolveType refs) so sections
   // can extract metadata that would be lost after resolution (e.g., collection IDs).
-  const beforeResolve = getOnBeforeResolveProps(resolveType);
+  let beforeResolve = getOnBeforeResolveProps(resolveType);
+  // If not registered yet (lazy module not loaded), eagerly load it now
+  if (!beforeResolve) {
+    const sectionLoader = getSection(resolveType);
+    if (sectionLoader) {
+      try {
+        const mod = await sectionLoader();
+        if (mod?.onBeforeResolveProps) {
+          registerOnBeforeResolveProps(resolveType, mod.onBeforeResolveProps);
+          beforeResolve = mod.onBeforeResolveProps;
+        }
+      } catch {}
+    }
+  }
   const propsToResolve = beforeResolve ? beforeResolve(rest) : rest;
 
   const resolvedRest = await resolveProps(propsToResolve, childCtx);
@@ -1391,7 +1404,20 @@ export async function resolveDeferredSection(
   };
 
   // onBeforeResolveProps: let sections transform raw props before resolution.
-  const beforeResolve = getOnBeforeResolveProps(component);
+  let beforeResolve = getOnBeforeResolveProps(component);
+  // If not registered yet (lazy module not loaded), eagerly load it now
+  if (!beforeResolve) {
+    const sectionLoader = getSection(component);
+    if (sectionLoader) {
+      try {
+        const mod = await sectionLoader();
+        if (mod?.onBeforeResolveProps) {
+          registerOnBeforeResolveProps(component, mod.onBeforeResolveProps);
+          beforeResolve = mod.onBeforeResolveProps;
+        }
+      } catch {}
+    }
+  }
   const propsToResolve = beforeResolve ? beforeResolve(rawProps) : rawProps;
 
   const resolvedProps = await resolveProps(propsToResolve, rctx);
