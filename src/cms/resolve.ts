@@ -1,5 +1,5 @@
 import { findPageByPath, loadBlocks } from "./loader";
-import { getOnBeforeResolveProps, getSection } from "./registry";
+import { getOnBeforeResolveProps, getSection, registerOnBeforeResolveProps } from "./registry";
 import { isLayoutSection, runSingleSectionLoader } from "./sectionLoaders";
 import { normalizeUrlsInObject } from "../sdk/normalizeUrls";
 
@@ -8,6 +8,30 @@ const G = globalThis as any;
 if (!G.__deco) G.__deco = {};
 if (!G.__deco.commerceLoaders) G.__deco.commerceLoaders = {};
 if (!G.__deco.customMatchers) G.__deco.customMatchers = {};
+
+// ---------------------------------------------------------------------------
+// onBeforeResolveProps helper — eagerly loads the section module if needed
+// ---------------------------------------------------------------------------
+
+async function applyOnBeforeResolveProps(
+  sectionType: string,
+  props: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  let fn = getOnBeforeResolveProps(sectionType);
+  if (!fn) {
+    const loader = getSection(sectionType);
+    if (loader) {
+      try {
+        const mod = await loader();
+        if (mod?.onBeforeResolveProps) {
+          registerOnBeforeResolveProps(sectionType, mod.onBeforeResolveProps);
+          fn = mod.onBeforeResolveProps;
+        }
+      } catch {}
+    }
+  }
+  return fn ? fn(props) : props;
+}
 
 // ---------------------------------------------------------------------------
 // Well-known resolve types — extracted as constants so they're searchable
@@ -483,8 +507,7 @@ async function internalResolve(value: unknown, rctx: ResolveContext): Promise<un
   // onBeforeResolveProps: let sections transform raw props before resolution.
   // This runs with unresolved props (containing __resolveType refs) so sections
   // can extract metadata that would be lost after resolution (e.g., collection IDs).
-  const beforeResolve = getOnBeforeResolveProps(resolveType);
-  const propsToResolve = beforeResolve ? beforeResolve(rest) : rest;
+  const propsToResolve = await applyOnBeforeResolveProps(resolveType, rest);
 
   const resolvedRest = await resolveProps(propsToResolve, childCtx);
   return { __resolveType: resolveType, ...resolvedRest };
@@ -1391,8 +1414,7 @@ export async function resolveDeferredSection(
   };
 
   // onBeforeResolveProps: let sections transform raw props before resolution.
-  const beforeResolve = getOnBeforeResolveProps(component);
-  const propsToResolve = beforeResolve ? beforeResolve(rawProps) : rawProps;
+  const propsToResolve = await applyOnBeforeResolveProps(component, rawProps);
 
   const resolvedProps = await resolveProps(propsToResolve, rctx);
   const normalizedProps = normalizeNestedSections(resolvedProps) as Record<string, unknown>;
