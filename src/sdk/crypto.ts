@@ -34,7 +34,7 @@ function hexToBytes(hex: string): Uint8Array {
  * Returns null if not set.
  */
 function getKeyFromEnv(): Promise<{ key: CryptoKey; iv: Uint8Array }> | null {
-	const envKey = process.env.DECO_CRYPTO_KEY;
+	const envKey = getEnvVar("DECO_CRYPTO_KEY");
 	if (!envKey) return null;
 
 	return cachedKey ??= (async () => {
@@ -62,7 +62,7 @@ function getKeyFromEnv(): Promise<{ key: CryptoKey; iv: Uint8Array }> | null {
  * Check if the crypto key is available.
  */
 export function hasCryptoKey(): boolean {
-	return !!process.env.DECO_CRYPTO_KEY;
+	return !!getEnvVar("DECO_CRYPTO_KEY");
 }
 
 /**
@@ -142,9 +142,44 @@ export async function resolveSecret(
 
 	// 4. Environment variable fallback
 	if (envVarName) {
-		const envValue = process.env[envVarName];
+		const envValue = getEnvVar(envVarName);
 		if (envValue) return envValue;
 	}
 
 	return null;
+}
+
+/**
+ * Get an environment variable, checking process.env first, then .dev.vars file.
+ * Cloudflare Workers dev mode stores env vars in .dev.vars but they're only
+ * accessible via the `env` binding inside request handlers. During setup.ts
+ * (module-level init), we need to read the file directly.
+ */
+function getEnvVar(name: string): string | undefined {
+	// 1. process.env (works in Node, may work in Workers with nodejs_compat)
+	if (typeof process !== "undefined" && process.env?.[name]) {
+		return process.env[name];
+	}
+
+	// 2. Read .dev.vars file (Cloudflare Workers dev mode)
+	try {
+		const fs = require("node:fs");
+		const path = require("node:path");
+		const devVarsPath = path.resolve(".dev.vars");
+		if (fs.existsSync(devVarsPath)) {
+			const content = fs.readFileSync(devVarsPath, "utf-8");
+			for (const line of content.split("\n")) {
+				const trimmed = line.trim();
+				if (trimmed.startsWith("#") || !trimmed.includes("=")) continue;
+				const eqIdx = trimmed.indexOf("=");
+				const key = trimmed.slice(0, eqIdx).trim();
+				const val = trimmed.slice(eqIdx + 1).trim();
+				if (key === name) return val;
+			}
+		}
+	} catch {
+		// fs not available (e.g., pure Worker runtime) — ignore
+	}
+
+	return undefined;
 }
