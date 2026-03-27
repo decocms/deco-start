@@ -132,8 +132,11 @@ export async function resolveSecret(
 			if (secretCache.has(cacheKey)) return secretCache.get(cacheKey)!;
 
 			const decrypted = await decryptSecret(obj.encrypted);
-			secretCache.set(cacheKey, decrypted);
-			if (decrypted) return decrypted;
+			// Only cache successful decryptions — null would block env var fallback
+			if (decrypted) {
+				secretCache.set(cacheKey, decrypted);
+				return decrypted;
+			}
 		}
 	}
 
