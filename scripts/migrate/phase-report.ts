@@ -114,6 +114,35 @@ export function report(ctx: MigrationContext): void {
   );
   lines.push("");
 
+  // Known Issues
+  lines.push("## Known Issues (Tailwind v3 → v4 + React)");
+  lines.push("");
+  lines.push("### Negative z-index on background images");
+  lines.push("");
+  lines.push("The migration script automatically converts `-z-{n}` to `z-0` on `<img>` and `<Image>` elements.");
+  lines.push("However, if you have **non-image elements** with negative z-index (e.g. `-z-10` on a `<div>` used as a background layer), they may become invisible.");
+  lines.push("");
+  lines.push("**Why it breaks:** In TanStack Start/React, section wrappers (`<section>`) or parent elements can create");
+  lines.push("CSS stacking contexts (via `animation`, `transform`, `will-change`, `filter`, `isolation`, etc.).");
+  lines.push("A child with negative z-index gets trapped inside that stacking context and renders behind the parent's background — making it invisible.");
+  lines.push("");
+  lines.push("**How to fix:**");
+  lines.push("1. Replace `-z-{n}` with `z-0` on the background element");
+  lines.push("2. Content siblings render on top naturally via DOM order (they come after in the HTML)");
+  lines.push("3. If needed, add `relative z-10` to content siblings to ensure they stay above");
+  lines.push("");
+  lines.push("**How to detect:** Search for remaining negative z-index: `grep -rn '\\-z-' src/ --include='*.tsx'`");
+  lines.push("");
+  lines.push("### Opacity utility classes");
+  lines.push("");
+  lines.push("Tailwind v4 removed `bg-opacity-{n}`, `text-opacity-{n}`, etc. The script converts them to");
+  lines.push("the modifier syntax (e.g. `bg-black bg-opacity-20` → `bg-black/20`). If a color and its opacity");
+  lines.push("are not in the same className string (e.g. set via different conditional branches), the script");
+  lines.push("flags them for manual review.");
+  lines.push("");
+  lines.push("**How to detect:** `grep -rn 'opacity-' src/ --include='*.tsx'`");
+  lines.push("");
+
   // Framework findings
   lines.push("## Framework Findings");
   lines.push("");

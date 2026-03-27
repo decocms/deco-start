@@ -231,6 +231,22 @@ const checks: Check[] = [
     },
   },
   {
+    name: "No negative z-index on non-image elements",
+    severity: "warning",
+    fn: (ctx) => {
+      const srcDir = path.join(ctx.sourceDir, "src");
+      if (!fs.existsSync(srcDir)) return true;
+      // Find -z-{n} that are NOT on img/Image elements (those are auto-fixed to z-0)
+      const bad = findFilesWithPattern(srcDir, /(?<!<(?:img|Image)[^>]*)-z-\d+/);
+      if (bad.length > 0) {
+        console.log(`    Negative z-index on non-image elements: ${bad.join(", ")}`);
+        console.log(`    These may be invisible due to stacking contexts. Replace with z-0 or positive z-index.`);
+        return false;
+      }
+      return true;
+    },
+  },
+  {
     name: "No imports to deleted static files",
     severity: "error",
     fn: (ctx) => {
