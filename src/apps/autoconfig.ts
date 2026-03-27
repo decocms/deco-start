@@ -13,6 +13,7 @@
 
 import { setInvokeActions, type InvokeAction } from "../admin/invoke";
 import { onChange } from "../cms/loader";
+import { resolveSecret } from "../sdk/crypto";
 
 // ---------------------------------------------------------------------------
 // Known app block keys → dynamic import + configure
@@ -33,28 +34,12 @@ const KNOWN_APPS: Record<string, AppAutoconfigurator> = {
 			const { configureResend } = resendClient as { configureResend: (cfg: any) => void };
 			const { sendEmail } = resendActions as { sendEmail: (props: any) => Promise<any> };
 
-			// Resolve API key from multiple sources:
-			// 1. Plain string in CMS block
-			// 2. Secret object with .get() method (old deco Secret loader)
-			// 3. Encrypted secret in CMS (has .encrypted field) → fall back to env var
-			// 4. Environment variable RESEND_API_KEY
-			let apiKey = "";
-			if (typeof block.apiKey === "string") {
-				apiKey = block.apiKey;
-			} else if (block.apiKey?.get) {
-				apiKey = block.apiKey.get() ?? "";
-			} else if (block.apiKey?.encrypted) {
-				// CMS secrets are encrypted — can't decrypt at runtime in new stack.
-				// Fall back to env var.
-				apiKey = process.env.RESEND_API_KEY ?? "";
-			}
+			const apiKey = await resolveSecret(block.apiKey, "RESEND_API_KEY");
 			if (!apiKey) {
-				// Last resort: check env
-				apiKey = process.env.RESEND_API_KEY ?? "";
-			}
-
-			if (!apiKey) {
-				console.warn("[autoconfig] deco-resend: no API key found (set RESEND_API_KEY env var or configure in CMS)");
+				console.warn(
+					"[autoconfig] deco-resend: no API key found." +
+					" Set DECO_CRYPTO_KEY to decrypt CMS secrets, or set RESEND_API_KEY as fallback.",
+				);
 				return {};
 			}
 

@@ -21,6 +21,7 @@
     "./sdk/cachedLoader": "./src/sdk/cachedLoader.ts",
     "./sdk/serverTimings": "./src/sdk/serverTimings.ts",
     "./sdk/cacheHeaders": "./src/sdk/cacheHeaders.ts",
+    "./sdk/crypto": "./src/sdk/crypto.ts",
     "./sdk/invoke": "./src/sdk/invoke.ts",
     "./sdk/instrumentedFetch": "./src/sdk/instrumentedFetch.ts",
     "./sdk/workerEntry": "./src/sdk/workerEntry.ts",
