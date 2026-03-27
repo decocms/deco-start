@@ -72,6 +72,24 @@ export function transform(ctx: MigrationContext): void {
       }
     }
 
+    // Flag files with HTMX patterns for manual React migration
+    if (/\bhx-(?:get|post|put|delete|trigger|target|swap|on|indicator|sync|select)\b/.test(result.content)) {
+      ctx.manualReviewItems.push({
+        file: targetPath,
+        reason: "HTMX attributes (hx-*) found — needs manual migration to React state/effects. HTMX server-side rendering (hx-get/hx-post with useSection) must be converted to React components with useState/useEffect or server functions.",
+        severity: "warning",
+      });
+    }
+
+    // Flag files with hx-on:click that use useScript (simpler pattern)
+    if (/hx-on:click=\{useScript/.test(result.content)) {
+      ctx.manualReviewItems.push({
+        file: targetPath,
+        reason: "hx-on:click with useScript found — convert to onClick with React event handler. The useScript serialization won't work as onClick value.",
+        severity: "warning",
+      });
+    }
+
     if (ctx.dryRun) {
       if (result.changed) {
         log(ctx, `[DRY] Would transform: ${record.path} → ${targetPath}`);

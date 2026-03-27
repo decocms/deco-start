@@ -325,6 +325,20 @@ const checks: Check[] = [
       return true;
     },
   },
+  {
+    name: "No HTMX attributes (hx-*) in components",
+    severity: "warning",
+    fn: (ctx) => {
+      const srcDir = path.join(ctx.sourceDir, "src");
+      if (!fs.existsSync(srcDir)) return true;
+      const bad = findFilesWithPattern(srcDir, /\bhx-(?:get|post|put|delete|patch|trigger|target|swap|on|indicator|sync|select)\b/);
+      if (bad.length > 0) {
+        console.log(`    HTMX attributes found (needs manual React migration): ${bad.join(", ")}`);
+        return false;
+      }
+      return true;
+    },
+  },
 ];
 
 function findFilesWithPattern(
