@@ -11,3 +11,4 @@ export type RichText = string;
 export type Secret = string;
 export type Color = string;
 export type ButtonWidget = string;
+export type TextArea = string;

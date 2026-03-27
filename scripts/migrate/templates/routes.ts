@@ -71,7 +71,7 @@ function NavigationProgress() {
 function StableOutlet() {
   const isLoading = useRouterState({ select: (s) => s.isLoading });
   const ref = useRef<HTMLDivElement>(null);
-  const savedHeight = useRef<number | undefined>();
+  const savedHeight = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     if (isLoading && ref.current) {
