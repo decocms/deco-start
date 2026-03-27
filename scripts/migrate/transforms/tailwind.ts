@@ -503,23 +503,104 @@ function fixNegativeZIndex(content: string): { content: string; changed: boolean
     }
   }
 
-  // Step 3: For images without overlay (no backgroundColor on parent),
-  // just add relative z-10 to the content sibling
+  // Step 3: For content divs that are siblings of z-0 images,
+  // add `relative z-10` so content renders above the background image.
+  // Uses a line-by-line approach to avoid regex issues with JSX nesting.
   if (changed) {
-    result = result.replace(
-      /(<(?:img|Image)\b[^>]*\bz-0\b[^>]*(?:\/>|>))([\s\S]*?)(<div\s+className=(?:"|{[`"]))([^"}`]*)(["}`])/g,
-      (match, imgTag, between, divOpen, classes, divClose) => {
-        // Only modify the immediate next sibling div
-        if (between.trim() && !between.trim().startsWith(')') && !between.trim().startsWith('}')) {
-          return match;
+    const lines = result.split("\n");
+    let foundZ0Image = false;
+    let needsContentZIndex = false;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      // Detect start of an image element (may span multiple lines)
+      if (/<(?:img|Image)\b/.test(line)) {
+        foundZ0Image = true;
+        if (/\bz-0\b/.test(line)) {
+          needsContentZIndex = true;
         }
-        if (/z-\d+/.test(classes)) {
-          return match; // Already has z-index
+        continue;
+      }
+      // Detect z-0 on a subsequent line of the image element
+      if (foundZ0Image && !needsContentZIndex && /\bz-0\b/.test(line)) {
+        needsContentZIndex = true;
+        continue;
+      }
+      // Detect end of multi-line image element (self-closing />)
+      if (foundZ0Image && !needsContentZIndex && /\/>/.test(line)) {
+        // Image closed without z-0, reset
+        foundZ0Image = false;
+        continue;
+      }
+
+      // When we hit the closing of an Image block, start looking for content div
+      if (foundZ0Image && /\)\}/.test(line)) {
+        // The conditional image block closed, content div should be next
+        continue;
+      }
+
+      // Skip overlay divs we inserted
+      if (/Overlay/.test(line)) continue;
+      if (/absolute inset-0 z-10/.test(line)) continue;
+
+      // Find the first content div after the image
+      if (needsContentZIndex && /^\s*<div\b/.test(line)) {
+        // Check if this div already has a z-index
+        if (/z-\d+/.test(line)) {
+          needsContentZIndex = false;
+          foundZ0Image = false;
+          continue;
         }
-        notes.push("Added relative z-10 to content div sibling of background image");
-        return `${imgTag}${between}${divOpen}relative z-10 ${classes}${divClose}`;
-      },
-    );
+        // Also check the next few lines for z-index (multi-line className)
+        let hasZ = false;
+        for (let j = i; j < Math.min(i + 5, lines.length); j++) {
+          if (/z-\d+/.test(lines[j])) { hasZ = true; break; }
+          if (/>/.test(lines[j]) && j !== i) break;
+        }
+        if (hasZ) {
+          needsContentZIndex = false;
+          foundZ0Image = false;
+          continue;
+        }
+
+        // Add relative z-10 to the className — may be on this line or a subsequent one
+        let classLine = i;
+        for (let k = i; k < Math.min(i + 4, lines.length); k++) {
+          if (/className=/.test(lines[k])) {
+            classLine = k;
+            break;
+          }
+        }
+
+        if (/className="/.test(lines[classLine])) {
+          lines[classLine] = lines[classLine].replace(/className="/, 'className="relative z-10 ');
+          notes.push("Added relative z-10 to content div sibling of background image");
+        } else if (/className=\{clx\(/.test(lines[classLine])) {
+          // clx( may have its first string on the same line or the next
+          if (/className=\{clx\(\s*"/.test(lines[classLine])) {
+            lines[classLine] = lines[classLine].replace(/className=\{clx\(\s*"/, 'className={clx("relative z-10 ');
+          } else {
+            // First string argument is on the next line
+            for (let k = classLine + 1; k < Math.min(classLine + 3, lines.length); k++) {
+              if (/^\s*"/.test(lines[k])) {
+                lines[k] = lines[k].replace(/^(\s*)"/, '$1"relative z-10 ');
+                break;
+              }
+            }
+          }
+          notes.push("Added relative z-10 to content div sibling of background image");
+        } else if (/className=\{`/.test(lines[classLine])) {
+          lines[classLine] = lines[classLine].replace(/className=\{`/, 'className={`relative z-10 ');
+          notes.push("Added relative z-10 to content div sibling of background image");
+        }
+
+        needsContentZIndex = false;
+        foundZ0Image = false;
+      }
+    }
+
+    result = lines.join("\n");
   }
 
   // Step 4: Flag remaining -z-{n} on non-image elements for manual review
