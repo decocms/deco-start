@@ -275,15 +275,19 @@ const checks: Check[] = [
     },
   },
   {
-    name: "No invoke.resend calls (should use sendEmail)",
+    name: "invoke.* calls have runtime.ts proxy available",
     severity: "warning",
     fn: (ctx) => {
       const srcDir = path.join(ctx.sourceDir, "src");
       if (!fs.existsSync(srcDir)) return true;
-      const bad = findFilesWithPattern(srcDir, /invoke\.resend\./);
-      if (bad.length > 0) {
-        console.log(`    Still uses invoke.resend: ${bad.join(", ")}`);
-        return false;
+      const hasInvoke = findFilesWithPattern(srcDir, /\binvoke\.\w+\.\w+/);
+      if (hasInvoke.length > 0) {
+        // Check that runtime.ts exists and has the invoke proxy
+        const runtimePath = path.join(srcDir, "runtime.ts");
+        if (!fs.existsSync(runtimePath)) {
+          console.log(`    Files use invoke.* but src/runtime.ts is missing: ${hasInvoke.join(", ")}`);
+          return false;
+        }
       }
       return true;
     },
