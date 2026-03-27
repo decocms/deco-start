@@ -405,6 +405,43 @@ function fixClassNameString(classes: string): { fixed: string; changes: string[]
   return { fixed: classList.join(" "), changes };
 }
 
+// ── Fix negative z-index on background images ──────────────────
+// In Tailwind v3, `-z-10` on an absolute image inside a relative parent worked
+// to push the image behind the parent's content. In Tailwind v4 + React,
+// stacking contexts from wrappers (section elements, animation, etc.) can trap
+// the negative z-index, making the image invisible.
+// Fix: replace `-z-{n}` with `z-0` on images. Since the image comes first in DOM,
+// content siblings (which have z-index: auto) render on top naturally.
+const NEG_Z_ON_IMAGE_REGEX = /\b-z-\d+\b/g;
+
+function fixNegativeZIndex(content: string): { content: string; changed: boolean; notes: string[] } {
+  const notes: string[] = [];
+  let changed = false;
+  let result = content;
+
+  // Replace -z-{n} with z-0 on img/Image elements.
+  // Strategy: find <img or <Image tags, then replace -z-{n} within their className.
+  // We use a two-pass approach:
+  // 1. Find img/Image tag boundaries
+  // 2. Within each, replace -z-{n}
+
+  // Match <img ...> or <Image ...> (including self-closing and multi-line)
+  result = result.replace(
+    /<(?:img|Image)\b[\s\S]*?(?:\/>|>)/g,
+    (tag) => {
+      if (!/-z-\d+/.test(tag)) return tag;
+      const fixed = tag.replace(/(?<=\s|"|`)-z-(\d+)\b/g, (m) => {
+        changed = true;
+        notes.push(`Background image: replaced ${m} with z-0`);
+        return "z-0";
+      });
+      return fixed;
+    },
+  );
+
+  return { content: result, changed, notes };
+}
+
 /**
  * Transform Tailwind classes in a file.
  *
@@ -418,6 +455,14 @@ export function transformTailwind(content: string): TransformResult {
   const notes: string[] = [];
   let changed = false;
   let result = content;
+
+  // ── Fix negative z-index on background images ──────────────────
+  const zFix = fixNegativeZIndex(result);
+  if (zFix.changed) {
+    result = zFix.content;
+    changed = true;
+    notes.push(...zFix.notes);
+  }
 
   // ── Fix opacity utility pattern (Tailwind v4 breaking change) ──
   // bg-black bg-opacity-20 → bg-black/20
