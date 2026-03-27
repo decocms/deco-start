@@ -43,11 +43,14 @@ import {
   setBlocks,
 } from "@decocms/start/cms";
 import { registerBuiltinMatchers } from "@decocms/start/matchers/builtins";
+import { autoconfigApps } from "@decocms/start/apps/autoconfig";
 
 // -- CMS Blocks --
 // The Vite plugin intercepts the blocks.gen import and injects .deco/blocks/ data.
 if (typeof document === "undefined") {
   setBlocks(generatedBlocks);
+  // Auto-configure apps (Resend, etc.) from CMS blocks
+  autoconfigApps(generatedBlocks);
 }
 
 // -- Section Registry --
