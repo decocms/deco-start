@@ -440,35 +440,67 @@ function fixNegativeZIndex(content: string): { content: string; changed: boolean
 
   // Step 2: When parent div has backgroundColor inline style + child img with z-0,
   // extract backgroundColor into a separate overlay div and bump content to z-20.
-  // Pattern: <div ... style={{ backgroundColor: "..." }} ...> ... <img/Image z-0 .../> ... <div content>
-  if (changed) {
-    // Detect: style={{ backgroundColor: "rgba(...)" }} on a parent div
-    // followed by an img/Image with z-0
-    const overlayPattern = /(<div\b[^>]*?)(\s*style=\{\{[^}]*backgroundColor:\s*"([^"]+)"[^}]*\}\})([^>]*>)([\s\S]*?)(<(?:img|Image)\b[^>]*\bz-0\b[^>]*(?:\/>|>))([\s\S]*?)(<div\b[^>]*?className=(?:"|{[`"]))([^"}`]*)(["}`])/g;
+  // Use a simple two-pass approach to avoid JSX nesting issues:
+  //   a) Extract and remove backgroundColor from parent div
+  //   b) Insert overlay div before the content div (after the image conditional block)
+  if (changed && /style=\{\{[^}]*backgroundColor/.test(result)) {
+    const bgMatch = result.match(/style=\{\{\s*backgroundColor:\s*"([^"]+)"\s*\}\}/);
+    if (bgMatch) {
+      const bgValue = bgMatch[1];
 
-    result = result.replace(
-      overlayPattern,
-      (match, divStart, styleAttr, bgColor, divEnd, beforeImg, imgTag, afterImg, contentDivOpen, contentClasses, contentDivClose) => {
-        changed = true;
-        notes.push(`Extracted backgroundColor overlay: ${bgColor}`);
+      // Remove the style attribute from the parent div
+      result = result.replace(/\s*style=\{\{\s*backgroundColor:\s*"[^"]+"\s*\}\}/, "");
 
-        // Remove backgroundColor from parent
-        const cleanedParent = `${divStart}${divEnd}`;
+      // Insert overlay div. Find the closing of the image conditional block:
+      // Pattern: )} followed by whitespace then <div
+      // This handles {imageBg && (<Image ... />)}  <div content>
+      let insertedOverlay = false;
 
-        // Create overlay div
-        const overlayDiv = `\n      {/* Overlay */}\n      <div className="absolute inset-0 z-10" style={{ backgroundColor: "${bgColor}" }} />`;
+      // Try pattern: )} then <div (conditional image)
+      if (/\)\}\s*\n\s*<div/.test(result)) {
+        result = result.replace(
+          /(\)\})([\s\n]*)(<div\b)/,
+          (m, closing, ws, divTag) => {
+            if (insertedOverlay) return m;
+            insertedOverlay = true;
+            return `${closing}${ws}{/* Overlay */}\n      <div className="absolute inset-0 z-10" style={{ backgroundColor: "${bgValue}" }} />${ws}${divTag}`;
+          },
+        );
+      }
 
-        // Bump content div to z-20
-        let fixedContentClasses = contentClasses;
-        if (fixedContentClasses.includes("z-10")) {
-          fixedContentClasses = fixedContentClasses.replace(/\bz-10\b/, "z-20");
-        } else if (!fixedContentClasses.includes("z-20") && !fixedContentClasses.includes("z-30")) {
-          fixedContentClasses = `relative z-20 ${fixedContentClasses}`;
+      // Try pattern: /> then <div (direct image, no conditional)
+      if (!insertedOverlay && /\/>\s*\n\s*<div/.test(result)) {
+        result = result.replace(
+          /(\/>\s*\n)([\s]*)(<div\b)/,
+          (m, closing, ws, divTag) => {
+            if (insertedOverlay) return m;
+            insertedOverlay = true;
+            return `${closing}${ws}{/* Overlay */}\n${ws}<div className="absolute inset-0 z-10" style={{ backgroundColor: "${bgValue}" }} />\n${ws}${divTag}`;
+          },
+        );
+      }
+
+      if (insertedOverlay) {
+        // Bump the first content div after the overlay to z-20.
+        // Find the overlay marker, then the next className= string after it.
+        const overlayMarker = `style={{ backgroundColor: "${bgValue}" }} />`;
+        const overlayIdx = result.indexOf(overlayMarker);
+        if (overlayIdx !== -1) {
+          const afterOverlay = result.substring(overlayIdx + overlayMarker.length);
+          // Find first className= after overlay (handles both className="..." and className={clx("...")})
+          const classMatch = afterOverlay.match(/className=(?:\{clx\(\s*)?[""`]([^""`]*)/);
+          if (classMatch && classMatch[1] && !/z-\d+/.test(classMatch[1])) {
+            const originalClass = classMatch[1];
+            const fixedClass = `relative z-20 ${originalClass}`;
+            // Replace only the first occurrence after the overlay
+            const beforeOverlay = result.substring(0, overlayIdx + overlayMarker.length);
+            const fixed = afterOverlay.replace(originalClass, fixedClass);
+            result = beforeOverlay + fixed;
+          }
         }
-
-        return `${cleanedParent}${beforeImg}${imgTag}${overlayDiv}${afterImg}${contentDivOpen}${fixedContentClasses}${contentDivClose}`;
-      },
-    );
+        notes.push(`Extracted backgroundColor overlay: ${bgValue}`);
+      }
+    }
   }
 
   // Step 3: For images without overlay (no backgroundColor on parent),
