@@ -1,13 +1,9 @@
 /**
  * Auto-configures known apps from CMS blocks.
  *
- * Scans the decofile for block keys matching known apps and dynamically imports
- * their `mod.ts` from @decocms/apps. Each app mod exports:
- * - `configure(blockData, resolveSecret)` → configures the app client
- * - `handlers` → record of invoke handler keys → handler functions
- *
- * Zero hardcoded app logic in the framework — all app-specific code lives in
- * @decocms/apps/{app}/mod.ts.
+ * For each known app:
+ * 1. Try to import `@decocms/apps/{app}/mod` (standard contract: configure + handlers)
+ * 2. If mod.ts doesn't exist, use inline fallback configurator
  *
  * Usage in setup.ts:
  *   import { autoconfigApps } from "@decocms/start/apps/autoconfig";
@@ -20,22 +16,64 @@ import { onChange } from "../cms/loader";
 import { resolveSecret } from "../sdk/crypto";
 
 // ---------------------------------------------------------------------------
-// Block key → @decocms/apps module mapping
+// App configurator interface
 // ---------------------------------------------------------------------------
 
-/**
- * Maps CMS block keys (e.g. "deco-resend") to their @decocms/apps module path.
- * To add a new app, just add an entry here — no other code changes needed.
- */
-const BLOCK_TO_APP: Record<string, string> = {
-	"deco-resend": "resend",
-	// "deco-analytics": "analytics",
-	// "deco-shopify": "shopify",
-	// "deco-vtex": "vtex",
+interface AppConfigurator {
+	(blockData: unknown): Promise<Record<string, InvokeAction>>;
+}
+
+// ---------------------------------------------------------------------------
+// Inline fallbacks (used when @decocms/apps/{app}/mod doesn't exist yet)
+// ---------------------------------------------------------------------------
+
+const INLINE_FALLBACKS: Record<string, AppConfigurator> = {
+	resend: async (block: any) => {
+		try {
+			const [clientMod, actionMod] = await Promise.all([
+				import("@decocms/apps/resend/client"),
+				import("@decocms/apps/resend/actions/send"),
+			]);
+
+			const apiKey = await resolveSecret(block.apiKey, "RESEND_API_KEY");
+			if (!apiKey) {
+				console.warn(
+					"[autoconfig] deco-resend: no API key found." +
+					" Set DECO_CRYPTO_KEY to decrypt CMS secrets, or set RESEND_API_KEY as fallback.",
+				);
+				return {};
+			}
+
+			clientMod.configureResend({
+				apiKey,
+				emailFrom: block.emailFrom
+					? `${block.emailFrom.name || "Contact"} <${block.emailFrom.domain || "onboarding@resend.dev"}>`
+					: undefined,
+				emailTo: block.emailTo,
+				subject: block.subject,
+			});
+
+			const handler: InvokeAction = async (props) => actionMod.sendEmail(props);
+			return {
+				"resend/actions/emails/send": handler,
+				"resend/actions/emails/send.ts": handler,
+			};
+		} catch {
+			return {};
+		}
+	},
 };
 
 // ---------------------------------------------------------------------------
-// Generic app loader
+// Block key → app name mapping
+// ---------------------------------------------------------------------------
+
+const BLOCK_TO_APP: Record<string, string> = {
+	"deco-resend": "resend",
+};
+
+// ---------------------------------------------------------------------------
+// App loader: try mod.ts first, then inline fallback
 // ---------------------------------------------------------------------------
 
 interface AppMod {
@@ -51,30 +89,55 @@ async function loadAndConfigureApp(
 	appName: string,
 	blockData: unknown,
 ): Promise<Record<string, InvokeAction>> {
+	// Strategy 1: try @decocms/apps/{app}/mod (standard contract)
 	try {
-		// Dynamic import of @decocms/apps/{appName}/mod
-		const mod: AppMod = await import(
-			/* @vite-ignore */ `@decocms/apps/${appName}/mod`
-		);
-
-		const ok = await mod.configure(blockData, resolveSecret);
-		if (!ok) {
-			console.warn(
-				`[autoconfig] ${blockKey}: configure() returned false.` +
-				` Set DECO_CRYPTO_KEY to decrypt CMS secrets, or set the app's env var fallback.`,
-			);
-			return {};
+		// Use static-like import patterns that Vite can resolve
+		const mod = await tryImportAppMod(appName);
+		if (mod) {
+			const ok = await mod.configure(blockData, resolveSecret);
+			if (!ok) {
+				console.warn(
+					`[autoconfig] ${blockKey}: configure() returned false.` +
+					` Set DECO_CRYPTO_KEY to decrypt CMS secrets, or set the app env var fallback.`,
+				);
+				return {};
+			}
+			console.log(`[autoconfig] ${blockKey}: configured via mod.ts (${Object.keys(mod.handlers).length} handlers)`);
+			return mod.handlers;
 		}
+	} catch {
+		// mod.ts not available — fall through to inline
+	}
 
-		console.log(`[autoconfig] ${blockKey}: configured (${Object.keys(mod.handlers).length} handlers)`);
-		return mod.handlers;
-	} catch (e) {
-		// @decocms/apps not installed or app module doesn't exist — skip silently
-		if ((e as any)?.code === "ERR_MODULE_NOT_FOUND" || (e as any)?.message?.includes("Cannot find")) {
-			return {};
+	// Strategy 2: inline fallback
+	const fallback = INLINE_FALLBACKS[appName];
+	if (fallback) {
+		const actions = await fallback(blockData);
+		if (Object.keys(actions).length > 0) {
+			console.log(`[autoconfig] ${blockKey}: configured via inline fallback (${Object.keys(actions).length} handlers)`);
 		}
-		console.warn(`[autoconfig] ${blockKey}:`, e);
-		return {};
+		return actions;
+	}
+
+	return {};
+}
+
+/**
+ * Try to import the app mod. Returns null if not available.
+ * Uses explicit import paths instead of template literals to avoid
+ * Cloudflare Workers vite plugin crashes on missing modules.
+ */
+async function tryImportAppMod(appName: string): Promise<AppMod | null> {
+	// Map known apps to static imports (CF Workers can't do dynamic string imports)
+	switch (appName) {
+		case "resend":
+			try {
+				return await import("@decocms/apps/resend/mod");
+			} catch {
+				return null;
+			}
+		default:
+			return null;
 	}
 }
 
@@ -89,8 +152,12 @@ async function configureAll(blocks: Record<string, unknown>): Promise<Record<str
 		const block = blocks[blockKey];
 		if (!block) continue;
 
-		const appActions = await loadAndConfigureApp(blockKey, appName, block);
-		Object.assign(actions, appActions);
+		try {
+			const appActions = await loadAndConfigureApp(blockKey, appName, block);
+			Object.assign(actions, appActions);
+		} catch (e) {
+			console.warn(`[autoconfig] ${blockKey}:`, e);
+		}
 	}
 
 	return actions;
