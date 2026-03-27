@@ -260,6 +260,67 @@ const checks: Check[] = [
       return true;
     },
   },
+  {
+    name: "No dead cache/cacheKey/loader exports",
+    severity: "warning",
+    fn: (ctx) => {
+      const srcDir = path.join(ctx.sourceDir, "src");
+      if (!fs.existsSync(srcDir)) return true;
+      const bad = findFilesWithPattern(srcDir, /^export\s+const\s+(?:cache|cacheKey|loader)\s*=/m);
+      if (bad.length > 0) {
+        console.log(`    Dead exports found (old cache/loader system): ${bad.join(", ")}`);
+        return false;
+      }
+      return true;
+    },
+  },
+  {
+    name: "No invoke.resend calls (should use sendEmail)",
+    severity: "warning",
+    fn: (ctx) => {
+      const srcDir = path.join(ctx.sourceDir, "src");
+      if (!fs.existsSync(srcDir)) return true;
+      const bad = findFilesWithPattern(srcDir, /invoke\.resend\./);
+      if (bad.length > 0) {
+        console.log(`    Still uses invoke.resend: ${bad.join(", ")}`);
+        return false;
+      }
+      return true;
+    },
+  },
+  {
+    name: "No Deno-only crypto.subtle.digestSync",
+    severity: "warning",
+    fn: (ctx) => {
+      const srcDir = path.join(ctx.sourceDir, "src");
+      if (!fs.existsSync(srcDir)) return true;
+      const bad = findFilesWithPattern(srcDir, /digestSync/);
+      if (bad.length > 0) {
+        console.log(`    Deno-only digestSync found: ${bad.join(", ")}`);
+        return false;
+      }
+      return true;
+    },
+  },
+  {
+    name: ".gitignore exists with new stack entries",
+    severity: "warning",
+    fn: (ctx) => {
+      const gitignorePath = path.join(ctx.sourceDir, ".gitignore");
+      if (!fs.existsSync(gitignorePath)) {
+        console.log("    .gitignore missing");
+        return false;
+      }
+      const content = fs.readFileSync(gitignorePath, "utf-8");
+      const required = [".wrangler/", "node_modules/", ".tanstack/", "src/routeTree.gen.ts"];
+      const missing = required.filter((r) => !content.includes(r));
+      if (missing.length > 0) {
+        console.log(`    .gitignore missing entries: ${missing.join(", ")}`);
+        return false;
+      }
+      return true;
+    },
+  },
 ];
 
 function findFilesWithPattern(
