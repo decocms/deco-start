@@ -72,6 +72,9 @@ export interface MigrationContext {
   /** deno.json import map entries */
   importMap: Record<string, string>;
 
+  /** npm dependencies discovered from inline npm: imports in source files */
+  discoveredNpmDeps: Record<string, string>;
+
   /** All categorized source files */
   files: FileRecord[];
 
@@ -114,6 +117,7 @@ export function createContext(
     platform: "custom",
     gtmId: null,
     importMap: {},
+    discoveredNpmDeps: {},
     files: [],
     scaffoldedFiles: [],
     transformedFiles: [],

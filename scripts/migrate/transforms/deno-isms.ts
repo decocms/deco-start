@@ -14,33 +14,28 @@ export function transformDenoIsms(content: string): TransformResult {
   let result = content;
 
   // Remove deno-lint-ignore comments (single line and file-level)
-  const denoLintRegex = /^\s*\/\/\s*deno-lint-ignore[^\n]*\n?/gm;
-  if (denoLintRegex.test(result)) {
-    result = result.replace(denoLintRegex, "");
+  // Also handle JSX comment form: {/* deno-lint-ignore ... */}
+  if (/deno-lint-ignore/.test(result)) {
+    result = result.replace(/^\s*\/\/\s*deno-lint-ignore[^\n]*\n?/gm, "");
+    result = result.replace(/\s*\{\/\*\s*deno-lint-ignore[^*]*\*\/\}\s*/g, " ");
     changed = true;
     notes.push("Removed deno-lint-ignore comments");
   }
 
   // Remove npm: prefix in import specifiers that weren't caught by imports transform
-  const npmPrefixRegex = /(from\s+["'])npm:([^"'@][^"']*)(["'])/g;
-  if (npmPrefixRegex.test(result)) {
+  if (/from\s+["']npm:/.test(result)) {
+    // npm:pkg@version → pkg (strip version)
+    result = result.replace(
+      /(from\s+["'])npm:(@?[^@"']+)@[^"']*(["'])/g,
+      "$1$2$3",
+    );
+    // npm:pkg → pkg (no version)
     result = result.replace(
       /(from\s+["'])npm:([^"'@][^"']*)(["'])/g,
       "$1$2$3",
     );
     changed = true;
     notes.push("Removed npm: prefix from imports");
-  }
-
-  // npm:pkg@version → pkg (strip version too)
-  const npmVersionRegex = /(from\s+["'])npm:(@?[^@"']+)@[^"']*(["'])/g;
-  if (npmVersionRegex.test(result)) {
-    result = result.replace(
-      /(from\s+["'])npm:(@?[^@"']+)@[^"']*(["'])/g,
-      "$1$2$3",
-    );
-    changed = true;
-    notes.push("Removed npm: prefix and version from imports");
   }
 
   // Remove Deno.* API usages — flag for manual review

@@ -186,23 +186,83 @@ const checks: Check[] = [
       return true;
     },
   },
+  {
+    name: "No .ts/.tsx extensions in relative import paths",
+    severity: "warning",
+    fn: (ctx) => {
+      const srcDir = path.join(ctx.sourceDir, "src");
+      if (!fs.existsSync(srcDir)) return true;
+      // Match relative imports with .ts/.tsx extensions
+      const bad = findFilesWithPattern(srcDir, /from\s+["'](?:\.\.?\/|~\/)[^"']*\.tsx?["']/);
+      if (bad.length > 0) {
+        console.log(`    Still has .ts/.tsx extensions in imports: ${bad.join(", ")}`);
+        return false;
+      }
+      return true;
+    },
+  },
+  {
+    name: "No for= in JSX (should be htmlFor=)",
+    severity: "warning",
+    fn: (ctx) => {
+      const srcDir = path.join(ctx.sourceDir, "src");
+      if (!fs.existsSync(srcDir)) return true;
+      const bad = findFilesWithPattern(srcDir, /<label[^>]*\sfor\s*=/);
+      if (bad.length > 0) {
+        console.log(`    Still has for= in JSX: ${bad.join(", ")}`);
+        return false;
+      }
+      return true;
+    },
+  },
+  {
+    name: "No relative imports to deleted SDK files",
+    severity: "error",
+    fn: (ctx) => {
+      const srcDir = path.join(ctx.sourceDir, "src");
+      if (!fs.existsSync(srcDir)) return true;
+      // Only match relative imports (../ or ./) to deleted SDK files, not @decocms/* package imports
+      const bad = findFilesWithPattern(srcDir, /from\s+["'](?:\.\.?\/)[^"']*\/sdk\/(?:clx|useId|useOffer|useVariantPossiblities|usePlatform)["']/);
+      if (bad.length > 0) {
+        console.log(`    Still has relative imports to deleted SDK files: ${bad.join(", ")}`);
+        return false;
+      }
+      return true;
+    },
+  },
+  {
+    name: "No imports to deleted static files",
+    severity: "error",
+    fn: (ctx) => {
+      const srcDir = path.join(ctx.sourceDir, "src");
+      if (!fs.existsSync(srcDir)) return true;
+      const bad = findFilesWithPattern(srcDir, /from\s+["'][^"']*static\/adminIcons/);
+      if (bad.length > 0) {
+        console.log(`    Still has imports to static/adminIcons: ${bad.join(", ")}`);
+        return false;
+      }
+      return true;
+    },
+  },
 ];
 
 function findFilesWithPattern(
   dir: string,
   pattern: RegExp,
   results: string[] = [],
+  baseDir?: string,
 ): string[] {
+  const root = baseDir ?? dir;
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name === "node_modules" || entry.name === ".git") continue;
-      findFilesWithPattern(fullPath, pattern, results);
+      if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "server") continue;
+      findFilesWithPattern(fullPath, pattern, results, root);
     } else if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) {
       const content = fs.readFileSync(fullPath, "utf-8");
       if (pattern.test(content)) {
-        results.push(path.relative(dir, fullPath));
+        results.push(path.basename(fullPath));
       }
     }
   }

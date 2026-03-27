@@ -7,8 +7,17 @@ export function generateSetup(_ctx: MigrationContext): string {
  * This file is imported by router.tsx at startup.
  * It uses import.meta.glob to lazily discover all section components.
  */
-import { registerSections } from "@decocms/start/cms";
-import { registerMatcher } from "@decocms/start/matchers";
+import {
+  registerSections,
+  loadBlocks,
+  setBlocks,
+} from "@decocms/start/cms";
+import { registerBuiltinMatchers } from "@decocms/start/matchers/builtins";
+
+// -- CMS Blocks --
+// Load generated blocks at module level so they're available for resolution.
+const blocks = loadBlocks();
+setBlocks(blocks);
 
 // -- Section Registry --
 // Discovers all .tsx files under src/sections/ and registers them as CMS blocks.
@@ -16,17 +25,6 @@ const sectionModules = import.meta.glob("./sections/**/*.tsx");
 registerSections(sectionModules);
 
 // -- Matchers --
-// Register any custom matchers here.
-// Example: registerMatcher("device", deviceMatcher);
-
-// -- Loader Cache --
-// Register cached loaders here if needed.
-// Example:
-// import { createCachedLoader } from "@decocms/start/loaders";
-// registerLoader("productList", createCachedLoader(vtexProductList, { ttl: 60_000 }));
-
-// -- CMS Blocks --
-// Load generated blocks at module level so they're available for resolution.
-import "./server/cms/blocks.gen";
+registerBuiltinMatchers();
 `;
 }

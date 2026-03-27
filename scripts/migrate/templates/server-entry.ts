@@ -22,7 +22,7 @@ export default createStartHandler(defaultStreamHandler);
 `;
 }
 
-function generateWorkerEntry(ctx: MigrationContext): string {
+function generateWorkerEntry(_ctx: MigrationContext): string {
   return `/**
  * Cloudflare Worker entry point.
  *
@@ -30,13 +30,28 @@ function generateWorkerEntry(ctx: MigrationContext): string {
  * around the TanStack Start handler. Add proxy logic, security headers, or
  * A/B testing as needed.
  */
-import { createDecoWorkerEntry } from "@decocms/start/worker";
+import "./setup";
+import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
+import { createDecoWorkerEntry } from "@decocms/start/sdk/workerEntry";
+import {
+  handleMeta,
+  handleDecofileRead,
+  handleDecofileReload,
+  handleRender,
+  corsHeaders,
+} from "@decocms/start/admin";
 
-const handler = createDecoWorkerEntry({
-  siteName: "${ctx.siteName}",
+const serverEntry = createServerEntry({ fetch: handler.fetch });
+
+export default createDecoWorkerEntry(serverEntry, {
+  admin: {
+    handleMeta,
+    handleDecofileRead,
+    handleDecofileReload,
+    handleRender,
+    corsHeaders,
+  },
 });
-
-export default handler;
 `;
 }
 

@@ -43,6 +43,12 @@ const WRAPPER_FILES_TO_DELETE = [
   "sections/Session.tsx",
 ];
 
+/** Loaders that depend on deleted admin tooling */
+const LOADER_FILES_TO_DELETE = [
+  "loaders/availableIcons.ts",
+  "loaders/icons.ts",
+];
+
 function deleteFileIfExists(ctx: MigrationContext, relPath: string) {
   const fullPath = path.join(ctx.sourceDir, relPath);
   if (!fs.existsSync(fullPath)) return;
@@ -183,6 +189,9 @@ export function cleanup(ctx: MigrationContext): void {
     deleteFileIfExists(ctx, file);
   }
   for (const file of WRAPPER_FILES_TO_DELETE) {
+    deleteFileIfExists(ctx, file);
+  }
+  for (const file of LOADER_FILES_TO_DELETE) {
     deleteFileIfExists(ctx, file);
   }
 

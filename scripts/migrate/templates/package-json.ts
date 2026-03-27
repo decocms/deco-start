@@ -1,6 +1,37 @@
 import type { MigrationContext } from "../types.ts";
 
+/**
+ * Extract npm dependencies from deno.json import map.
+ * Entries like `"fuse.js": "npm:fuse.js@7.0.0"` become `"fuse.js": "^7.0.0"`.
+ */
+function extractNpmDeps(importMap: Record<string, string>): Record<string, string> {
+  const deps: Record<string, string> = {};
+  for (const [key, value] of Object.entries(importMap)) {
+    if (!value.startsWith("npm:")) continue;
+    // Skip preact, deco, and other framework deps we handle ourselves
+    if (key.startsWith("preact") || key.startsWith("@preact/")) continue;
+    if (key.startsWith("@deco/")) continue;
+    if (key === "daisyui") continue; // we pin our own version
+
+    const raw = value.slice(4); // remove "npm:"
+    const atIdx = raw.lastIndexOf("@");
+    if (atIdx <= 0) {
+      deps[raw] = "*";
+    } else {
+      const name = raw.slice(0, atIdx);
+      const version = raw.slice(atIdx + 1);
+      deps[name] = `^${version}`;
+    }
+  }
+  return deps;
+}
+
 export function generatePackageJson(ctx: MigrationContext): string {
+  const siteDeps = {
+    ...extractNpmDeps(ctx.importMap),
+    ...ctx.discoveredNpmDeps,
+  };
+
   const pkg = {
     name: ctx.siteName,
     version: "0.1.0",
@@ -21,12 +52,18 @@ export function generatePackageJson(ctx: MigrationContext): string {
       format: 'prettier --write "src/**/*.{ts,tsx}"',
       "format:check": 'prettier --check "src/**/*.{ts,tsx}"',
       knip: "knip",
+      clean:
+        "rm -rf node_modules .cache dist .wrangler/state node_modules/.vite && npm install",
+      "tailwind:lint":
+        "tsx node_modules/@decocms/start/scripts/tailwind-lint.ts",
+      "tailwind:fix":
+        "tsx node_modules/@decocms/start/scripts/tailwind-lint.ts --fix",
     },
     author: "deco.cx",
     license: "MIT",
     dependencies: {
       "@decocms/apps": "^0.25.2",
-      "@decocms/start": "^0.31.1",
+      "@decocms/start": "^0.32.0",
       "@tanstack/react-query": "5.90.21",
       "@tanstack/react-router": "1.166.7",
       "@tanstack/react-start": "1.166.8",
@@ -35,6 +72,7 @@ export function generatePackageJson(ctx: MigrationContext): string {
       "colorjs.io": "^0.6.1",
       react: "^19.2.4",
       "react-dom": "^19.2.4",
+      ...siteDeps,
     },
     devDependencies: {
       "@cloudflare/vite-plugin": "^1.27.0",
@@ -48,6 +86,7 @@ export function generatePackageJson(ctx: MigrationContext): string {
       knip: "^5.61.2",
       prettier: "^3.5.3",
       tailwindcss: "^4.2.1",
+      "ts-morph": "^27.0.2",
       tsx: "^4.19.4",
       typescript: "^5.9.3",
       vite: "^7.3.1",

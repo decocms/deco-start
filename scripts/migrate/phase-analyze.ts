@@ -43,6 +43,9 @@ const SKIP_DIRS = new Set([
   "static",
   ".context",
   "scripts",
+  "src",
+  "public",
+  ".tanstack",
 ]);
 
 const SKIP_FILES = new Set([
@@ -52,6 +55,8 @@ const SKIP_FILES = new Set([
   "LICENSE",
   "browserslist",
   "bw_stats.json",
+  "package.json",
+  "package-lock.json",
 ]);
 
 /** Files that are generated and should be deleted */
@@ -70,6 +75,12 @@ const SDK_DELETE = new Set([
   "sdk/usePlatform.tsx",
 ]);
 
+/** Loaders that depend on deleted admin tooling */
+const LOADER_DELETE = new Set([
+  "loaders/availableIcons.ts",
+  "loaders/icons.ts",
+]);
+
 /** Root config/infra files to delete */
 const ROOT_DELETE = new Set([
   "main.ts",
@@ -79,10 +90,38 @@ const ROOT_DELETE = new Set([
   "tailwind.css",
   "tailwind.config.ts",
   "runtime.ts",
+  "constants.ts",
   "fresh.gen.ts",
   "manifest.gen.ts",
   "fresh.config.ts",
+  "browserslist",
+  "bw_stats.json",
 ]);
+
+/** Static files that are code/tooling, not assets — should be deleted */
+const STATIC_DELETE = new Set([
+  "static/adminIcons.ts",
+  "static/generate-icons.ts",
+  "static/tailwind.css",
+]);
+
+/**
+ * Scan file content for inline npm: imports and return { name: version } pairs.
+ * Matches patterns like: from "npm:fuse.js@7.0.0"
+ */
+function extractInlineNpmDeps(content: string): Record<string, string> {
+  const deps: Record<string, string> = {};
+  const regex = /from\s+["']npm:(@?[^@"']+)(?:@([^"']+))?["']/g;
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    const name = match[1];
+    const version = match[2] || "*";
+    // Skip framework deps
+    if (name.startsWith("preact") || name.startsWith("@preact/")) continue;
+    deps[name] = `^${version}`;
+  }
+  return deps;
+}
 
 function detectPatterns(content: string): DetectedPattern[] {
   const patterns: DetectedPattern[] = [];
@@ -154,6 +193,14 @@ function decideAction(
     return { action: "delete", notes: "Rewritten from scratch" };
   }
 
+  // Loaders that depend on deleted admin tooling
+  if (LOADER_DELETE.has(relPath)) {
+    return {
+      action: "delete",
+      notes: "Admin icon loader — depends on deleted static/adminIcons.ts",
+    };
+  }
+
   // SDK files to delete
   if (SDK_DELETE.has(relPath)) {
     return {
@@ -190,6 +237,11 @@ function decideAction(
       action: "delete",
       notes: "Analytics SDK moved to __root.tsx scaffold",
     };
+  }
+
+  // Static code/tooling files → delete
+  if (STATIC_DELETE.has(relPath)) {
+    return { action: "delete", notes: "Code/tooling file, not an asset" };
   }
 
   // Static files → move
@@ -327,6 +379,21 @@ export function analyze(ctx: MigrationContext): void {
   for (const f of ctx.files) {
     byAction[f.action]++;
     byCategory[f.category] = (byCategory[f.category] || 0) + 1;
+  }
+
+  // Scan all source files for inline npm: imports
+  for (const f of ctx.files) {
+    if (f.action === "delete") continue;
+    const ext = path.extname(f.path);
+    if (![".ts", ".tsx"].includes(ext)) continue;
+    try {
+      const content = fs.readFileSync(f.absPath, "utf-8");
+      const deps = extractInlineNpmDeps(content);
+      Object.assign(ctx.discoveredNpmDeps, deps);
+    } catch {}
+  }
+  if (Object.keys(ctx.discoveredNpmDeps).length > 0) {
+    log(ctx, `Discovered npm deps from source: ${JSON.stringify(ctx.discoveredNpmDeps)}`);
   }
 
   console.log(`\n  Files found: ${ctx.files.length}`);

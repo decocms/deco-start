@@ -25,7 +25,7 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
   [/^"@deco\/deco"$/, `"@decocms/start"`],
 
   // Apps — widgets & components
-  [/^"apps\/admin\/widgets\.ts"$/, `"@decocms/start/admin/widgets"`],
+  [/^"apps\/admin\/widgets\.ts"$/, `"@decocms/start/types/widgets"`],
   [/^"apps\/website\/components\/Image\.tsx"$/, `"@decocms/apps/commerce/components/Image"`],
   [/^"apps\/website\/components\/Picture\.tsx"$/, `"@decocms/apps/commerce/components/Picture"`],
   [/^"apps\/website\/components\/Video\.tsx"$/, `"@decocms/apps/commerce/components/Video"`],
@@ -37,11 +37,39 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
   // Deco old CDN imports
   [/^"deco\/([^"]+)"$/, null],
 
-  // Std lib — not needed in Node
+  // Std lib — not needed in Node (Deno std lib)
   [/^"std\/([^"]+)"$/, null],
+  [/^"@std\/crypto"$/, null], // Use globalThis.crypto instead
+
+  // site/sdk/* → framework equivalents (before the catch-all site/ → ~/ rule)
+  [/^"site\/sdk\/clx(?:\.tsx?)?.*"$/, `"@decocms/start/sdk/clx"`],
+  [/^"site\/sdk\/useId(?:\.tsx?)?.*"$/, `"react"`],
+  [/^"site\/sdk\/useOffer(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useOffer"`],
+  [/^"site\/sdk\/useVariantPossiblities(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useVariantPossibilities"`],
+  [/^"site\/sdk\/usePlatform(?:\.tsx?)?.*"$/, null],
 
   // site/ → ~/
   [/^"site\/(.+)"$/, `"~/$1"`],
+];
+
+/**
+ * Relative import rewrites for SDK files that are deleted during migration.
+ * These are matched against the resolved import path (after ../.. resolution).
+ * The key is the ending of the import path, the value is the replacement specifier.
+ */
+const RELATIVE_SDK_REWRITES: Array<[RegExp, string]> = [
+  // sdk/clx → @decocms/start/sdk/clx
+  [/(?:\.\.\/)*sdk\/clx(?:\.tsx?)?$/, "@decocms/start/sdk/clx"],
+  // sdk/useId → react (useId is built-in in React 19)
+  [/(?:\.\.\/)*sdk\/useId(?:\.tsx?)?$/, "react"],
+  // sdk/useOffer → @decocms/apps/commerce/sdk/useOffer
+  [/(?:\.\.\/)*sdk\/useOffer(?:\.tsx?)?$/, "@decocms/apps/commerce/sdk/useOffer"],
+  // sdk/useVariantPossiblities → @decocms/apps/commerce/sdk/useVariantPossibilities
+  [/(?:\.\.\/)*sdk\/useVariantPossiblities(?:\.tsx?)?$/, "@decocms/apps/commerce/sdk/useVariantPossibilities"],
+  // sdk/usePlatform → remove entirely
+  [/(?:\.\.\/)*sdk\/usePlatform(?:\.tsx?)?$/, ""],
+  // static/adminIcons → deleted (icon loaders need rewriting)
+  [/(?:\.\.\/)*static\/adminIcons(?:\.ts)?$/, ""],
 ];
 
 /**
@@ -67,6 +95,36 @@ export function transformImports(content: string): TransformResult {
     /^(export\s+(?:type\s+)?\{[^}]*\}\s+from\s+)("[^"]+"|'[^']+')(;?\s*)$/gm;
   const sideEffectImportRegex = /^(import\s+)("[^"]+"|'[^']+')(;?\s*)$/gm;
 
+  /**
+   * Post-process: split @deco/deco/hooks imports.
+   * In the old stack, @deco/deco/hooks exported useDevice, useScript, useSection, etc.
+   * In @decocms/start, useDevice is at @decocms/start/sdk/useDevice.
+   * After import rewriting, we need to split lines like:
+   *   import { useDevice, useScript } from "@decocms/start/sdk/useScript"
+   * into:
+   *   import { useDevice } from "@decocms/start/sdk/useDevice"
+   *   import { useScript } from "@decocms/start/sdk/useScript"
+   */
+  function splitDecoHooksImports(code: string): string {
+    return code.replace(
+      /^(import\s+(?:type\s+)?\{)([^}]*\buseDevice\b[^}]*)(\}\s+from\s+["']@decocms\/start\/sdk\/useScript["'];?)$/gm,
+      (_match, _prefix, importList, _suffix) => {
+        const items = importList.split(",").map((s: string) => s.trim()).filter(Boolean);
+        const deviceItems = items.filter((s: string) => s.includes("useDevice"));
+        const otherItems = items.filter((s: string) => !s.includes("useDevice"));
+
+        const lines: string[] = [];
+        if (deviceItems.length > 0) {
+          lines.push(`import { ${deviceItems.join(", ")} } from "@decocms/start/sdk/useDevice";`);
+        }
+        if (otherItems.length > 0) {
+          lines.push(`import { ${otherItems.join(", ")} } from "@decocms/start/sdk/useScript";`);
+        }
+        return lines.join("\n");
+      },
+    );
+  }
+
   function rewriteSpecifier(specifier: string): string | null {
     // Remove quotes for matching
     const inner = specifier.slice(1, -1);
@@ -75,7 +133,26 @@ export function transformImports(content: string): TransformResult {
       if (pattern.test(`"${inner}"`)) {
         if (replacement === null) return null;
         // Apply regex replacement
-        return `"${inner}"`.replace(pattern, replacement);
+        let result = `"${inner}"`.replace(pattern, replacement);
+        // Strip .ts/.tsx extensions from the rewritten path if it's a relative/alias import
+        const resultInner = result.slice(1, -1);
+        if (
+          (resultInner.startsWith("~/") || resultInner.startsWith("./") || resultInner.startsWith("../")) &&
+          (resultInner.endsWith(".ts") || resultInner.endsWith(".tsx"))
+        ) {
+          result = `"${resultInner.replace(/\.tsx?$/, "")}"`;
+        }
+        return result;
+      }
+    }
+
+    // Relative imports pointing to deleted SDK files → framework equivalents
+    if (inner.startsWith("./") || inner.startsWith("../")) {
+      for (const [pattern, replacement] of RELATIVE_SDK_REWRITES) {
+        if (pattern.test(inner)) {
+          if (replacement === "") return null; // remove the import
+          return `"${replacement}"`;
+        }
       }
     }
 
@@ -124,6 +201,14 @@ export function transformImports(content: string): TransformResult {
   result = result.replace(importLineRegex, processLine);
   result = result.replace(reExportLineRegex, processLine);
   result = result.replace(sideEffectImportRegex, processLine);
+
+  // Split @deco/deco/hooks imports that contain useDevice
+  const afterSplit = splitDecoHooksImports(result);
+  if (afterSplit !== result) {
+    result = afterSplit;
+    changed = true;
+    notes.push("Split useDevice into separate import from @decocms/start/sdk/useDevice");
+  }
 
   // Clean up blank lines left by removed imports (collapse multiple to one)
   result = result.replace(/\n{3,}/g, "\n\n");

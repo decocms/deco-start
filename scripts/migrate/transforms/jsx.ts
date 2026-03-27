@@ -17,8 +17,7 @@ export function transformJsx(content: string): TransformResult {
 
   // class= → className= in JSX attributes
   // Match class= that's preceded by whitespace and inside a JSX tag
-  const classAttrRegex = /(<[a-zA-Z][^>]*?\s)class(\s*=)/g;
-  if (classAttrRegex.test(result)) {
+  if (/(<[a-zA-Z][^>]*?\s)class(\s*=)/.test(result)) {
     result = result.replace(
       /(<[a-zA-Z][^>]*?\s)class(\s*=)/g,
       "$1className$2",
@@ -28,9 +27,8 @@ export function transformJsx(content: string): TransformResult {
   }
 
   // Also handle class= at the start of a line in JSX (multi-line attributes)
-  const standaloneClassRegex = /^(\s+)class(\s*=)/gm;
-  if (standaloneClassRegex.test(result)) {
-    result = result.replace(standaloneClassRegex, "$1className$2");
+  if (/^(\s+)class(\s*=)/m.test(result)) {
+    result = result.replace(/^(\s+)class(\s*=)/gm, "$1className$2");
     changed = true;
   }
 
@@ -41,15 +39,46 @@ export function transformJsx(content: string): TransformResult {
     notes.push("Replaced onInput= with onChange=");
   }
 
-  // ComponentChildren → React.ReactNode
+  // for= → htmlFor= in JSX (label elements)
+  if (/(<(?:label|Label)[^>]*?\s)for(\s*=)/.test(result)) {
+    result = result.replace(
+      /(<(?:label|Label)[^>]*?\s)for(\s*=)/g,
+      "$1htmlFor$2",
+    );
+    changed = true;
+    notes.push("Replaced for= with htmlFor= on label elements");
+  }
+  // Also handle for= at the start of a line in multi-line JSX attributes
+  if (/^\s+for\s*=\s*\{/m.test(result)) {
+    result = result.replace(/^(\s+)for(\s*=\s*\{)/gm, "$1htmlFor$2");
+    changed = true;
+  }
+
+  // ComponentChildren → ReactNode (named import, not React.ReactNode)
   if (result.includes("ComponentChildren")) {
-    result = result.replace(/\bComponentChildren\b/g, "React.ReactNode");
-    // Add React import if not present
-    if (!result.includes('from "react"') && !result.includes("from 'react'")) {
-      result = `import React from "react";\n${result}`;
+    result = result.replace(/\bComponentChildren\b/g, "ReactNode");
+    // Add ReactNode import if not already imported
+    if (
+      !result.match(/\bReactNode\b.*from\s+["']react["']/) &&
+      !result.match(/from\s+["']react["'].*\bReactNode\b/)
+    ) {
+      // Check if there's already a react import we can extend
+      const reactImportMatch = result.match(
+        /^(import\s+(?:type\s+)?\{)([^}]*?)(\}\s+from\s+["']react["'];?)$/m,
+      );
+      if (reactImportMatch) {
+        const [fullMatch, prefix, existing, suffix] = reactImportMatch;
+        const items = existing.trim();
+        result = result.replace(
+          fullMatch,
+          `${prefix}${items ? `${items}, ` : ""}type ReactNode${suffix}`,
+        );
+      } else {
+        result = `import type { ReactNode } from "react";\n${result}`;
+      }
     }
     changed = true;
-    notes.push("Replaced ComponentChildren with React.ReactNode");
+    notes.push("Replaced ComponentChildren with ReactNode");
   }
 
   // JSX.SVGAttributes<SVGSVGElement> → React.SVGAttributes<SVGSVGElement>
@@ -95,6 +124,52 @@ export function transformJsx(content: string): TransformResult {
     /^import\s+type\s+\{\s*JSX\s*\}\s+from\s+["']preact["'];?\s*\n?/gm,
     "",
   );
+
+  // tabindex → tabIndex in JSX
+  if (/\btabindex\s*=/.test(result)) {
+    result = result.replace(/\btabindex(\s*=)/g, "tabIndex$1");
+    changed = true;
+    notes.push("Replaced tabindex with tabIndex");
+  }
+
+  // frameBorder → frameBorder (already camelCase, but just in case)
+  // referrerpolicy → referrerPolicy
+  if (result.includes("referrerpolicy=")) {
+    result = result.replace(/referrerpolicy=/g, "referrerPolicy=");
+    changed = true;
+    notes.push("Replaced referrerpolicy with referrerPolicy");
+  }
+
+  // allowFullScreen={true} is fine in React, but allowfullscreen is not
+  if (result.includes("allowfullscreen")) {
+    result = result.replace(/\ballowfullscreen\b/g, "allowFullScreen");
+    changed = true;
+  }
+
+  // `class` as a prop name in destructuring patterns → `className`
+  // Matches: { class: someVar } or { class, } or { ..., class: x } in function params
+  if (/[{,]\s*class\s*[,}:]/.test(result)) {
+    // class: varName → className: varName (anywhere in destructuring)
+    result = result.replace(
+      /([{,]\s*)class(\s*:\s*\w+)/g,
+      "$1className$2",
+    );
+    // class, → className, (shorthand, anywhere in destructuring)
+    result = result.replace(
+      /([{,]\s*)class(\s*[,}])/g,
+      "$1className$2",
+    );
+    changed = true;
+    notes.push("Replaced 'class' prop in destructuring with 'className'");
+  }
+
+  // `class` in interface/type definitions → className
+  // Matches: class?: string; or class: string;
+  if (/^\s+class\??\s*:/m.test(result)) {
+    result = result.replace(/^(\s+)class(\??\s*:)/gm, "$1className$2");
+    changed = true;
+    notes.push("Replaced 'class' in interface definitions with 'className'");
+  }
 
   // Ensure React import exists if we introduced React.* references
   if (
