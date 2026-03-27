@@ -1,13 +1,9 @@
 /**
  * Auto-configures known apps from CMS blocks.
  *
- * Scans the decofile for block keys matching known apps and dynamically imports
- * their `mod.ts` from @decocms/apps. Each app mod exports:
- * - `configure(blockData, resolveSecret)` → configures the app client
- * - `handlers` → record of invoke handler keys → handler functions
- *
- * Zero hardcoded app logic in the framework — all app-specific code lives in
- * @decocms/apps/{app}/mod.ts.
+ * Scans the decofile for known app block keys (e.g. "deco-resend") and:
+ * 1. Configures the app client with CMS-provided credentials
+ * 2. Registers invoke handlers so `invoke.app.actions.*` works via the proxy
  *
  * Usage in setup.ts:
  *   import { autoconfigApps } from "@decocms/start/apps/autoconfig";
@@ -20,95 +16,57 @@ import { onChange } from "../cms/loader";
 import { resolveSecret } from "../sdk/crypto";
 
 // ---------------------------------------------------------------------------
-// Block key → @decocms/apps module mapping
+// Known app block keys → dynamic import + configure
 // ---------------------------------------------------------------------------
 
-/**
- * Maps CMS block keys (e.g. "deco-resend") to their @decocms/apps module path.
- * To add a new app, just add an entry here — no other code changes needed.
- */
-const BLOCK_TO_APP: Record<string, string> = {
-	"deco-resend": "resend",
-	// "deco-analytics": "analytics",
-	// "deco-shopify": "shopify",
-	// "deco-vtex": "vtex",
-};
-
-// ---------------------------------------------------------------------------
-// Generic app loader
-// ---------------------------------------------------------------------------
-
-interface AppMod {
-	configure: (
-		blockData: unknown,
-		resolveSecret: (value: unknown, envKey: string) => Promise<string | null>,
-	) => Promise<boolean>;
-	handlers: Record<string, (props: any, request: Request) => Promise<any>>;
+interface AppAutoconfigurator {
+	/** Try to import, configure, and return invoke actions for this app */
+	(blockData: unknown): Promise<Record<string, InvokeAction>>;
 }
 
-/**
- * Import app mod using static imports.
- * CF Workers can't catch errors from dynamic string template imports —
- * the vite plugin crashes with AssertionError before the catch runs.
- * Each known app gets a case here. When adding a new app to BLOCK_TO_APP,
- * also add a case to this switch.
- */
-async function importAppMod(appName: string): Promise<AppMod | null> {
-	try {
-		switch (appName) {
-			case "resend":
-				return await import("@decocms/apps/resend/mod");
-			default:
-				return null;
-		}
-	} catch {
-		return null;
-	}
-}
+const KNOWN_APPS: Record<string, AppAutoconfigurator> = {
+	"deco-resend": async (block: any) => {
+		try {
+			const [resendClient, resendActions] = await Promise.all([
+				import("@decocms/apps/resend/client" as string),
+				import("@decocms/apps/resend/actions/send" as string),
+			]);
+			const { configureResend } = resendClient as { configureResend: (cfg: any) => void };
+			const { sendEmail } = resendActions as { sendEmail: (props: any) => Promise<any> };
 
-async function loadAndConfigureApp(
-	blockKey: string,
-	appName: string,
-	blockData: unknown,
-): Promise<Record<string, InvokeAction>> {
-	const mod = await importAppMod(appName);
-	if (!mod) return {};
+			const apiKey = await resolveSecret(block.apiKey, "RESEND_API_KEY");
+			if (!apiKey) {
+				console.warn(
+					"[autoconfig] deco-resend: no API key found." +
+					" Set DECO_CRYPTO_KEY to decrypt CMS secrets, or set RESEND_API_KEY as fallback.",
+				);
+				return {};
+			}
 
-	try {
-		const ok = await mod.configure(blockData, resolveSecret);
-		if (!ok) {
-			console.warn(
-				`[autoconfig] ${blockKey}: configure() returned false.` +
-				` Set DECO_CRYPTO_KEY to decrypt CMS secrets, or set the app's env var fallback.`,
-			);
+			configureResend({
+				apiKey,
+				emailFrom: block.emailFrom
+					? `${block.emailFrom.name || "Contact"} ${block.emailFrom.domain || "<onboarding@resend.dev>"}`
+					: undefined,
+				emailTo: block.emailTo,
+				subject: block.subject,
+			});
+
+			const handler: InvokeAction = async (props: any) => sendEmail(props);
+			return {
+				"resend/actions/emails/send": handler,
+				"resend/actions/emails/send.ts": handler,
+			};
+		} catch {
+			// @decocms/apps not installed or doesn't have resend — skip
 			return {};
 		}
-
-		console.log(`[autoconfig] ${blockKey}: configured (${Object.keys(mod.handlers).length} handlers)`);
-		return mod.handlers;
-	} catch (e) {
-		console.warn(`[autoconfig] ${blockKey}:`, e);
-		return {};
-	}
-}
+	},
+};
 
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
-
-async function configureAll(blocks: Record<string, unknown>): Promise<Record<string, InvokeAction>> {
-	const actions: Record<string, InvokeAction> = {};
-
-	for (const [blockKey, appName] of Object.entries(BLOCK_TO_APP)) {
-		const block = blocks[blockKey];
-		if (!block) continue;
-
-		const appActions = await loadAndConfigureApp(blockKey, appName, block);
-		Object.assign(actions, appActions);
-	}
-
-	return actions;
-}
 
 /**
  * Auto-configure apps from CMS blocks.
@@ -117,7 +75,19 @@ async function configureAll(blocks: Record<string, unknown>): Promise<Record<str
 export async function autoconfigApps(blocks: Record<string, unknown>) {
 	if (typeof document !== "undefined") return; // server-only
 
-	const actions = await configureAll(blocks);
+	const actions: Record<string, InvokeAction> = {};
+
+	for (const [blockKey, configurator] of Object.entries(KNOWN_APPS)) {
+		const block = blocks[blockKey];
+		if (!block) continue;
+
+		try {
+			const appActions = await configurator(block);
+			Object.assign(actions, appActions);
+		} catch (e) {
+			console.warn(`[autoconfig] ${blockKey}:`, e);
+		}
+	}
 
 	if (Object.keys(actions).length > 0) {
 		setInvokeActions(() => ({ ...actions }));
@@ -126,7 +96,14 @@ export async function autoconfigApps(blocks: Record<string, unknown>) {
 	// Re-configure on admin hot-reload
 	onChange(async (newBlocks) => {
 		if (typeof document !== "undefined") return;
-		const updatedActions = await configureAll(newBlocks);
+		const updatedActions: Record<string, InvokeAction> = {};
+		for (const [blockKey, configurator] of Object.entries(KNOWN_APPS)) {
+			const block = newBlocks[blockKey];
+			if (!block) continue;
+			try {
+				Object.assign(updatedActions, await configurator(block));
+			} catch {}
+		}
 		if (Object.keys(updatedActions).length > 0) {
 			setInvokeActions(() => ({ ...updatedActions }));
 		}
