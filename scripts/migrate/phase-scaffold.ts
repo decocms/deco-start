@@ -38,6 +38,7 @@ export function scaffold(ctx: MigrationContext): void {
   writeFile(ctx, "vite.config.ts", generateViteConfig(ctx));
   writeFile(ctx, "wrangler.jsonc", generateWrangler(ctx));
   writeFile(ctx, "knip.config.ts", generateKnipConfig());
+  writeFile(ctx, ".gitignore", generateGitignore());
   writeFile(ctx, ".prettierrc", JSON.stringify({
     semi: true,
     singleQuote: false,
@@ -110,6 +111,45 @@ function generateAppCss(_ctx: MigrationContext): string {
 @view-transition {
   navigation: auto;
 }
+`;
+}
+
+function generateGitignore(): string {
+  return `# Dependencies
+node_modules/
+
+# Build output
+dist/
+.cache/
+
+# Cloudflare Workers
+.wrangler/
+.dev.vars
+
+# TanStack Router (auto-generated)
+src/routeTree.gen.ts
+.tanstack/
+
+# Vite
+vite.config.timestamp_*
+*.local
+
+# Environment
+.env
+.env.*
+
+# OS
+.DS_Store
+
+# Deco CMS
+.deco/metadata/*
+
+# Lock files (use bun.lock)
+package-lock.json
+
+# IDE
+.vscode/
+.idea/
 `;
 }
 
