@@ -420,12 +420,6 @@ function fixNegativeZIndex(content: string): { content: string; changed: boolean
   let result = content;
 
   // Replace -z-{n} with z-0 on img/Image elements.
-  // Strategy: find <img or <Image tags, then replace -z-{n} within their className.
-  // We use a two-pass approach:
-  // 1. Find img/Image tag boundaries
-  // 2. Within each, replace -z-{n}
-
-  // Match <img ...> or <Image ...> (including self-closing and multi-line)
   result = result.replace(
     /<(?:img|Image)\b[\s\S]*?(?:\/>|>)/g,
     (tag) => {
@@ -438,6 +432,29 @@ function fixNegativeZIndex(content: string): { content: string; changed: boolean
       return fixed;
     },
   );
+
+  // When we convert -z-{n} to z-0 on an image, the sibling content div needs
+  // "relative z-10" to stack above the image. We detect the pattern:
+  //   <img/Image ... z-0 .../>
+  //   <div className="...">
+  // and add "relative z-10" to the div's className if not already present.
+  if (changed) {
+    // Find <img.../> or <Image.../> with z-0, followed by a <div with className
+    result = result.replace(
+      /(<(?:img|Image)\b[^>]*\bz-0\b[^>]*(?:\/>|>))([\s\S]*?)(<div\s+className=(?:"|{[`"]))([^"}`]*)(["}`])/g,
+      (match, imgTag, between, divOpen, classes, divClose) => {
+        // Only modify the immediate next sibling div (between should be whitespace only)
+        if (between.trim() && !between.trim().startsWith(')') && !between.trim().startsWith('}')) {
+          return match;
+        }
+        if (classes.includes("z-10") || classes.includes("z-20") || classes.includes("relative z-")) {
+          return match; // Already has z-index
+        }
+        notes.push("Added relative z-10 to content div sibling of background image");
+        return `${imgTag}${between}${divOpen}relative z-10 ${classes}${divClose}`;
+      },
+    );
+  }
 
   return { content: result, changed, notes };
 }
