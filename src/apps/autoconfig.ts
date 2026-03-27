@@ -13,6 +13,7 @@
 
 import { setInvokeActions, type InvokeAction } from "../admin/invoke";
 import { onChange } from "../cms/loader";
+import { resolveSecret } from "../sdk/crypto";
 
 // ---------------------------------------------------------------------------
 // Known app block keys → dynamic import + configure
@@ -33,12 +34,14 @@ const KNOWN_APPS: Record<string, AppAutoconfigurator> = {
 			const { configureResend } = resendClient as { configureResend: (cfg: any) => void };
 			const { sendEmail } = resendActions as { sendEmail: (props: any) => Promise<any> };
 
-			const apiKey =
-				typeof block.apiKey === "string"
-					? block.apiKey
-					: block.apiKey?.get?.() ?? "";
-
-			if (!apiKey) return {};
+			const apiKey = await resolveSecret(block.apiKey, "RESEND_API_KEY");
+			if (!apiKey) {
+				console.warn(
+					"[autoconfig] deco-resend: no API key found." +
+					" Set DECO_CRYPTO_KEY to decrypt CMS secrets, or set RESEND_API_KEY as fallback.",
+				);
+				return {};
+			}
 
 			configureResend({
 				apiKey,
