@@ -366,6 +366,31 @@ export function transformTailwind(content: string): TransformResult {
   let changed = false;
   let result = content;
 
+  // ── Fix opacity utility pattern (Tailwind v4 breaking change) ──
+  // bg-black bg-opacity-20 → bg-black/20
+  // border-white border-opacity-20 → border-white/20
+  // text-gray-600 text-opacity-50 → text-gray-600/50
+  const opacityPattern = /(\b(?:bg|text|border|ring|divide|placeholder)-[\w-]+)\s+(?:bg|text|border|ring|divide|placeholder)-opacity-(\d+)/g;
+  if (opacityPattern.test(result)) {
+    result = result.replace(
+      /(\b(?:bg|text|border|ring|divide|placeholder)-[\w-]+)\s+\1-opacity-(\d+)/g,
+      "$1/$2",
+    );
+    // Handle cross-property: bg-black bg-opacity-20
+    result = result.replace(
+      /(\b(bg|text|border|ring|divide|placeholder)-[\w-]+)\s+\2-opacity-(\d+)/g,
+      "$1/$3",
+    );
+    changed = true;
+    notes.push("Converted *-opacity-N to modifier syntax (e.g. bg-black/20)");
+  }
+
+  // Also handle hover:bg-opacity-100 patterns
+  result = result.replace(
+    /(\b(?:hover:|focus:|active:)?(?:bg|text|border|ring)-[\w-]+)\s+(?:hover:|focus:|active:)?(?:bg|text|border|ring)-opacity-(\d+)/g,
+    "$1/$2",
+  );
+
   // Match className="...", className={`...`}, class="..."
   const patterns = [
     /(?<=className\s*=\s*")([^"]+)(?=")/g,
