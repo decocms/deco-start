@@ -76,7 +76,31 @@ export function scaffold(ctx: MigrationContext): void {
   console.log(`  Scaffolded ${ctx.scaffoldedFiles.length} files`);
 }
 
-function generateAppCss(_ctx: MigrationContext): string {
+function generateAppCss(ctx: MigrationContext): string {
+  const c = ctx.themeColors;
+  // Map CMS color names to DaisyUI v5 CSS variables
+  const colors: Record<string, string> = {
+    "--color-primary": c["primary"] || "#6B21A8",
+    "--color-secondary": c["secondary"] || "#141414",
+    "--color-accent": c["tertiary"] || "#FFF100",
+    "--color-neutral": c["neutral"] || "#393939",
+    "--color-base-100": c["base-100"] || "#FFFFFF",
+    "--color-base-200": c["base-200"] || "#F3F3F3",
+    "--color-base-300": c["base-300"] || "#868686",
+    "--color-info": c["info"] || "#006CA1",
+    "--color-success": c["success"] || "#007552",
+    "--color-warning": c["warning"] || "#F8D13A",
+    "--color-error": c["error"] || "#CF040A",
+  };
+  // Add content colors if specified
+  if (c["primary-content"]) colors["--color-primary-content"] = c["primary-content"];
+  if (c["secondary-content"]) colors["--color-secondary-content"] = c["secondary-content"];
+  if (c["base-content"]) colors["--color-base-content"] = c["base-content"];
+
+  const colorLines = Object.entries(colors)
+    .map(([k, v]) => `  ${k}: ${v};`)
+    .join("\n");
+
   return `@import "tailwindcss";
 @plugin "daisyui";
 @plugin "daisyui/theme" {
@@ -84,18 +108,7 @@ function generateAppCss(_ctx: MigrationContext): string {
   default: true;
   color-scheme: light;
 
-  /* TODO: Extract theme colors from the old Theme section's CMS config */
-  --color-primary: #6B21A8;
-  --color-secondary: #141414;
-  --color-accent: #FFF100;
-  --color-neutral: #393939;
-  --color-base-100: #FFFFFF;
-  --color-base-200: #F3F3F3;
-  --color-base-300: #868686;
-  --color-info: #006CA1;
-  --color-success: #007552;
-  --color-warning: #F8D13A;
-  --color-error: #CF040A;
+${colorLines}
 }
 
 @theme {
@@ -104,7 +117,7 @@ function generateAppCss(_ctx: MigrationContext): string {
   --color-black: #000;
   --color-transparent: transparent;
   --color-current: currentColor;
-  --color-inherit: inherit;
+  --color-inherit: inherit;${ctx.fontFamily ? `\n  --font-sans: "${ctx.fontFamily}", ui-sans-serif, system-ui, sans-serif;` : ""}
 }
 
 /* View transitions */

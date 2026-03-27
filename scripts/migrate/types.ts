@@ -75,6 +75,11 @@ export interface MigrationContext {
   /** npm dependencies discovered from inline npm: imports in source files */
   discoveredNpmDeps: Record<string, string>;
 
+  /** Theme colors extracted from .deco/blocks CMS config */
+  themeColors: Record<string, string>;
+  /** Font family from CMS config */
+  fontFamily: string | null;
+
   /** All categorized source files */
   files: FileRecord[];
 
@@ -118,6 +123,8 @@ export function createContext(
     gtmId: null,
     importMap: {},
     discoveredNpmDeps: {},
+    themeColors: {},
+    fontFamily: null,
     files: [],
     scaffoldedFiles: [],
     transformedFiles: [],

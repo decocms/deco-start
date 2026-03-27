@@ -147,7 +147,10 @@ ${gtmScript}
   return (
     <html lang="pt-BR" data-theme="light" suppressHydrationWarning>
       <head>
-        <HeadContent />
+        <HeadContent />${ctx.fontFamily ? `
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=${encodeURIComponent(ctx.fontFamily)}:wght@400;500;600;700&display=swap" rel="stylesheet" />` : ""}
       </head>
       <body className="bg-base-200 text-base-content" suppressHydrationWarning>
         <script dangerouslySetInnerHTML={{ __html: DECO_EVENTS_BOOTSTRAP }} />
