@@ -29,6 +29,7 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
   [/^"apps\/website\/components\/Image\.tsx"$/, `"@decocms/apps/commerce/components/Image"`],
   [/^"apps\/website\/components\/Picture\.tsx"$/, `"@decocms/apps/commerce/components/Picture"`],
   [/^"apps\/website\/components\/Video\.tsx"$/, `"@decocms/apps/commerce/components/Video"`],
+  [/^"apps\/website\/components\/Theme\.tsx"$/, `"~/components/ui/Theme"`],
   [/^"apps\/commerce\/types\.ts"$/, `"@decocms/apps/commerce/types"`],
 
   // Apps — catch-all (things like apps/website/mod.ts, apps/vtex/mod.ts, etc.)

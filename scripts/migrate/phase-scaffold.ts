@@ -68,12 +68,70 @@ export function scaffold(ctx: MigrationContext): void {
   // Apps
   writeFile(ctx, "src/apps/site.ts", generateSiteApp(ctx));
 
+  // SiteTheme component (replaces apps/website/components/Theme.tsx)
+  // Check if any source file uses SiteTheme
+  const usesSiteTheme = ctx.files.some((f) => {
+    if (f.action === "delete") return false;
+    try {
+      const content = fs.readFileSync(f.absPath, "utf-8");
+      return content.includes("SiteTheme");
+    } catch {
+      return false;
+    }
+  });
+  if (usesSiteTheme) {
+    writeFile(ctx, "src/components/ui/Theme.tsx", generateSiteThemeComponent());
+  }
+
   // Create public/ directory
   if (!ctx.dryRun) {
     fs.mkdirSync(path.join(ctx.sourceDir, "public"), { recursive: true });
   }
 
   console.log(`  Scaffolded ${ctx.scaffoldedFiles.length} files`);
+}
+
+function generateSiteThemeComponent(): string {
+  return `export interface Font {
+  family: string;
+  styleSheet?: string;
+}
+
+export interface Props {
+  colorScheme?: "light" | "dark" | "any";
+  fonts?: Font[];
+  variables?: Array<{ name: string; value: string }>;
+}
+
+/**
+ * SiteTheme — injects CSS custom properties and font stylesheets into the page.
+ * This replaces the old apps/website/components/Theme.tsx from the Deno stack.
+ */
+export default function SiteTheme({ variables, fonts, colorScheme }: Props) {
+  const cssVars = variables?.length
+    ? \`:root { \${variables.map((v) => \`\${v.name}: \${v.value};\`).join(" ")} }\`
+    : "";
+
+  const colorSchemeCss = colorScheme && colorScheme !== "any"
+    ? \`:root { color-scheme: \${colorScheme}; }\`
+    : "";
+
+  const css = [cssVars, colorSchemeCss].filter(Boolean).join("\\n");
+
+  return (
+    <>
+      {fonts?.map((font) =>
+        font.styleSheet ? (
+          <link key={font.family} rel="stylesheet" href={font.styleSheet} />
+        ) : null
+      )}
+      {css && <style dangerouslySetInnerHTML={{ __html: css }} />}
+    </>
+  );
+}
+
+export { type Font as SiteThemeFont };
+`;
 }
 
 function generateAppCss(ctx: MigrationContext): string {
