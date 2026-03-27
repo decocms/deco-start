@@ -312,6 +312,52 @@ function hasOrderIssues(classes: string[]): boolean {
   return false;
 }
 
+// ── Fix opacity modifier classes within a class list ────────────
+// Handles non-adjacent cases like: "bg-black/50 flex ... hover:bg-opacity-30"
+// Finds the base color class and merges the opacity into it.
+function fixOrphanedOpacity(classList: string[]): { result: string[]; changes: string[] } {
+  const changes: string[] = [];
+  const prefixes = ["bg", "text", "border", "ring", "divide", "placeholder"];
+
+  // Find base color classes: bg-{color} or bg-{color}/{opacity}
+  const colorClasses: Record<string, { color: string; prefix: string }> = {};
+  for (const cls of classList) {
+    for (const pfx of prefixes) {
+      const match = cls.match(new RegExp(`^${pfx}-(\\w[\\w-]*?)(?:\\/(\\d+))?$`));
+      if (match && match[1] !== "opacity") {
+        colorClasses[pfx] = { color: match[1], prefix: pfx };
+      }
+    }
+  }
+
+  // Replace orphaned opacity classes with proper merged versions
+  const result: string[] = [];
+  for (const cls of classList) {
+    const opMatch = cls.match(/^((?:hover:|focus:|active:)*)(\w+)-opacity-(\d+)$/);
+    if (!opMatch) {
+      result.push(cls);
+      continue;
+    }
+
+    const modifier = opMatch[1]; // "hover:" or ""
+    const prefix = opMatch[2]; // "bg", "text", etc.
+    const opacity = opMatch[3]; // "20", "50", etc.
+
+    const base = colorClasses[prefix];
+    if (!base) {
+      result.push(cls); // No base color found, keep as-is
+      continue;
+    }
+
+    const opacityStr = opacity === "100" ? "" : `/${opacity}`;
+    const replacement = `${modifier}${prefix}-${base.color}${opacityStr}`;
+    result.push(replacement);
+    changes.push(`Merged ${cls} → ${replacement}`);
+  }
+
+  return { result, changes };
+}
+
 // ── Fix a className string ──────────────────────────────────────
 function fixClassNameString(classes: string): { fixed: string; changes: string[] } {
   const changes: string[] = [];
@@ -340,7 +386,14 @@ function fixClassNameString(classes: string): { fixed: string; changes: string[]
     return fixed;
   });
 
-  // 3. Fix responsive ordering
+  // 3. Fix orphaned opacity classes (non-adjacent to color class)
+  const opacityFix = fixOrphanedOpacity(classList);
+  if (opacityFix.changes.length > 0) {
+    classList = opacityFix.result;
+    changes.push(...opacityFix.changes);
+  }
+
+  // 4. Fix responsive ordering
   if (hasOrderIssues(classList)) {
     const reordered = fixResponsiveOrder(classList);
     if (reordered.join(" ") !== classList.join(" ")) {
@@ -370,26 +423,63 @@ export function transformTailwind(content: string): TransformResult {
   // bg-black bg-opacity-20 → bg-black/20
   // border-white border-opacity-20 → border-white/20
   // text-gray-600 text-opacity-50 → text-gray-600/50
-  const opacityPattern = /(\b(?:bg|text|border|ring|divide|placeholder)-[\w-]+)\s+(?:bg|text|border|ring|divide|placeholder)-opacity-(\d+)/g;
-  if (opacityPattern.test(result)) {
+  //
+  // The pattern is: {prefix}-{color} {prefix}-opacity-{N} → {prefix}-{color}/{N}
+  // prefix can be: bg, text, border, ring, divide, placeholder
+  if (/(?:bg|text|border|ring|divide|placeholder)-opacity-\d+/.test(result)) {
+    // Match: bg-{color} bg-opacity-{N}
     result = result.replace(
-      /(\b(?:bg|text|border|ring|divide|placeholder)-[\w-]+)\s+\1-opacity-(\d+)/g,
+      /\b(bg-[\w-]+?)\s+bg-opacity-(\d+)/g,
       "$1/$2",
     );
-    // Handle cross-property: bg-black bg-opacity-20
+    // Match: text-{color} text-opacity-{N}
     result = result.replace(
-      /(\b(bg|text|border|ring|divide|placeholder)-[\w-]+)\s+\2-opacity-(\d+)/g,
-      "$1/$3",
+      /\b(text-[\w-]+?)\s+text-opacity-(\d+)/g,
+      "$1/$2",
     );
+    // Match: border-{color} border-opacity-{N}
+    result = result.replace(
+      /\b(border-[\w-]+?)\s+border-opacity-(\d+)/g,
+      "$1/$2",
+    );
+    // Match: ring-{color} ring-opacity-{N}
+    result = result.replace(
+      /\b(ring-[\w-]+?)\s+ring-opacity-(\d+)/g,
+      "$1/$2",
+    );
+    // Match: divide-{color} divide-opacity-{N}
+    result = result.replace(
+      /\b(divide-[\w-]+?)\s+divide-opacity-(\d+)/g,
+      "$1/$2",
+    );
+    // Match: placeholder-{color} placeholder-opacity-{N}
+    result = result.replace(
+      /\b(placeholder-[\w-]+?)\s+placeholder-opacity-(\d+)/g,
+      "$1/$2",
+    );
+    // Handle hover:/focus:/active: prefixed opacity (e.g. hover:bg-opacity-100)
+    result = result.replace(
+      /\b((?:hover:|focus:|active:)(?:bg|text|border|ring)-[\w-]+?)\s+(?:hover:|focus:|active:)(?:bg|text|border|ring)-opacity-(\d+)/g,
+      "$1/$2",
+    );
+    // Handle hover:bg-opacity-N when bg-{color}/{N} already exists
+    // e.g. "bg-white/80 hover:bg-opacity-100" → "bg-white/80 hover:bg-white"
+    // e.g. "bg-black/60 hover:bg-opacity-50" → "bg-black/60 hover:bg-black/50"
+    result = result.replace(
+      /\b(bg|text|border|ring)-([\w-]+?)\/(\d+)\s+((?:hover:|focus:|active:)+)\1-opacity-(\d+)/g,
+      (_m, prefix, color, _baseOp, modifier, hoverOp) => {
+        const opacityStr = hoverOp === "100" ? "" : `/${hoverOp}`;
+        return `${prefix}-${color}/${_baseOp} ${modifier}${prefix}-${color}${opacityStr}`;
+      },
+    );
+
+    // Handle standalone orphaned opacity classes that weren't caught
+    if (/(?:bg|text|border|ring)-opacity-\d+/.test(result)) {
+      notes.push("MANUAL: Some *-opacity-N classes remain — color class may not be adjacent");
+    }
     changed = true;
     notes.push("Converted *-opacity-N to modifier syntax (e.g. bg-black/20)");
   }
-
-  // Also handle hover:bg-opacity-100 patterns
-  result = result.replace(
-    /(\b(?:hover:|focus:|active:)?(?:bg|text|border|ring)-[\w-]+)\s+(?:hover:|focus:|active:)?(?:bg|text|border|ring)-opacity-(\d+)/g,
-    "$1/$2",
-  );
 
   // Match className="...", className={`...`}, class="..."
   const patterns = [
