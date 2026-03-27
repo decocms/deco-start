@@ -24,7 +24,8 @@
  */
 
 import * as path from "node:path";
-import { createContext } from "./migrate/types.ts";
+import { execSync } from "node:child_process";
+import { createContext, logPhase } from "./migrate/types.ts";
 import { analyze } from "./migrate/phase-analyze.ts";
 import { scaffold } from "./migrate/phase-scaffold.ts";
 import { transform } from "./migrate/phase-transform.ts";
@@ -126,9 +127,48 @@ async function main() {
     if (!ok) {
       process.exit(2);
     }
+
+    // Phase 7: Bootstrap (install + generate)
+    if (!ctx.dryRun) {
+      bootstrap(ctx);
+    }
   } catch (error) {
     console.error(`\n  ${red("Migration failed:")}`, error);
     process.exit(1);
+  }
+}
+
+function bootstrap(ctx: { sourceDir: string }) {
+  logPhase("Bootstrap (install + generate)");
+
+  let failures = 0;
+  const run = (cmd: string, label: string, critical = false) => {
+    console.log(`  Running: ${label}...`);
+    try {
+      execSync(cmd, { cwd: ctx.sourceDir, stdio: "pipe" });
+      console.log(`  ${green("✓")} ${label}`);
+    } catch (e: any) {
+      failures++;
+      const icon = critical ? red("✗") : yellow("⚠");
+      console.log(`  ${icon} ${label} failed: ${e.message?.split("\n")[0]}`);
+      if (critical) {
+        console.log(`\n  ${red("Bootstrap aborted.")} Fix the error above and run manually.\n`);
+        return false;
+      }
+    }
+    return true;
+  };
+
+  // Detect package manager
+  const pm = process.env.npm_execpath?.includes("bun") ? "bun" : "npm";
+  if (!run(`${pm} install`, "Install dependencies", true)) return;
+  run("npx tsx node_modules/@decocms/start/scripts/generate-blocks.ts", "Generate CMS blocks");
+  run("npx tsr generate", "Generate TanStack routes");
+
+  if (failures > 0) {
+    console.log(`\n  ${yellow("Bootstrap completed with warnings.")} Check errors above before running dev.\n`);
+  } else {
+    console.log(`\n  ${green("Ready!")} Run \`${pm} run dev\` to start the dev server.\n`);
   }
 }
 

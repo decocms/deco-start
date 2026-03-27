@@ -21,9 +21,13 @@ if (typeof document === "undefined") {
 }
 
 // -- Section Registry --
-// Discovers all .tsx files under src/sections/ and registers them as CMS blocks.
-const sectionModules = import.meta.glob("./sections/**/*.tsx");
-registerSections(sectionModules);
+// CMS blocks reference sections as "site/sections/X.tsx", so we remap the glob keys.
+const sectionGlob = import.meta.glob("./sections/**/*.tsx") as Record<string, () => Promise<any>>;
+const sections: Record<string, () => Promise<any>> = {};
+for (const [path, loader] of Object.entries(sectionGlob)) {
+  sections["site/" + path.slice(2)] = loader;
+}
+registerSections(sections);
 
 // -- Matchers --
 registerBuiltinMatchers();
