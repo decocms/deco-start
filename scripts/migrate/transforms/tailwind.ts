@@ -419,41 +419,81 @@ function fixNegativeZIndex(content: string): { content: string; changed: boolean
   let changed = false;
   let result = content;
 
-  // Replace -z-{n} with z-0 on img/Image elements.
+  // Step 1: Replace -z-{n} with z-0 on img/Image elements + add inset-0
   result = result.replace(
     /<(?:img|Image)\b[\s\S]*?(?:\/>|>)/g,
     (tag) => {
       if (!/-z-\d+/.test(tag)) return tag;
-      const fixed = tag.replace(/(?<=\s|"|`)-z-(\d+)\b/g, (m) => {
+      let fixed = tag.replace(/(?<=\s|"|`)-z-(\d+)\b/g, (m) => {
         changed = true;
         notes.push(`Background image: replaced ${m} with z-0`);
         return "z-0";
       });
+      // Add inset-0 if not present (ensures absolute image covers parent)
+      if (fixed.includes("absolute") && !fixed.includes("inset-0")) {
+        fixed = fixed.replace(/\babsolute\b/, "absolute inset-0");
+        notes.push("Added inset-0 to absolute background image");
+      }
       return fixed;
     },
   );
 
-  // When we convert -z-{n} to z-0 on an image, the sibling content div needs
-  // "relative z-10" to stack above the image. We detect the pattern:
-  //   <img/Image ... z-0 .../>
-  //   <div className="...">
-  // and add "relative z-10" to the div's className if not already present.
+  // Step 2: When parent div has backgroundColor inline style + child img with z-0,
+  // extract backgroundColor into a separate overlay div and bump content to z-20.
+  // Pattern: <div ... style={{ backgroundColor: "..." }} ...> ... <img/Image z-0 .../> ... <div content>
   if (changed) {
-    // Find <img.../> or <Image.../> with z-0, followed by a <div with className
+    // Detect: style={{ backgroundColor: "rgba(...)" }} on a parent div
+    // followed by an img/Image with z-0
+    const overlayPattern = /(<div\b[^>]*?)(\s*style=\{\{[^}]*backgroundColor:\s*"([^"]+)"[^}]*\}\})([^>]*>)([\s\S]*?)(<(?:img|Image)\b[^>]*\bz-0\b[^>]*(?:\/>|>))([\s\S]*?)(<div\b[^>]*?className=(?:"|{[`"]))([^"}`]*)(["}`])/g;
+
+    result = result.replace(
+      overlayPattern,
+      (match, divStart, styleAttr, bgColor, divEnd, beforeImg, imgTag, afterImg, contentDivOpen, contentClasses, contentDivClose) => {
+        changed = true;
+        notes.push(`Extracted backgroundColor overlay: ${bgColor}`);
+
+        // Remove backgroundColor from parent
+        const cleanedParent = `${divStart}${divEnd}`;
+
+        // Create overlay div
+        const overlayDiv = `\n      {/* Overlay */}\n      <div className="absolute inset-0 z-10" style={{ backgroundColor: "${bgColor}" }} />`;
+
+        // Bump content div to z-20
+        let fixedContentClasses = contentClasses;
+        if (fixedContentClasses.includes("z-10")) {
+          fixedContentClasses = fixedContentClasses.replace(/\bz-10\b/, "z-20");
+        } else if (!fixedContentClasses.includes("z-20") && !fixedContentClasses.includes("z-30")) {
+          fixedContentClasses = `relative z-20 ${fixedContentClasses}`;
+        }
+
+        return `${cleanedParent}${beforeImg}${imgTag}${overlayDiv}${afterImg}${contentDivOpen}${fixedContentClasses}${contentDivClose}`;
+      },
+    );
+  }
+
+  // Step 3: For images without overlay (no backgroundColor on parent),
+  // just add relative z-10 to the content sibling
+  if (changed) {
     result = result.replace(
       /(<(?:img|Image)\b[^>]*\bz-0\b[^>]*(?:\/>|>))([\s\S]*?)(<div\s+className=(?:"|{[`"]))([^"}`]*)(["}`])/g,
       (match, imgTag, between, divOpen, classes, divClose) => {
-        // Only modify the immediate next sibling div (between should be whitespace only)
+        // Only modify the immediate next sibling div
         if (between.trim() && !between.trim().startsWith(')') && !between.trim().startsWith('}')) {
           return match;
         }
-        if (classes.includes("z-10") || classes.includes("z-20") || classes.includes("relative z-")) {
+        if (/z-\d+/.test(classes)) {
           return match; // Already has z-index
         }
         notes.push("Added relative z-10 to content div sibling of background image");
         return `${imgTag}${between}${divOpen}relative z-10 ${classes}${divClose}`;
       },
     );
+  }
+
+  // Step 4: Flag remaining -z-{n} on non-image elements for manual review
+  const remainingNegZ = result.match(/(?<=\s|"|`)-z-\d+/g);
+  if (remainingNegZ) {
+    notes.push(`MANUAL: ${remainingNegZ.length} remaining negative z-index usage(s) — may need manual fix for stacking context issues`);
   }
 
   return { content: result, changed, notes };
