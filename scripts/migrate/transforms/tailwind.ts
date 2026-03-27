@@ -312,6 +312,52 @@ function hasOrderIssues(classes: string[]): boolean {
   return false;
 }
 
+// ── Fix opacity modifier classes within a class list ────────────
+// Handles non-adjacent cases like: "bg-black/50 flex ... hover:bg-opacity-30"
+// Finds the base color class and merges the opacity into it.
+function fixOrphanedOpacity(classList: string[]): { result: string[]; changes: string[] } {
+  const changes: string[] = [];
+  const prefixes = ["bg", "text", "border", "ring", "divide", "placeholder"];
+
+  // Find base color classes: bg-{color} or bg-{color}/{opacity}
+  const colorClasses: Record<string, { color: string; prefix: string }> = {};
+  for (const cls of classList) {
+    for (const pfx of prefixes) {
+      const match = cls.match(new RegExp(`^${pfx}-(\\w[\\w-]*?)(?:\\/(\\d+))?$`));
+      if (match && match[1] !== "opacity") {
+        colorClasses[pfx] = { color: match[1], prefix: pfx };
+      }
+    }
+  }
+
+  // Replace orphaned opacity classes with proper merged versions
+  const result: string[] = [];
+  for (const cls of classList) {
+    const opMatch = cls.match(/^((?:hover:|focus:|active:)*)(\w+)-opacity-(\d+)$/);
+    if (!opMatch) {
+      result.push(cls);
+      continue;
+    }
+
+    const modifier = opMatch[1]; // "hover:" or ""
+    const prefix = opMatch[2]; // "bg", "text", etc.
+    const opacity = opMatch[3]; // "20", "50", etc.
+
+    const base = colorClasses[prefix];
+    if (!base) {
+      result.push(cls); // No base color found, keep as-is
+      continue;
+    }
+
+    const opacityStr = opacity === "100" ? "" : `/${opacity}`;
+    const replacement = `${modifier}${prefix}-${base.color}${opacityStr}`;
+    result.push(replacement);
+    changes.push(`Merged ${cls} → ${replacement}`);
+  }
+
+  return { result, changes };
+}
+
 // ── Fix a className string ──────────────────────────────────────
 function fixClassNameString(classes: string): { fixed: string; changes: string[] } {
   const changes: string[] = [];
@@ -340,7 +386,14 @@ function fixClassNameString(classes: string): { fixed: string; changes: string[]
     return fixed;
   });
 
-  // 3. Fix responsive ordering
+  // 3. Fix orphaned opacity classes (non-adjacent to color class)
+  const opacityFix = fixOrphanedOpacity(classList);
+  if (opacityFix.changes.length > 0) {
+    classList = opacityFix.result;
+    changes.push(...opacityFix.changes);
+  }
+
+  // 4. Fix responsive ordering
   if (hasOrderIssues(classList)) {
     const reordered = fixResponsiveOrder(classList);
     if (reordered.join(" ") !== classList.join(" ")) {
@@ -350,6 +403,213 @@ function fixClassNameString(classes: string): { fixed: string; changes: string[]
   }
 
   return { fixed: classList.join(" "), changes };
+}
+
+// ── Fix negative z-index on background images ──────────────────
+// In Tailwind v3, `-z-10` on an absolute image inside a relative parent worked
+// to push the image behind the parent's content. In Tailwind v4 + React,
+// stacking contexts from wrappers (section elements, animation, etc.) can trap
+// the negative z-index, making the image invisible.
+// Fix: replace `-z-{n}` with `z-0` on images. Since the image comes first in DOM,
+// content siblings (which have z-index: auto) render on top naturally.
+const NEG_Z_ON_IMAGE_REGEX = /\b-z-\d+\b/g;
+
+function fixNegativeZIndex(content: string): { content: string; changed: boolean; notes: string[] } {
+  const notes: string[] = [];
+  let changed = false;
+  let result = content;
+
+  // Step 1: Replace -z-{n} with z-0 on img/Image elements + add inset-0
+  result = result.replace(
+    /<(?:img|Image)\b[\s\S]*?(?:\/>|>)/g,
+    (tag) => {
+      if (!/-z-\d+/.test(tag)) return tag;
+      let fixed = tag.replace(/(?<=\s|"|`)-z-(\d+)\b/g, (m) => {
+        changed = true;
+        notes.push(`Background image: replaced ${m} with z-0`);
+        return "z-0";
+      });
+      // Add inset-0 if not present (ensures absolute image covers parent)
+      if (fixed.includes("absolute") && !fixed.includes("inset-0")) {
+        fixed = fixed.replace(/\babsolute\b/, "absolute inset-0");
+        notes.push("Added inset-0 to absolute background image");
+      }
+      return fixed;
+    },
+  );
+
+  // Step 2: When parent div has backgroundColor inline style + child img with z-0,
+  // extract backgroundColor into a separate overlay div and bump content to z-20.
+  // Use a simple two-pass approach to avoid JSX nesting issues:
+  //   a) Extract and remove backgroundColor from parent div
+  //   b) Insert overlay div before the content div (after the image conditional block)
+  if (changed && /style=\{\{[^}]*backgroundColor/.test(result)) {
+    const bgMatch = result.match(/style=\{\{\s*backgroundColor:\s*"([^"]+)"\s*\}\}/);
+    if (bgMatch) {
+      const bgValue = bgMatch[1];
+
+      // Remove the style attribute from the parent div
+      result = result.replace(/\s*style=\{\{\s*backgroundColor:\s*"[^"]+"\s*\}\}/, "");
+
+      // Insert overlay div. Find the closing of the image conditional block:
+      // Pattern: )} followed by whitespace then <div
+      // This handles {imageBg && (<Image ... />)}  <div content>
+      let insertedOverlay = false;
+
+      // Try pattern: )} then <div (conditional image)
+      if (/\)\}\s*\n\s*<div/.test(result)) {
+        result = result.replace(
+          /(\)\})([\s\n]*)(<div\b)/,
+          (m, closing, ws, divTag) => {
+            if (insertedOverlay) return m;
+            insertedOverlay = true;
+            return `${closing}${ws}{/* Overlay */}\n      <div className="absolute inset-0 z-10" style={{ backgroundColor: "${bgValue}" }} />${ws}${divTag}`;
+          },
+        );
+      }
+
+      // Try pattern: /> then <div (direct image, no conditional)
+      if (!insertedOverlay && /\/>\s*\n\s*<div/.test(result)) {
+        result = result.replace(
+          /(\/>\s*\n)([\s]*)(<div\b)/,
+          (m, closing, ws, divTag) => {
+            if (insertedOverlay) return m;
+            insertedOverlay = true;
+            return `${closing}${ws}{/* Overlay */}\n${ws}<div className="absolute inset-0 z-10" style={{ backgroundColor: "${bgValue}" }} />\n${ws}${divTag}`;
+          },
+        );
+      }
+
+      if (insertedOverlay) {
+        // Bump the first content div after the overlay to z-20.
+        // Find the overlay marker, then the next className= string after it.
+        const overlayMarker = `style={{ backgroundColor: "${bgValue}" }} />`;
+        const overlayIdx = result.indexOf(overlayMarker);
+        if (overlayIdx !== -1) {
+          const afterOverlay = result.substring(overlayIdx + overlayMarker.length);
+          // Find first className= after overlay (handles both className="..." and className={clx("...")})
+          const classMatch = afterOverlay.match(/className=(?:\{clx\(\s*)?[""`]([^""`]*)/);
+          if (classMatch && classMatch[1] && !/z-\d+/.test(classMatch[1])) {
+            const originalClass = classMatch[1];
+            const fixedClass = `relative z-20 ${originalClass}`;
+            // Replace only the first occurrence after the overlay
+            const beforeOverlay = result.substring(0, overlayIdx + overlayMarker.length);
+            const fixed = afterOverlay.replace(originalClass, fixedClass);
+            result = beforeOverlay + fixed;
+          }
+        }
+        notes.push(`Extracted backgroundColor overlay: ${bgValue}`);
+      }
+    }
+  }
+
+  // Step 3: For content divs that are siblings of z-0 images,
+  // add `relative z-10` so content renders above the background image.
+  // Uses a line-by-line approach to avoid regex issues with JSX nesting.
+  if (changed) {
+    const lines = result.split("\n");
+    let foundZ0Image = false;
+    let needsContentZIndex = false;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      // Detect start of an image element (may span multiple lines)
+      if (/<(?:img|Image)\b/.test(line)) {
+        foundZ0Image = true;
+        if (/\bz-0\b/.test(line)) {
+          needsContentZIndex = true;
+        }
+        continue;
+      }
+      // Detect z-0 on a subsequent line of the image element
+      if (foundZ0Image && !needsContentZIndex && /\bz-0\b/.test(line)) {
+        needsContentZIndex = true;
+        continue;
+      }
+      // Detect end of multi-line image element (self-closing />)
+      if (foundZ0Image && !needsContentZIndex && /\/>/.test(line)) {
+        // Image closed without z-0, reset
+        foundZ0Image = false;
+        continue;
+      }
+
+      // When we hit the closing of an Image block, start looking for content div
+      if (foundZ0Image && /\)\}/.test(line)) {
+        // The conditional image block closed, content div should be next
+        continue;
+      }
+
+      // Skip overlay divs we inserted
+      if (/Overlay/.test(line)) continue;
+      if (/absolute inset-0 z-10/.test(line)) continue;
+
+      // Find the first content div after the image
+      if (needsContentZIndex && /^\s*<div\b/.test(line)) {
+        // Check if this div already has a z-index
+        if (/z-\d+/.test(line)) {
+          needsContentZIndex = false;
+          foundZ0Image = false;
+          continue;
+        }
+        // Also check the next few lines for z-index (multi-line className)
+        let hasZ = false;
+        for (let j = i; j < Math.min(i + 5, lines.length); j++) {
+          if (/z-\d+/.test(lines[j])) { hasZ = true; break; }
+          if (/>/.test(lines[j]) && j !== i) break;
+        }
+        if (hasZ) {
+          needsContentZIndex = false;
+          foundZ0Image = false;
+          continue;
+        }
+
+        // Add relative z-10 to the className — may be on this line or a subsequent one
+        let classLine = i;
+        for (let k = i; k < Math.min(i + 4, lines.length); k++) {
+          if (/className=/.test(lines[k])) {
+            classLine = k;
+            break;
+          }
+        }
+
+        if (/className="/.test(lines[classLine])) {
+          lines[classLine] = lines[classLine].replace(/className="/, 'className="relative z-10 ');
+          notes.push("Added relative z-10 to content div sibling of background image");
+        } else if (/className=\{clx\(/.test(lines[classLine])) {
+          // clx( may have its first string on the same line or the next
+          if (/className=\{clx\(\s*"/.test(lines[classLine])) {
+            lines[classLine] = lines[classLine].replace(/className=\{clx\(\s*"/, 'className={clx("relative z-10 ');
+          } else {
+            // First string argument is on the next line
+            for (let k = classLine + 1; k < Math.min(classLine + 3, lines.length); k++) {
+              if (/^\s*"/.test(lines[k])) {
+                lines[k] = lines[k].replace(/^(\s*)"/, '$1"relative z-10 ');
+                break;
+              }
+            }
+          }
+          notes.push("Added relative z-10 to content div sibling of background image");
+        } else if (/className=\{`/.test(lines[classLine])) {
+          lines[classLine] = lines[classLine].replace(/className=\{`/, 'className={`relative z-10 ');
+          notes.push("Added relative z-10 to content div sibling of background image");
+        }
+
+        needsContentZIndex = false;
+        foundZ0Image = false;
+      }
+    }
+
+    result = lines.join("\n");
+  }
+
+  // Step 4: Flag remaining -z-{n} on non-image elements for manual review
+  const remainingNegZ = result.match(/(?<=\s|"|`)-z-\d+/g);
+  if (remainingNegZ) {
+    notes.push(`MANUAL: ${remainingNegZ.length} remaining negative z-index usage(s) — may need manual fix for stacking context issues`);
+  }
+
+  return { content: result, changed, notes };
 }
 
 /**
@@ -365,6 +625,76 @@ export function transformTailwind(content: string): TransformResult {
   const notes: string[] = [];
   let changed = false;
   let result = content;
+
+  // ── Fix negative z-index on background images ──────────────────
+  const zFix = fixNegativeZIndex(result);
+  if (zFix.changed) {
+    result = zFix.content;
+    changed = true;
+    notes.push(...zFix.notes);
+  }
+
+  // ── Fix opacity utility pattern (Tailwind v4 breaking change) ──
+  // bg-black bg-opacity-20 → bg-black/20
+  // border-white border-opacity-20 → border-white/20
+  // text-gray-600 text-opacity-50 → text-gray-600/50
+  //
+  // The pattern is: {prefix}-{color} {prefix}-opacity-{N} → {prefix}-{color}/{N}
+  // prefix can be: bg, text, border, ring, divide, placeholder
+  if (/(?:bg|text|border|ring|divide|placeholder)-opacity-\d+/.test(result)) {
+    // Match: bg-{color} bg-opacity-{N}
+    result = result.replace(
+      /\b(bg-[\w-]+?)\s+bg-opacity-(\d+)/g,
+      "$1/$2",
+    );
+    // Match: text-{color} text-opacity-{N}
+    result = result.replace(
+      /\b(text-[\w-]+?)\s+text-opacity-(\d+)/g,
+      "$1/$2",
+    );
+    // Match: border-{color} border-opacity-{N}
+    result = result.replace(
+      /\b(border-[\w-]+?)\s+border-opacity-(\d+)/g,
+      "$1/$2",
+    );
+    // Match: ring-{color} ring-opacity-{N}
+    result = result.replace(
+      /\b(ring-[\w-]+?)\s+ring-opacity-(\d+)/g,
+      "$1/$2",
+    );
+    // Match: divide-{color} divide-opacity-{N}
+    result = result.replace(
+      /\b(divide-[\w-]+?)\s+divide-opacity-(\d+)/g,
+      "$1/$2",
+    );
+    // Match: placeholder-{color} placeholder-opacity-{N}
+    result = result.replace(
+      /\b(placeholder-[\w-]+?)\s+placeholder-opacity-(\d+)/g,
+      "$1/$2",
+    );
+    // Handle hover:/focus:/active: prefixed opacity (e.g. hover:bg-opacity-100)
+    result = result.replace(
+      /\b((?:hover:|focus:|active:)(?:bg|text|border|ring)-[\w-]+?)\s+(?:hover:|focus:|active:)(?:bg|text|border|ring)-opacity-(\d+)/g,
+      "$1/$2",
+    );
+    // Handle hover:bg-opacity-N when bg-{color}/{N} already exists
+    // e.g. "bg-white/80 hover:bg-opacity-100" → "bg-white/80 hover:bg-white"
+    // e.g. "bg-black/60 hover:bg-opacity-50" → "bg-black/60 hover:bg-black/50"
+    result = result.replace(
+      /\b(bg|text|border|ring)-([\w-]+?)\/(\d+)\s+((?:hover:|focus:|active:)+)\1-opacity-(\d+)/g,
+      (_m, prefix, color, _baseOp, modifier, hoverOp) => {
+        const opacityStr = hoverOp === "100" ? "" : `/${hoverOp}`;
+        return `${prefix}-${color}/${_baseOp} ${modifier}${prefix}-${color}${opacityStr}`;
+      },
+    );
+
+    // Handle standalone orphaned opacity classes that weren't caught
+    if (/(?:bg|text|border|ring)-opacity-\d+/.test(result)) {
+      notes.push("MANUAL: Some *-opacity-N classes remain — color class may not be adjacent");
+    }
+    changed = true;
+    notes.push("Converted *-opacity-N to modifier syntax (e.g. bg-black/20)");
+  }
 
   // Match className="...", className={`...`}, class="..."
   const patterns = [

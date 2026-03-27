@@ -346,6 +346,53 @@ function extractSiteName(sourceDir: string): string {
   return dirName;
 }
 
+function extractThemeFromCms(sourceDir: string): { colors: Record<string, string>; fontFamily: string | null } {
+  const colors: Record<string, string> = {};
+  let fontFamily: string | null = null;
+
+  // Look for Theme config in .deco/blocks/
+  const blocksDir = path.join(sourceDir, ".deco", "blocks");
+  if (!fs.existsSync(blocksDir)) return { colors, fontFamily };
+
+  const files = fs.readdirSync(blocksDir);
+  for (const file of files) {
+    if (!file.endsWith(".json")) continue;
+    try {
+      const content = fs.readFileSync(path.join(blocksDir, file), "utf-8");
+      if (!content.includes("mainColors") && !content.includes("Theme")) continue;
+
+      const data = JSON.parse(content);
+      // Direct Theme block (e.g. Deco.json with __resolveType: "site/sections/Theme/Theme.tsx")
+      if (data.mainColors) {
+        Object.assign(colors, data.mainColors);
+        if (data.complementaryColors) {
+          Object.assign(colors, data.complementaryColors);
+        }
+      }
+      // Font
+      if (data.font?.fonts?.[0]?.family) {
+        fontFamily = data.font.fonts[0].family;
+      }
+      // Check sections array (page blocks may contain Theme)
+      if (data.sections) {
+        for (const section of data.sections) {
+          if (section.__resolveType?.includes("Theme") && section.mainColors) {
+            Object.assign(colors, section.mainColors);
+            if (section.complementaryColors) {
+              Object.assign(colors, section.complementaryColors);
+            }
+            if (section.font?.fonts?.[0]?.family) {
+              fontFamily = section.font.fonts[0].family;
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  return { colors, fontFamily };
+}
+
 export function analyze(ctx: MigrationContext): void {
   logPhase("Analyze");
 
@@ -365,9 +412,20 @@ export function analyze(ctx: MigrationContext): void {
   ctx.platform = extractPlatform(ctx.sourceDir);
   ctx.gtmId = extractGtmId(ctx.sourceDir);
 
+  // Extract theme colors and font from CMS
+  const theme = extractThemeFromCms(ctx.sourceDir);
+  ctx.themeColors = theme.colors;
+  ctx.fontFamily = theme.fontFamily;
+
   console.log(`  Site: ${ctx.siteName}`);
   console.log(`  Platform: ${ctx.platform}`);
   console.log(`  GTM ID: ${ctx.gtmId || "none"}`);
+  if (Object.keys(ctx.themeColors).length > 0) {
+    console.log(`  Theme: ${Object.keys(ctx.themeColors).length} colors from CMS`);
+  }
+  if (ctx.fontFamily) {
+    console.log(`  Font: ${ctx.fontFamily}`);
+  }
 
   // Scan all files
   scanDir(ctx.sourceDir, ctx.sourceDir, ctx.files);

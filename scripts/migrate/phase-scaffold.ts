@@ -68,6 +68,21 @@ export function scaffold(ctx: MigrationContext): void {
   // Apps
   writeFile(ctx, "src/apps/site.ts", generateSiteApp(ctx));
 
+  // SiteTheme component (replaces apps/website/components/Theme.tsx)
+  // Check if any source file uses SiteTheme
+  const usesSiteTheme = ctx.files.some((f) => {
+    if (f.action === "delete") return false;
+    try {
+      const content = fs.readFileSync(f.absPath, "utf-8");
+      return content.includes("SiteTheme");
+    } catch {
+      return false;
+    }
+  });
+  if (usesSiteTheme) {
+    writeFile(ctx, "src/components/ui/Theme.tsx", generateSiteThemeComponent());
+  }
+
   // Create public/ directory
   if (!ctx.dryRun) {
     fs.mkdirSync(path.join(ctx.sourceDir, "public"), { recursive: true });
@@ -76,7 +91,74 @@ export function scaffold(ctx: MigrationContext): void {
   console.log(`  Scaffolded ${ctx.scaffoldedFiles.length} files`);
 }
 
-function generateAppCss(_ctx: MigrationContext): string {
+function generateSiteThemeComponent(): string {
+  return `export interface Font {
+  family: string;
+  styleSheet?: string;
+}
+
+export interface Props {
+  colorScheme?: "light" | "dark" | "any";
+  fonts?: Font[];
+  variables?: Array<{ name: string; value: string }>;
+}
+
+/**
+ * SiteTheme — injects CSS custom properties and font stylesheets into the page.
+ * This replaces the old apps/website/components/Theme.tsx from the Deno stack.
+ */
+export default function SiteTheme({ variables, fonts, colorScheme }: Props) {
+  const cssVars = variables?.length
+    ? \`:root { \${variables.map((v) => \`\${v.name}: \${v.value};\`).join(" ")} }\`
+    : "";
+
+  const colorSchemeCss = colorScheme && colorScheme !== "any"
+    ? \`:root { color-scheme: \${colorScheme}; }\`
+    : "";
+
+  const css = [cssVars, colorSchemeCss].filter(Boolean).join("\\n");
+
+  return (
+    <>
+      {fonts?.map((font) =>
+        font.styleSheet ? (
+          <link key={font.family} rel="stylesheet" href={font.styleSheet} />
+        ) : null
+      )}
+      {css && <style dangerouslySetInnerHTML={{ __html: css }} />}
+    </>
+  );
+}
+
+export { type Font as SiteThemeFont };
+`;
+}
+
+function generateAppCss(ctx: MigrationContext): string {
+  const c = ctx.themeColors;
+  // Map CMS color names to DaisyUI v5 CSS variables
+  const colors: Record<string, string> = {
+    "--color-primary": c["primary"] || "#6B21A8",
+    "--color-secondary": c["secondary"] || "#141414",
+    "--color-accent": c["tertiary"] || "#FFF100",
+    "--color-neutral": c["neutral"] || "#393939",
+    "--color-base-100": c["base-100"] || "#FFFFFF",
+    "--color-base-200": c["base-200"] || "#F3F3F3",
+    "--color-base-300": c["base-300"] || "#868686",
+    "--color-info": c["info"] || "#006CA1",
+    "--color-success": c["success"] || "#007552",
+    "--color-warning": c["warning"] || "#F8D13A",
+    "--color-error": c["error"] || "#CF040A",
+  };
+  // Add content colors if specified
+  if (c["primary-content"]) colors["--color-primary-content"] = c["primary-content"];
+  if (c["secondary-content"]) colors["--color-secondary-content"] = c["secondary-content"];
+  if (c["base-content"]) colors["--color-base-content"] = c["base-content"];
+
+  const colorLines = Object.entries(colors)
+    .map(([k, v]) => `  ${k}: ${v};`)
+    .join("\n");
+
   return `@import "tailwindcss";
 @plugin "daisyui";
 @plugin "daisyui/theme" {
@@ -84,18 +166,7 @@ function generateAppCss(_ctx: MigrationContext): string {
   default: true;
   color-scheme: light;
 
-  /* TODO: Extract theme colors from the old Theme section's CMS config */
-  --color-primary: #6B21A8;
-  --color-secondary: #141414;
-  --color-accent: #FFF100;
-  --color-neutral: #393939;
-  --color-base-100: #FFFFFF;
-  --color-base-200: #F3F3F3;
-  --color-base-300: #868686;
-  --color-info: #006CA1;
-  --color-success: #007552;
-  --color-warning: #F8D13A;
-  --color-error: #CF040A;
+${colorLines}
 }
 
 @theme {
@@ -104,7 +175,7 @@ function generateAppCss(_ctx: MigrationContext): string {
   --color-black: #000;
   --color-transparent: transparent;
   --color-current: currentColor;
-  --color-inherit: inherit;
+  --color-inherit: inherit;${ctx.fontFamily ? `\n  --font-sans: "${ctx.fontFamily}", ui-sans-serif, system-ui, sans-serif;` : ""}
 }
 
 /* View transitions */
