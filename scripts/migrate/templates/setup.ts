@@ -1,6 +1,36 @@
 import type { MigrationContext } from "../types.ts";
 
-export function generateSetup(_ctx: MigrationContext): string {
+export function generateSetup(ctx: MigrationContext): string {
+  // Detect layout sections (Header, Footer, Theme) from source files
+  const layoutSections: string[] = [];
+  for (const f of ctx.files) {
+    if (f.category !== "section" || f.action === "delete") continue;
+    const name = f.path.replace(/^sections\//, "").replace(/\.tsx$/, "");
+    const lower = name.toLowerCase();
+    if (lower.includes("header") || lower.includes("footer") || lower.includes("theme")) {
+      layoutSections.push(`site/sections/${name}.tsx`);
+    }
+  }
+  // Also check islands that became sections
+  for (const f of ctx.files) {
+    if (f.category !== "island") continue;
+    const name = f.path.replace(/^islands\//, "").replace(/\.tsx$/, "");
+    const lower = name.toLowerCase();
+    if (lower.includes("header") || lower.includes("footer") || lower.includes("theme")) {
+      layoutSections.push(`site/sections/${name}.tsx`);
+    }
+  }
+
+  const layoutRegistration = layoutSections.length > 0
+    ? `\n// -- Layout Sections (cached across navigations) --
+registerLayoutSections([
+${layoutSections.map((s) => `  "${s}",`).join("\n")}
+]);\n`
+    : "";
+
+  const layoutImport = layoutSections.length > 0
+    ? "\n  registerLayoutSections," : "";
+
   return `/**
  * Site setup — registers all sections, loaders and matchers with the CMS.
  *
@@ -9,7 +39,7 @@ export function generateSetup(_ctx: MigrationContext): string {
  */
 import { blocks as generatedBlocks } from "./server/cms/blocks.gen";
 import {
-  registerSections,
+  registerSections,${layoutImport}
   setBlocks,
 } from "@decocms/start/cms";
 import { registerBuiltinMatchers } from "@decocms/start/matchers/builtins";
@@ -28,7 +58,7 @@ for (const [path, loader] of Object.entries(sectionGlob)) {
   sections["site/" + path.slice(2)] = loader;
 }
 registerSections(sections);
-
+${layoutRegistration}
 // -- Matchers --
 registerBuiltinMatchers();
 `;
