@@ -7,6 +7,7 @@ import { transformJsx } from "./transforms/jsx.ts";
 import { transformFreshApis } from "./transforms/fresh-apis.ts";
 import { transformDenoIsms } from "./transforms/deno-isms.ts";
 import { transformTailwind } from "./transforms/tailwind.ts";
+import { transformDeadCode } from "./transforms/dead-code.ts";
 
 /**
  * Apply all transforms to a file's content in the correct order.
@@ -22,11 +23,12 @@ function applyTransforms(content: string, filePath: string): TransformResult {
     return { content, changed: false, notes: [] };
   }
 
-  // Pipeline: imports → jsx → fresh-apis → deno-isms → tailwind
+  // Pipeline: imports → jsx → fresh-apis → dead-code → deno-isms → tailwind
   const pipeline = [
     { name: "imports", fn: transformImports },
     { name: "jsx", fn: transformJsx },
     { name: "fresh-apis", fn: transformFreshApis },
+    { name: "dead-code", fn: transformDeadCode },
     { name: "deno-isms", fn: transformDenoIsms },
     { name: "tailwind", fn: transformTailwind },
   ];
