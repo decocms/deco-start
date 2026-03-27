@@ -169,22 +169,14 @@ ${gtmScript}
 
 function generateIndex(siteTitle: string): string {
   return `import { createFileRoute } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/react-start";
-import { resolveDecoPage } from "@decocms/start/cms";
+import { cmsHomeRouteConfig, deferredSectionLoader } from "@decocms/start/routes";
 import { DecoPageRenderer } from "@decocms/start/hooks";
 
-const loadHome = createServerFn({ method: "GET" }).handler(async () => {
-  const page = await resolveDecoPage("/");
-  if (!page) return null;
-  return {
-    resolvedSections: page.resolvedSections ?? [],
-    deferredSections: page.deferredSections ?? [],
-    pagePath: "/",
-  };
-});
-
 export const Route = createFileRoute("/")({
-  loader: () => loadHome(),
+  ...cmsHomeRouteConfig({
+    defaultTitle: "${siteTitle}",
+    siteName: "${siteTitle}",
+  }),
   component: HomePage,
 });
 
@@ -206,7 +198,10 @@ function HomePage() {
     <DecoPageRenderer
       sections={data.resolvedSections ?? []}
       deferredSections={data.deferredSections ?? []}
+      deferredPromises={data.deferredPromises}
       pagePath={data.pagePath}
+      pageUrl={data.pageUrl}
+      loadDeferredSectionFn={deferredSectionLoader}
     />
   );
 }
@@ -215,25 +210,19 @@ function HomePage() {
 
 function generateCatchAll(siteTitle: string): string {
   return `import { createFileRoute } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/react-start";
-import { resolveDecoPage } from "@decocms/start/cms";
+import { cmsRouteConfig, deferredSectionLoader } from "@decocms/start/routes";
 import { DecoPageRenderer } from "@decocms/start/hooks";
 
-const loadCmsPage = createServerFn({ method: "GET" }).handler(async ({ data }: { data: string }) => {
-  const path = \`/\${data}\`;
-  const page = await resolveDecoPage(path);
-  if (!page) return null;
-  return {
-    resolvedSections: page.resolvedSections ?? [],
-    deferredSections: page.deferredSections ?? [],
-    pagePath: path,
-  };
+const routeConfig = cmsRouteConfig({
+  siteName: "${siteTitle}",
+  defaultTitle: "${siteTitle}",
 });
 
 export const Route = createFileRoute("/$")({
-  loader: ({ params }) => loadCmsPage({ data: params._splat || "" }),
+  ...routeConfig,
   component: CmsPage,
   notFoundComponent: NotFoundPage,
+  staleTime: 30_000,
 });
 
 function CmsPage() {
@@ -244,7 +233,10 @@ function CmsPage() {
     <DecoPageRenderer
       sections={data.resolvedSections ?? []}
       deferredSections={data.deferredSections ?? []}
+      deferredPromises={data.deferredPromises}
       pagePath={data.pagePath}
+      pageUrl={data.pageUrl}
+      loadDeferredSectionFn={deferredSectionLoader}
     />
   );
 }
