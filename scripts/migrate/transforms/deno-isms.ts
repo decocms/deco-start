@@ -38,6 +38,13 @@ export function transformDenoIsms(content: string): TransformResult {
     notes.push("Removed npm: prefix from imports");
   }
 
+  // @ts-ignore → @ts-expect-error (TypeScript 5+ prefers @ts-expect-error)
+  if (/@ts-ignore/.test(result)) {
+    result = result.replace(/@ts-ignore/g, "@ts-expect-error");
+    changed = true;
+    notes.push("Replaced @ts-ignore with @ts-expect-error");
+  }
+
   // Remove Deno.* API usages — flag for manual review
   if (result.includes("Deno.")) {
     notes.push("MANUAL: Deno.* API usage found — needs Node.js equivalent");
