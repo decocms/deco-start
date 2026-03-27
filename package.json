@@ -46,6 +46,8 @@
     "./scripts/generate-blocks": "./scripts/generate-blocks.ts",
     "./scripts/generate-schema": "./scripts/generate-schema.ts",
     "./scripts/generate-invoke": "./scripts/generate-invoke.ts",
+    "./scripts/migrate": "./scripts/migrate.ts",
+    "./scripts/tailwind-lint": "./scripts/tailwind-lint.ts",
     "./vite": "./src/vite/plugin.js"
   },
   "scripts": {
