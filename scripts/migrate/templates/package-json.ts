@@ -8,10 +8,13 @@ function extractNpmDeps(importMap: Record<string, string>): Record<string, strin
   const deps: Record<string, string> = {};
   for (const [key, value] of Object.entries(importMap)) {
     if (!value.startsWith("npm:")) continue;
-    // Skip preact, deco, and other framework deps we handle ourselves
+    // Skip framework deps we handle ourselves
     if (key.startsWith("preact") || key.startsWith("@preact/")) continue;
     if (key.startsWith("@deco/")) continue;
-    if (key === "daisyui") continue; // we pin our own version
+    if (key === "daisyui") continue;
+    if (key === "preact-render-to-string") continue;
+    if (key === "simple-git") continue; // dev tool, not needed in runtime
+    if (key === "fast-json-patch") continue; // used by old deco runtime
 
     const raw = value.slice(4); // remove "npm:"
     const atIdx = raw.lastIndexOf("@");
@@ -19,8 +22,13 @@ function extractNpmDeps(importMap: Record<string, string>): Record<string, strin
       deps[raw] = "*";
     } else {
       const name = raw.slice(0, atIdx);
-      const version = raw.slice(atIdx + 1);
-      deps[name] = `^${version}`;
+      let version = raw.slice(atIdx + 1);
+      // Don't double-prefix with ^ if version already has a range prefix
+      if (/^[~^>=<]/.test(version)) {
+        deps[name] = version;
+      } else {
+        deps[name] = `^${version}`;
+      }
     }
   }
   return deps;
@@ -39,6 +47,8 @@ export function generatePackageJson(ctx: MigrationContext): string {
     description: `${ctx.siteName} storefront powered by TanStack Start`,
     scripts: {
       dev: "vite dev",
+      "dev:clean":
+        "rm -rf node_modules/.vite .wrangler/state .tanstack && vite dev",
       "generate:blocks":
         "tsx node_modules/@decocms/start/scripts/generate-blocks.ts",
       "generate:routes": "tsr generate",
