@@ -141,23 +141,35 @@ async function main() {
 function bootstrap(ctx: { sourceDir: string }) {
   logPhase("Bootstrap (install + generate)");
 
-  const run = (cmd: string, label: string) => {
+  let failures = 0;
+  const run = (cmd: string, label: string, critical = false) => {
     console.log(`  Running: ${label}...`);
     try {
       execSync(cmd, { cwd: ctx.sourceDir, stdio: "pipe" });
       console.log(`  ${green("✓")} ${label}`);
     } catch (e: any) {
-      console.log(`  ${yellow("⚠")} ${label} failed: ${e.message?.split("\n")[0]}`);
+      failures++;
+      const icon = critical ? red("✗") : yellow("⚠");
+      console.log(`  ${icon} ${label} failed: ${e.message?.split("\n")[0]}`);
+      if (critical) {
+        console.log(`\n  ${red("Bootstrap aborted.")} Fix the error above and run manually.\n`);
+        return false;
+      }
     }
+    return true;
   };
 
   // Detect package manager
   const pm = process.env.npm_execpath?.includes("bun") ? "bun" : "npm";
-  run(`${pm} install`, "Install dependencies");
+  if (!run(`${pm} install`, "Install dependencies", true)) return;
   run("npx tsx node_modules/@decocms/start/scripts/generate-blocks.ts", "Generate CMS blocks");
   run("npx tsr generate", "Generate TanStack routes");
 
-  console.log(`\n  ${green("Ready!")} Run \`${pm} run dev\` to start the dev server.\n`);
+  if (failures > 0) {
+    console.log(`\n  ${yellow("Bootstrap completed with warnings.")} Check errors above before running dev.\n`);
+  } else {
+    console.log(`\n  ${green("Ready!")} Run \`${pm} run dev\` to start the dev server.\n`);
+  }
 }
 
 main();

@@ -144,8 +144,8 @@ vite.config.timestamp_*
 # Deco CMS
 .deco/metadata/*
 
-# Lock files (use bun.lock)
-package-lock.json
+# Bun lock file (if using npm, keep package-lock.json instead)
+# package-lock.json
 
 # IDE
 .vscode/
