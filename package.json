@@ -40,6 +40,7 @@
     "./sdk/requestContext": "./src/sdk/requestContext.ts",
     "./sdk/createInvoke": "./src/sdk/createInvoke.ts",
     "./matchers/posthog": "./src/matchers/posthog.ts",
+    "./apps/autoconfig": "./src/apps/autoconfig.ts",
     "./matchers/builtins": "./src/matchers/builtins.ts",
     "./types/widgets": "./src/types/widgets.ts",
     "./routes": "./src/routes/index.ts",
