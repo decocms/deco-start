@@ -171,6 +171,55 @@ export function transformJsx(content: string): TransformResult {
     notes.push("Replaced 'class' in interface definitions with 'className'");
   }
 
+  // Remove `alt` prop from non-img elements (<a>, <iframe>, <div>, etc.)
+  // In React, `alt` is only valid on <img>, <input type="image">, <area>
+  const altOnNonImgRegex = /(<(?:a|iframe|div|span|button|section)\s[^>]*?)\s+alt=(?:\{[^}]*\}|"[^"]*"|'[^']*')/g;
+  if (altOnNonImgRegex.test(result)) {
+    result = result.replace(
+      /(<(?:a|iframe|div|span|button|section)\s[^>]*?)\s+alt=(?:\{[^}]*\}|"[^"]*"|'[^']*')/g,
+      "$1",
+    );
+    changed = true;
+    notes.push("Removed invalid alt prop from non-img elements");
+  }
+
+  // Remove `type` prop from non-form elements (<span>, <div>, etc.)
+  // In React, `type` is only valid on <input>, <button>, <select>, <textarea>, <script>, <style>, <link>
+  const typeOnInvalidRegex = /(<(?:span|div|p|section|header|footer|nav|main|article|aside)\s[^>]*?)\s+type=(?:\{[^}]*\}|"[^"]*"|'[^']*')/g;
+  if (typeOnInvalidRegex.test(result)) {
+    result = result.replace(
+      /(<(?:span|div|p|section|header|footer|nav|main|article|aside)\s[^>]*?)\s+type=(?:\{[^}]*\}|"[^"]*"|'[^']*')/g,
+      "$1",
+    );
+    changed = true;
+    notes.push("Removed invalid type prop from non-form elements");
+  }
+
+  // setTimeout/setInterval return type: use window.setTimeout for correct typing
+  // In Node/CF Workers, setTimeout returns Timeout object, not number
+  // window.setTimeout always returns number
+  if (/\bsetTimeout\b/.test(result) && /:\s*number/.test(result)) {
+    // Only replace bare setTimeout when it's assigned to a typed variable
+    result = result.replace(
+      /\b(?<!window\.)setTimeout\(/g,
+      "window.setTimeout(",
+    );
+    result = result.replace(
+      /\b(?<!window\.)setInterval\(/g,
+      "window.setInterval(",
+    );
+    result = result.replace(
+      /\b(?<!window\.)clearTimeout\(/g,
+      "window.clearTimeout(",
+    );
+    result = result.replace(
+      /\b(?<!window\.)clearInterval\(/g,
+      "window.clearInterval(",
+    );
+    changed = true;
+    notes.push("Prefixed setTimeout/setInterval with window. for correct typing");
+  }
+
   // Ensure React import exists if we introduced React.* references
   if (
     (result.includes("React.") || result.includes("React,")) &&

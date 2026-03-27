@@ -25,7 +25,7 @@ interface AppAutoconfigurator {
 }
 
 const KNOWN_APPS: Record<string, AppAutoconfigurator> = {
-	"deco-resend": async (block: any) => {
+	"deco-resend": async (block: any): Promise<Record<string, InvokeAction>> => {
 		try {
 			const [resendClient, resendActions] = await Promise.all([
 				import("@decocms/apps/resend/client" as string),
@@ -40,7 +40,7 @@ const KNOWN_APPS: Record<string, AppAutoconfigurator> = {
 					"[autoconfig] deco-resend: no API key found." +
 					" Set DECO_CRYPTO_KEY to decrypt CMS secrets, or set RESEND_API_KEY as fallback.",
 				);
-				return {};
+				return {} as Record<string, InvokeAction>;
 			}
 
 			configureResend({
