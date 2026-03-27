@@ -1,4 +1,22 @@
+import { execSync } from "node:child_process";
 import type { MigrationContext } from "../types.ts";
+
+/**
+ * Get the latest published version of an npm package.
+ * Falls back to the provided default if the lookup fails.
+ */
+function getLatestVersion(pkg: string, fallback: string): string {
+  try {
+    const version = execSync(`npm view ${pkg} version`, {
+      encoding: "utf-8",
+      timeout: 10000,
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    return version || fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 /**
  * Extract npm dependencies from deno.json import map.
@@ -40,6 +58,10 @@ export function generatePackageJson(ctx: MigrationContext): string {
     ...ctx.discoveredNpmDeps,
   };
 
+  // Fetch latest versions from npm registry
+  const startVersion = getLatestVersion("@decocms/start", "0.34.0");
+  const appsVersion = getLatestVersion("@decocms/apps", "0.26.0");
+
   const pkg = {
     name: ctx.siteName,
     version: "0.1.0",
@@ -72,8 +94,8 @@ export function generatePackageJson(ctx: MigrationContext): string {
     author: "deco.cx",
     license: "MIT",
     dependencies: {
-      "@decocms/apps": "^0.25.2",
-      "@decocms/start": "^0.32.0",
+      "@decocms/apps": `^${appsVersion}`,
+      "@decocms/start": `^${startVersion}`,
       "@tanstack/react-query": "5.90.21",
       "@tanstack/react-router": "1.166.7",
       "@tanstack/react-start": "1.166.8",
