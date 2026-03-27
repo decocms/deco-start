@@ -46,17 +46,35 @@ interface AppMod {
 	handlers: Record<string, (props: any, request: Request) => Promise<any>>;
 }
 
+/**
+ * Import app mod using static imports.
+ * CF Workers can't catch errors from dynamic string template imports —
+ * the vite plugin crashes with AssertionError before the catch runs.
+ * Each known app gets a case here. When adding a new app to BLOCK_TO_APP,
+ * also add a case to this switch.
+ */
+async function importAppMod(appName: string): Promise<AppMod | null> {
+	try {
+		switch (appName) {
+			case "resend":
+				return await import("@decocms/apps/resend/mod");
+			default:
+				return null;
+		}
+	} catch {
+		return null;
+	}
+}
+
 async function loadAndConfigureApp(
 	blockKey: string,
 	appName: string,
 	blockData: unknown,
 ): Promise<Record<string, InvokeAction>> {
-	try {
-		// Dynamic import of @decocms/apps/{appName}/mod
-		const mod: AppMod = await import(
-			/* @vite-ignore */ `@decocms/apps/${appName}/mod`
-		);
+	const mod = await importAppMod(appName);
+	if (!mod) return {};
 
+	try {
 		const ok = await mod.configure(blockData, resolveSecret);
 		if (!ok) {
 			console.warn(
@@ -69,10 +87,6 @@ async function loadAndConfigureApp(
 		console.log(`[autoconfig] ${blockKey}: configured (${Object.keys(mod.handlers).length} handlers)`);
 		return mod.handlers;
 	} catch (e) {
-		// @decocms/apps not installed or app module doesn't exist — skip silently
-		if ((e as any)?.code === "ERR_MODULE_NOT_FOUND" || (e as any)?.message?.includes("Cannot find")) {
-			return {};
-		}
 		console.warn(`[autoconfig] ${blockKey}:`, e);
 		return {};
 	}

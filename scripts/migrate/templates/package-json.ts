@@ -60,7 +60,7 @@ export function generatePackageJson(ctx: MigrationContext): string {
 
   // Fetch latest versions from npm registry
   const startVersion = getLatestVersion("@decocms/start", "0.34.0");
-  const appsVersion = getLatestVersion("@decocms/apps", "0.26.0");
+  const appsVersion = getLatestVersion("@decocms/apps", "0.27.0");
 
   const pkg = {
     name: ctx.siteName,
