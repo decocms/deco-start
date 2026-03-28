@@ -26,10 +26,11 @@
  */
 
 import {
-  type CacheProfile,
+  type CacheProfileName,
   cacheHeaders,
   detectCacheProfile,
-  getCacheProfileConfig,
+  edgeCacheConfig,
+  getCacheProfile,
 } from "./cacheHeaders";
 import { buildHtmlShell } from "./htmlShell";
 import { cleanPathForCacheKey } from "./urlUtils";
@@ -122,7 +123,7 @@ export interface DecoWorkerEntryOptions {
    * Override the default cache profile detection.
    * Return `null` to fall through to the built-in detector.
    */
-  detectProfile?: (url: URL) => CacheProfile | null;
+  detectProfile?: (url: URL) => CacheProfileName | null;
 
   /**
    * Whether to create device-specific cache keys (mobile vs desktop).
@@ -382,7 +383,7 @@ export function createDecoWorkerEntry(
     return true;
   }
 
-  function getProfile(url: URL): CacheProfile {
+  function getProfile(url: URL): CacheProfileName {
     if (customDetect) {
       const custom = customDetect(url);
       if (custom !== null) return custom;
@@ -728,43 +729,120 @@ export function createDecoWorkerEntry(
           ? ((caches as unknown as { default?: Cache }).default ?? null)
           : null;
 
-      if (cache) {
+      const profile = getProfile(url);
+      const edgeConfig = edgeCacheConfig(profile);
+
+      // Helper: dress a response with proper client-facing headers
+      function dressResponse(resp: Response, xCache: string, extra?: Record<string, string>): Response {
+        const out = new Response(resp.body, resp);
+        const hdrs = cacheHeaders(profile);
+        for (const [k, v] of Object.entries(hdrs)) out.headers.set(k, v);
+        out.headers.set("CDN-Cache-Control", "no-store");
+        out.headers.set("X-Cache", xCache);
+        out.headers.set("X-Cache-Profile", profile);
+        if (segment) out.headers.set("X-Cache-Segment", hashSegment(segment));
+        if (cacheVersionEnv !== false) {
+          const v = (env[cacheVersionEnv] as string) || "";
+          if (v) out.headers.set("X-Cache-Version", v);
+        }
+        if (extra) for (const [k, v] of Object.entries(extra)) out.headers.set(k, v);
+        appendResourceHints(out);
+        return out;
+      }
+
+      // Helper: store a response in Cache API with the full retention window
+      function storeInCache(resp: Response) {
+        if (!cache) return;
         try {
-          const cached = await cache.match(cacheKey);
-          if (cached) {
-            const hit = new Response(cached.body, cached);
-            hit.headers.set("X-Cache", "HIT");
-            if (segment) hit.headers.set("X-Cache-Segment", hashSegment(segment));
-            if (cacheVersionEnv !== false) {
-              const v = (env[cacheVersionEnv] as string) || "";
-              if (v) hit.headers.set("X-Cache-Version", v);
-            }
-            // Restore client-facing Cache-Control (the stored version uses sMaxAge
-            // as max-age for Cache API TTL, which would leak to the CDN auto-cache
-            // and cause stale HTML after deploys — the CDN caches under the raw URL,
-            // bypassing BUILD_HASH versioned keys).
-            const hitProfile = getProfile(url);
-            const hitHeaders = cacheHeaders(hitProfile);
-            for (const [k, v] of Object.entries(hitHeaders)) {
-              hit.headers.set(k, v);
-            }
-            // Prevent CDN from auto-caching this response under the raw URL.
-            // The Worker manages edge caching via caches.default with versioned keys;
-            // CDN auto-caching would bypass that versioning and serve stale HTML
-            // after deploys (referencing old CSS/JS fingerprinted filenames).
-            hit.headers.set("CDN-Cache-Control", "no-store");
-            appendResourceHints(hit);
-            return hit;
-          }
+          const storageTtl = edgeConfig.fresh + Math.max(edgeConfig.swr, edgeConfig.sie);
+          const toStore = resp.clone();
+          toStore.headers.set("Cache-Control", `public, max-age=${storageTtl}`);
+          toStore.headers.set("X-Deco-Stored-At", String(Date.now()));
+          toStore.headers.delete("CDN-Cache-Control");
+          ctx.waitUntil(cache.put(cacheKey, toStore));
         } catch {
-          // Cache API unavailable in this environment — proceed without cache
+          // Cache API unavailable
         }
       }
 
-      // Cache MISS — fetch from origin
-      const origin = await serverEntry.fetch(request, env, ctx);
+      // Helper: background revalidation (fetch origin, store result)
+      function revalidateInBackground() {
+        ctx.waitUntil(
+          Promise.resolve(serverEntry.fetch(request, env, ctx)).then((origin) => {
+            if (origin.status === 200 && !origin.headers.has("set-cookie")) {
+              storeInCache(origin);
+            }
+          }).catch(() => {
+            // Background revalidation failed — stale entry stays until SIE expires
+          }),
+        );
+      }
+
+      // --- Edge cache check with SWR + SIE ---
+      let cached: Response | undefined;
+      if (cache) {
+        try {
+          cached = await cache.match(cacheKey) ?? undefined;
+        } catch {
+          // Cache API unavailable
+        }
+      }
+
+      if (cached && edgeConfig.isPublic && edgeConfig.fresh > 0) {
+        const storedAtStr = cached.headers.get("X-Deco-Stored-At");
+        const storedAt = storedAtStr ? Number(storedAtStr) : 0;
+        const ageMs = storedAt > 0 ? Date.now() - storedAt : Infinity;
+        const ageSec = ageMs / 1000;
+
+        if (ageSec < edgeConfig.fresh) {
+          // FRESH HIT — serve immediately
+          return dressResponse(cached, "HIT");
+        }
+
+        if (ageSec < edgeConfig.fresh + edgeConfig.swr) {
+          // STALE-HIT within SWR window — serve stale, revalidate in background
+          revalidateInBackground();
+          return dressResponse(cached, "STALE-HIT", { "X-Cache-Age": String(Math.round(ageSec)) });
+        }
+
+        // Past SWR window but still in cache (within SIE window) — keep reference
+        // for potential error fallback below
+      }
+
+      // Cache MISS or past SWR window — fetch from origin
+      let origin: Response;
+      try {
+        origin = await serverEntry.fetch(request, env, ctx);
+      } catch (err) {
+        // Origin fetch threw — SIE fallback if we have a stale entry
+        if (cached && edgeConfig.sie > 0) {
+          const storedAtStr = cached.headers.get("X-Deco-Stored-At");
+          const storedAt = storedAtStr ? Number(storedAtStr) : 0;
+          const ageSec = storedAt > 0 ? (Date.now() - storedAt) / 1000 : Infinity;
+          if (ageSec < edgeConfig.fresh + edgeConfig.sie) {
+            console.warn(`[edge-cache] Origin threw, serving stale (age=${Math.round(ageSec)}s, sie=${edgeConfig.sie}s)`);
+            return dressResponse(cached, "STALE-ERROR", { "X-Cache-Age": String(Math.round(ageSec)) });
+          }
+        }
+        throw err;
+      }
 
       if (origin.status !== 200) {
+        // Non-200 origin — SIE fallback on 5xx/429
+        if (origin.status >= 500 || origin.status === 429) {
+          if (cached && edgeConfig.sie > 0) {
+            const storedAtStr = cached.headers.get("X-Deco-Stored-At");
+            const storedAt = storedAtStr ? Number(storedAtStr) : 0;
+            const ageSec = storedAt > 0 ? (Date.now() - storedAt) / 1000 : Infinity;
+            if (ageSec < edgeConfig.fresh + edgeConfig.sie) {
+              console.warn(`[edge-cache] Origin ${origin.status}, serving stale (age=${Math.round(ageSec)}s)`);
+              return dressResponse(cached, "STALE-ERROR", {
+                "X-Cache-Age": String(Math.round(ageSec)),
+                "X-Cache-Origin-Status": String(origin.status),
+              });
+            }
+          }
+        }
         const resp = new Response(origin.body, origin);
         resp.headers.set("X-Cache", "BYPASS");
         resp.headers.set("X-Cache-Reason", `status:${origin.status}`);
@@ -774,12 +852,9 @@ export function createDecoWorkerEntry(
 
       // Responses with Set-Cookie must never be cached — they carry
       // per-user session/auth tokens that would leak to other users.
-      const hasSetCookie = origin.headers.has("set-cookie");
-      if (hasSetCookie) {
+      if (origin.headers.has("set-cookie")) {
         const resp = new Response(origin.body, origin);
         resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
-        // CDN-Cache-Control takes precedence over Cache-Control on Cloudflare.
-        // If the origin set it, Cloudflare would ignore our private directive.
         resp.headers.delete("CDN-Cache-Control");
         resp.headers.set("X-Cache", "BYPASS");
         resp.headers.set("X-Cache-Reason", "set-cookie");
@@ -787,11 +862,9 @@ export function createDecoWorkerEntry(
         return resp;
       }
 
-      // Determine the right cache profile for this URL
-      const profile = getProfile(url);
-      const profileConfig = getCacheProfileConfig(profile);
+      const profileConfig = getCacheProfile(profile);
 
-      if (!profileConfig.isPublic || profileConfig.sMaxAge === 0) {
+      if (!profileConfig.isPublic || profileConfig.edge.fresh === 0) {
         const resp = new Response(origin.body, origin);
         resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
         resp.headers.set("X-Cache", "BYPASS");
@@ -800,48 +873,9 @@ export function createDecoWorkerEntry(
         return resp;
       }
 
-      const headers = cacheHeaders(profile);
-
-      const toReturn = new Response(origin.body, {
-        status: origin.status,
-        statusText: origin.statusText,
-        headers: new Headers(origin.headers),
-      });
-
-      // Apply profile-specific cache headers for the client response
-      for (const [k, v] of Object.entries(headers)) {
-        toReturn.headers.set(k, v);
-      }
-      toReturn.headers.set("X-Cache", "MISS");
-      toReturn.headers.set("X-Cache-Profile", profile);
-      if (segment) toReturn.headers.set("X-Cache-Segment", hashSegment(segment));
-      if (cacheVersionEnv !== false) {
-        const v = (env[cacheVersionEnv] as string) || "";
-        if (v) toReturn.headers.set("X-Cache-Version", v);
-      }
-
-      // Prevent CDN from auto-caching this response under the raw URL.
-      // Edge caching is managed by the Worker via caches.default with
-      // BUILD_HASH-versioned keys; CDN auto-caching would bypass versioning
-      // and serve stale HTML after deploys.
-      toReturn.headers.set("CDN-Cache-Control", "no-store");
-      appendResourceHints(toReturn);
-
-      // For Cache API storage, use sMaxAge as max-age since the Cache API
-      // ignores s-maxage and only respects max-age for TTL decisions.
-      if (cache) {
-        try {
-          const toStore = toReturn.clone();
-          toStore.headers.set("Cache-Control", `public, max-age=${profileConfig.sMaxAge}`);
-          // Remove CDN-Cache-Control from stored version — it's only needed
-          // on the response to the client to prevent CDN auto-caching.
-          toStore.headers.delete("CDN-Cache-Control");
-          ctx.waitUntil(cache.put(cacheKey, toStore));
-        } catch {
-          // Cache API unavailable — skip storing
-        }
-      }
-
+      // Store in Cache API and return
+      const toReturn = dressResponse(origin, "MISS");
+      storeInCache(origin);
       return toReturn;
     },
   };

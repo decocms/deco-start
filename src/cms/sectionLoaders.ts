@@ -33,6 +33,17 @@ interface CacheableSectionConfig {
   maxAge: number;
 }
 
+type CacheableSectionInput = CacheableSectionConfig | import("../sdk/cacheHeaders").CacheProfileName;
+
+function resolveSectionCacheConfig(input: CacheableSectionInput): CacheableSectionConfig {
+  if (typeof input === "string") {
+    const { getCacheProfile } = require("../sdk/cacheHeaders") as typeof import("../sdk/cacheHeaders");
+    const profile = getCacheProfile(input);
+    return { maxAge: profile.loader.fresh };
+  }
+  return input;
+}
+
 const cacheableSections: Map<string, CacheableSectionConfig> = G.__deco.cacheableSections;
 
 interface SectionCacheEntry {
@@ -64,9 +75,9 @@ function sectionCacheKey(component: string, props: Record<string, unknown>): str
  * Works for both eager sections (speeds up SSR) and deferred sections
  * (speeds up individual fetch on scroll).
  */
-export function registerCacheableSections(configs: Record<string, CacheableSectionConfig>): void {
+export function registerCacheableSections(configs: Record<string, CacheableSectionInput>): void {
   for (const [key, config] of Object.entries(configs)) {
-    cacheableSections.set(key, config);
+    cacheableSections.set(key, resolveSectionCacheConfig(config));
   }
 }
 

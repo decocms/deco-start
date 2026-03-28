@@ -41,7 +41,7 @@ import {
 import { getSiteSeo } from "../cms/loader";
 import { runSectionLoaders, runSingleSectionLoader } from "../cms/sectionLoaders";
 import {
-  type CacheProfile,
+  type CacheProfileName,
   cacheHeaders,
   detectCacheProfile,
   routeCacheDefaults,
@@ -328,7 +328,7 @@ export interface CmsRouteOptions {
 
 type CmsPageLoaderData = {
   name?: string;
-  cacheProfile?: CacheProfile;
+  cacheProfile?: CacheProfileName;
   seo?: PageSeo;
   device?: Device;
   resolvedSections?: Array<{ component: string }>;
