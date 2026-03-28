@@ -7,15 +7,20 @@ export {
   getLoaderCacheStats,
 } from "./cachedLoader";
 export {
-  type CacheHeadersConfig,
-  type CacheProfile,
+  type CacheProfileConfig,
+  type CacheProfileName,
+  type CacheProfileOverrides,
+  type CacheTimingWindow,
+  type EdgeCacheConfig,
+  type LoaderCacheOptions,
   cacheHeaders,
   detectCacheProfile,
-  getCacheProfileConfig,
+  edgeCacheConfig,
+  getCacheProfile,
+  loaderCacheOptions,
   registerCachePattern,
   routeCacheDefaults,
-  setCacheProfileConfig,
-  setRouteCacheDefaults,
+  setCacheProfile,
 } from "./cacheHeaders";
 export { clx } from "./clx";
 export { decodeCookie, deleteCookie, getCookie, getServerSideCookie, setCookie } from "./cookie";

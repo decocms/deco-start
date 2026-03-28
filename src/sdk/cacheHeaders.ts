@@ -1,22 +1,27 @@
 /**
- * Cache-Control header generation for different page types.
+ * Unified cache profile system for Deco storefronts.
  *
- * Produces spec-compliant `Cache-Control` values suitable for CDNs
- * (Cloudflare, Vercel, Fastly) with `s-maxage` and `stale-while-revalidate`.
+ * Each named profile (product, listing, search, static, etc.) defines cache
+ * timing across ALL layers — edge, browser, loader, and client — in a single
+ * object. This is the single source of truth for cache configuration.
+ *
+ * Sites override specific values via `setCacheProfile()` without touching
+ * framework code. Derivation functions (`cacheHeaders`, `routeCacheDefaults`,
+ * `loaderCacheOptions`, `edgeCacheConfig`) read from the profiles.
  *
  * @example
  * ```ts
- * // In a TanStack Start route:
- * import { cacheHeaders, routeCacheDefaults } from "@decocms/start/sdk/cacheHeaders";
- *
- * export const Route = createFileRoute('/products/$slug')({
- *   ...routeCacheDefaults("product"),
- *   headers: () => cacheHeaders("product"),
- * });
+ * // Site-level override (src/cache-config.ts):
+ * import { setCacheProfile } from "@decocms/start/sdk/cacheHeaders";
+ * setCacheProfile("product", { edge: { fresh: 600 } }); // 10min instead of 5min
  * ```
  */
 
-export type CacheProfile =
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export type CacheProfileName =
   | "static"
   | "product"
   | "listing"
@@ -25,94 +30,156 @@ export type CacheProfile =
   | "private"
   | "none";
 
-export interface CacheHeadersConfig {
-  /** Browser max-age in seconds. */
-  maxAge: number;
-  /** CDN/edge max-age in seconds. */
-  sMaxAge: number;
-  /** Stale-while-revalidate window in seconds. */
-  staleWhileRevalidate: number;
-  /** Whether the response is public (cacheable by CDN). */
+/** Time windows for a single caching layer (in seconds). */
+export interface CacheTimingWindow {
+  /** How long content is considered fresh — served without origin contact. */
+  fresh: number;
+  /** After fresh expires, serve stale while refreshing in background. */
+  swr: number;
+  /** After fresh expires and origin is erroring, serve stale for this long. */
+  sie: number;
+}
+
+/** Unified cache profile covering all layers. */
+export interface CacheProfileConfig {
+  /** Edge / CDN layer (Cloudflare Cache API). Times in seconds. */
+  edge: CacheTimingWindow;
+  /** Browser layer (Cache-Control header). Times in seconds. */
+  browser: CacheTimingWindow;
+  /** In-memory loader layer. Times in milliseconds. */
+  loader: {
+    fresh: number;
+    sie: number;
+  };
+  /** Client-side TanStack Router. Times in milliseconds. */
+  client: {
+    staleTime: number;
+    gcTime: number;
+  };
+  /** Whether CDN can cache this profile. False = private, never cached. */
   isPublic: boolean;
 }
 
-const PROFILES: Record<CacheProfile, CacheHeadersConfig> = {
+/**
+ * Deep partial of CacheProfileConfig for site-level overrides.
+ * Only the fields you specify are merged; everything else keeps its default.
+ */
+export type CacheProfileOverrides = {
+  [K in keyof CacheProfileConfig]?: CacheProfileConfig[K] extends object
+    ? Partial<CacheProfileConfig[K]>
+    : CacheProfileConfig[K];
+};
+
+// ---------------------------------------------------------------------------
+// Default profiles
+// ---------------------------------------------------------------------------
+
+const PROFILES: Record<CacheProfileName, CacheProfileConfig> = {
   static: {
-    maxAge: 120,
-    sMaxAge: 86400,
-    staleWhileRevalidate: 86400,
+    edge: { fresh: 900, swr: 7200, sie: 21600 },
+    browser: { fresh: 120, swr: 1800, sie: 7200 },
+    loader: { fresh: 300_000, sie: 1_800_000 },
+    client: { staleTime: 300_000, gcTime: 1_800_000 },
     isPublic: true,
   },
   product: {
-    maxAge: 60,
-    sMaxAge: 300,
-    staleWhileRevalidate: 3600,
+    edge: { fresh: 300, swr: 1800, sie: 7200 },
+    browser: { fresh: 60, swr: 600, sie: 3600 },
+    loader: { fresh: 30_000, sie: 600_000 },
+    client: { staleTime: 60_000, gcTime: 300_000 },
     isPublic: true,
   },
   listing: {
-    maxAge: 30,
-    sMaxAge: 120,
-    staleWhileRevalidate: 600,
+    edge: { fresh: 120, swr: 900, sie: 3600 },
+    browser: { fresh: 30, swr: 300, sie: 1800 },
+    loader: { fresh: 60_000, sie: 300_000 },
+    client: { staleTime: 60_000, gcTime: 300_000 },
     isPublic: true,
   },
   search: {
-    maxAge: 0,
-    sMaxAge: 60,
-    staleWhileRevalidate: 300,
+    edge: { fresh: 60, swr: 300, sie: 1800 },
+    browser: { fresh: 0, swr: 120, sie: 600 },
+    loader: { fresh: 60_000, sie: 180_000 },
+    client: { staleTime: 30_000, gcTime: 120_000 },
     isPublic: true,
   },
   cart: {
-    maxAge: 0,
-    sMaxAge: 0,
-    staleWhileRevalidate: 0,
+    edge: { fresh: 0, swr: 0, sie: 0 },
+    browser: { fresh: 0, swr: 0, sie: 0 },
+    loader: { fresh: 0, sie: 0 },
+    client: { staleTime: 0, gcTime: 0 },
     isPublic: false,
   },
   private: {
-    maxAge: 0,
-    sMaxAge: 0,
-    staleWhileRevalidate: 0,
+    edge: { fresh: 0, swr: 0, sie: 0 },
+    browser: { fresh: 0, swr: 0, sie: 0 },
+    loader: { fresh: 0, sie: 0 },
+    client: { staleTime: 0, gcTime: 0 },
     isPublic: false,
   },
   none: {
-    maxAge: 0,
-    sMaxAge: 0,
-    staleWhileRevalidate: 0,
+    edge: { fresh: 0, swr: 0, sie: 0 },
+    browser: { fresh: 0, swr: 0, sie: 0 },
+    loader: { fresh: 0, sie: 0 },
+    client: { staleTime: 0, gcTime: 0 },
     isPublic: false,
   },
 };
 
-/**
- * Generate a `Cache-Control` header value from a named profile or custom config.
- * Returns a headers object ready to spread into route `headers()`.
- *
- * Always includes `Vary: Accept-Encoding` for public responses.
- */
-export function cacheHeaders(
-  profileOrConfig: CacheProfile | CacheHeadersConfig,
-): Record<string, string> {
-  const config = typeof profileOrConfig === "string" ? PROFILES[profileOrConfig] : profileOrConfig;
+// ---------------------------------------------------------------------------
+// Profile accessors
+// ---------------------------------------------------------------------------
 
-  if (!config.isPublic || (config.sMaxAge === 0 && config.maxAge === 0)) {
+export function getCacheProfile(profile: CacheProfileName): CacheProfileConfig {
+  return PROFILES[profile];
+}
+
+/**
+ * Override specific values of a cache profile. Only the fields you specify
+ * are merged; everything else keeps its default.
+ *
+ * @example
+ * ```ts
+ * setCacheProfile("product", { edge: { fresh: 600 } });
+ * setCacheProfile("static", { loader: { sie: 3_600_000 } });
+ * ```
+ */
+export function setCacheProfile(
+  profile: CacheProfileName,
+  overrides: CacheProfileOverrides,
+): void {
+  const current = PROFILES[profile];
+  PROFILES[profile] = {
+    edge: { ...current.edge, ...overrides.edge },
+    browser: { ...current.browser, ...overrides.browser },
+    loader: { ...current.loader, ...overrides.loader },
+    client: { ...current.client, ...overrides.client },
+    isPublic: overrides.isPublic ?? current.isPublic,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Derivation: Cache-Control headers (browser layer)
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate a `Cache-Control` header from a named profile.
+ * Returns a headers object ready to spread into route `headers()`.
+ */
+export function cacheHeaders(profile: CacheProfileName): Record<string, string> {
+  const p = PROFILES[profile];
+
+  if (!p.isPublic || (p.edge.fresh === 0 && p.browser.fresh === 0)) {
     return {
       "Cache-Control": "private, no-cache, no-store, must-revalidate",
     };
   }
 
   const parts: string[] = ["public"];
-
-  if (config.maxAge > 0) {
-    parts.push(`max-age=${config.maxAge}`);
-  } else {
-    parts.push("max-age=0");
-  }
-
-  if (config.sMaxAge > 0) {
-    parts.push(`s-maxage=${config.sMaxAge}`);
-  }
-
-  if (config.staleWhileRevalidate > 0) {
-    parts.push(`stale-while-revalidate=${config.staleWhileRevalidate}`);
-  }
+  parts.push(p.browser.fresh > 0 ? `max-age=${p.browser.fresh}` : "max-age=0");
+  if (p.edge.fresh > 0) parts.push(`s-maxage=${p.edge.fresh}`);
+  if (p.browser.swr > 0) parts.push(`stale-while-revalidate=${p.browser.swr}`);
+  if (p.browser.sie > 0) parts.push(`stale-if-error=${p.browser.sie}`);
 
   return {
     "Cache-Control": parts.join(", "),
@@ -120,83 +187,61 @@ export function cacheHeaders(
   };
 }
 
-/**
- * Get the raw config for a named cache profile.
- * Useful when you need the numeric values (e.g. for custom logic).
- */
-export function getCacheProfileConfig(profile: CacheProfile): CacheHeadersConfig {
-  return PROFILES[profile];
+// ---------------------------------------------------------------------------
+// Derivation: Edge cache config (for workerEntry SWR/SIE logic)
+// ---------------------------------------------------------------------------
+
+export interface EdgeCacheConfig {
+  fresh: number;
+  swr: number;
+  sie: number;
+  isPublic: boolean;
 }
 
-/**
- * Override the default TTLs for a cache profile.
- * Useful when the built-in values don't match your site's
- * freshness requirements (e.g., longer product TTL for low-traffic stores).
- *
- * @example
- * ```ts
- * setCacheProfileConfig("product", { maxAge: 120, sMaxAge: 600, staleWhileRevalidate: 7200, isPublic: true });
- * ```
- */
-export function setCacheProfileConfig(profile: CacheProfile, config: CacheHeadersConfig): void {
-  PROFILES[profile] = config;
+export function edgeCacheConfig(profile: CacheProfileName): EdgeCacheConfig {
+  const p = PROFILES[profile];
+  return { ...p.edge, isPublic: p.isPublic };
 }
 
 // ---------------------------------------------------------------------------
-// Client-side route cache defaults (TanStack Router staleTime / gcTime)
+// Derivation: Client-side route cache defaults (TanStack Router)
 // ---------------------------------------------------------------------------
-
-interface RouteCacheDefaults {
-  /** How long route data is considered fresh on the client (ms). */
-  staleTime: number;
-  /** How long stale data is kept in memory before garbage collection (ms). */
-  gcTime: number;
-}
-
-const ROUTE_CACHE: Record<CacheProfile, RouteCacheDefaults> = {
-  static: { staleTime: 5 * 60_000, gcTime: 30 * 60_000 },
-  product: { staleTime: 60_000, gcTime: 5 * 60_000 },
-  listing: { staleTime: 60_000, gcTime: 5 * 60_000 },
-  search: { staleTime: 30_000, gcTime: 2 * 60_000 },
-  cart: { staleTime: 0, gcTime: 0 },
-  private: { staleTime: 0, gcTime: 0 },
-  none: { staleTime: 0, gcTime: 0 },
-};
 
 /**
  * Returns `{ staleTime, gcTime }` for a cache profile, ready to spread
  * into a TanStack Router route definition.
  *
  * In dev mode, uses short staleTime (5s) to keep data fresh enough for
- * development while avoiding redundant re-fetches during rapid
- * interactions (e.g. variant switching on a PDP).
- *
- * @example
- * ```ts
- * export const Route = createFileRoute("/$")({
- *   ...routeCacheDefaults("listing"),
- *   loader: ...,
- *   headers: () => cacheHeaders("listing"),
- * });
- * ```
+ * development while avoiding redundant re-fetches.
  */
-export function routeCacheDefaults(profile: CacheProfile): RouteCacheDefaults {
+export function routeCacheDefaults(profile: CacheProfileName): { staleTime: number; gcTime: number } {
   const env = typeof globalThis.process !== "undefined" ? globalThis.process.env : undefined;
   const isDev = env?.DECO_CACHE_DISABLE === "true" || env?.NODE_ENV === "development";
   if (isDev) return { staleTime: 5_000, gcTime: 30_000 };
-  return ROUTE_CACHE[profile];
+  return { ...PROFILES[profile].client };
+}
+
+// ---------------------------------------------------------------------------
+// Derivation: Loader cache options (for createCachedLoader)
+// ---------------------------------------------------------------------------
+
+export interface LoaderCacheOptions {
+  policy: "stale-while-revalidate";
+  maxAge: number;
+  staleIfError: number;
 }
 
 /**
- * Override the client-side route cache defaults for a profile.
- *
- * @example
- * ```ts
- * setRouteCacheDefaults("product", { staleTime: 120_000, gcTime: 10 * 60_000 });
- * ```
+ * Get loader-layer cache options for a profile.
+ * Pass directly to `createCachedLoader` as the options argument.
  */
-export function setRouteCacheDefaults(profile: CacheProfile, defaults: RouteCacheDefaults): void {
-  ROUTE_CACHE[profile] = defaults;
+export function loaderCacheOptions(profile: CacheProfileName): LoaderCacheOptions {
+  const p = PROFILES[profile];
+  return {
+    policy: "stale-while-revalidate",
+    maxAge: p.loader.fresh,
+    staleIfError: p.loader.sie,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -205,11 +250,10 @@ export function setRouteCacheDefaults(profile: CacheProfile, defaults: RouteCach
 
 interface CachePattern {
   test: (pathname: string, searchParams: URLSearchParams) => boolean;
-  profile: CacheProfile;
+  profile: CacheProfileName;
 }
 
 const builtinPatterns: CachePattern[] = [
-  // Private routes — must be first (highest priority)
   {
     test: (p) =>
       p.startsWith("/cart") ||
@@ -219,7 +263,6 @@ const builtinPatterns: CachePattern[] = [
       p.startsWith("/my-account"),
     profile: "private",
   },
-  // Internal / API routes
   {
     test: (p) =>
       p.startsWith("/api/") ||
@@ -228,17 +271,14 @@ const builtinPatterns: CachePattern[] = [
       p.startsWith("/_build"),
     profile: "none",
   },
-  // Search pages
   {
     test: (p, sp) => p === "/s" || p.startsWith("/s/") || sp.has("q"),
     profile: "search",
   },
-  // PDP — VTEX convention: URL ends with /p
   {
     test: (p) => p.endsWith("/p") || /\/p[?#]/.test(p),
     profile: "product",
   },
-  // Home page
   {
     test: (p) => p === "/" || p === "",
     profile: "static",
@@ -250,14 +290,6 @@ const customPatterns: CachePattern[] = [];
 /**
  * Register additional URL-to-profile patterns. Custom patterns are evaluated
  * before built-in ones, so they can override defaults.
- *
- * @example
- * ```ts
- * registerCachePattern({
- *   test: (p) => p.startsWith("/institucional"),
- *   profile: "static",
- * });
- * ```
  */
 export function registerCachePattern(pattern: CachePattern): void {
   customPatterns.push(pattern);
@@ -266,9 +298,9 @@ export function registerCachePattern(pattern: CachePattern): void {
 /**
  * Detect the appropriate cache profile based on a URL.
  * Evaluates custom patterns first, then built-in patterns.
- * Falls back to "listing" (conservative public cache) for unmatched paths.
+ * Falls back to "listing" for unmatched paths.
  */
-export function detectCacheProfile(pathnameOrUrl: string | URL): CacheProfile {
+export function detectCacheProfile(pathnameOrUrl: string | URL): CacheProfileName {
   let pathname: string;
   let searchParams: URLSearchParams;
 
@@ -289,6 +321,5 @@ export function detectCacheProfile(pathnameOrUrl: string | URL): CacheProfile {
     if (pattern.test(pathname, searchParams)) return pattern.profile;
   }
 
-  // Default: listing (conservative, short edge TTL)
   return "listing";
 }
