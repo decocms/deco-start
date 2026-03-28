@@ -8,6 +8,7 @@
  * This runs AFTER resolveDecoPage and BEFORE React rendering,
  * inside the TanStack Start server function.
  */
+import { getCacheProfile } from "../sdk/cacheHeaders";
 import { djb2 } from "../sdk/djb2";
 import type { ResolvedSection } from "./resolve";
 
@@ -37,7 +38,6 @@ type CacheableSectionInput = CacheableSectionConfig | import("../sdk/cacheHeader
 
 function resolveSectionCacheConfig(input: CacheableSectionInput): CacheableSectionConfig {
   if (typeof input === "string") {
-    const { getCacheProfile } = require("../sdk/cacheHeaders") as typeof import("../sdk/cacheHeaders");
     const profile = getCacheProfile(input);
     return { maxAge: profile.loader.fresh };
   }

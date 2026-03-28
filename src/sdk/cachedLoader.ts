@@ -11,7 +11,7 @@
  * (e.g. "product") which derives timing from the unified profile system.
  */
 
-import type { CacheProfileName } from "./cacheHeaders";
+import { loaderCacheOptions, type CacheProfileName } from "./cacheHeaders";
 
 export type CachePolicy = "no-store" | "no-cache" | "stale-while-revalidate";
 
@@ -55,9 +55,6 @@ function resolveOptions(
   optionsOrProfile: CachedLoaderOptions | CacheProfileName,
 ): CachedLoaderOptions {
   if (typeof optionsOrProfile === "string") {
-    // Lazy import to avoid circular dependency at module load time.
-    // loaderCacheOptions() reads from the PROFILES map in cacheHeaders.ts.
-    const { loaderCacheOptions } = require("./cacheHeaders") as typeof import("./cacheHeaders");
     return loaderCacheOptions(optionsOrProfile);
   }
   return optionsOrProfile;
