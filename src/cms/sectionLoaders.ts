@@ -277,38 +277,127 @@ export async function runSectionLoaders(
  * 1. Layout sections (Header/Footer) — 5min TTL + in-flight dedup
  * 2. Cacheable sections (ProductShelf, FAQ) — SWR with configurable maxAge
  * 3. Regular sections — no cache, always fresh
+ *
+ * After running the section's own loader, recursively processes any nested
+ * sections found in the resolved props (e.g. wrapper sections with
+ * `sections: Section[]` props).
  */
 export async function runSingleSectionLoader(
   section: ResolvedSection,
   request: Request,
 ): Promise<ResolvedSection> {
   const loader = loaderRegistry.get(section.component);
-  if (!loader) return section;
 
-  if (layoutSections.has(section.component)) {
+  let result: ResolvedSection;
+
+  if (!loader) {
+    result = section;
+  } else if (layoutSections.has(section.component)) {
     try {
-      return await resolveLayoutSection(section, loader, request);
+      result = await resolveLayoutSection(section, loader, request);
     } catch (error) {
       console.error(`[SectionLoader] Error in layout "${section.component}":`, error);
-      return section;
+      result = section;
+    }
+  } else {
+    const cacheConfig = cacheableSections.get(section.component);
+    if (cacheConfig) {
+      try {
+        result = await runCacheableSectionLoader(section, loader, request, cacheConfig);
+      } catch (error) {
+        console.error(`[SectionLoader] Error in cacheable "${section.component}":`, error);
+        result = section;
+      }
+    } else {
+      try {
+        const enrichedProps = await loader(section.props as Record<string, unknown>, request);
+        result = { ...section, props: enrichedProps };
+      } catch (error) {
+        console.error(`[SectionLoader] Error in "${section.component}":`, error);
+        result = section;
+      }
     }
   }
 
-  const cacheConfig = cacheableSections.get(section.component);
-  if (cacheConfig) {
-    try {
-      return await runCacheableSectionLoader(section, loader, request, cacheConfig);
-    } catch (error) {
-      console.error(`[SectionLoader] Error in cacheable "${section.component}":`, error);
-      return section;
+  // Recursively run loaders for nested sections in props
+  const enrichedProps = await enrichNestedSections(
+    result.props as Record<string, unknown>,
+    request,
+  );
+  if (enrichedProps !== result.props) {
+    return { ...result, props: enrichedProps };
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Nested section loader support
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if a value looks like a normalized nested section
+ * (produced by `normalizeNestedSections` in resolve.ts).
+ * Nested sections have `{ Component: string, props: object }`.
+ */
+function isNestedSection(value: unknown): value is { Component: string; props: Record<string, unknown> } {
+  if (!value || typeof value !== "object") return false;
+  const obj = value as Record<string, unknown>;
+  return typeof obj.Component === "string" && obj.props != null && typeof obj.props === "object";
+}
+
+/**
+ * Walk a props object and run section loaders for any nested sections.
+ * Returns the same reference if nothing changed (avoids unnecessary copies).
+ */
+async function enrichNestedSections(
+  props: Record<string, unknown>,
+  request: Request,
+): Promise<Record<string, unknown>> {
+  const promises: Array<{ key: string; index?: number; promise: Promise<ResolvedSection> }> = [];
+
+  for (const [key, value] of Object.entries(props)) {
+    if (isNestedSection(value)) {
+      const nested: ResolvedSection = {
+        component: value.Component,
+        props: value.props,
+        key: value.Component,
+      };
+      promises.push({ key, promise: runSingleSectionLoader(nested, request) });
+    } else if (Array.isArray(value)) {
+      for (let i = 0; i < value.length; i++) {
+        const item = value[i];
+        if (isNestedSection(item)) {
+          const nested: ResolvedSection = {
+            component: item.Component,
+            props: item.props,
+            key: item.Component,
+          };
+          promises.push({ key, index: i, promise: runSingleSectionLoader(nested, request) });
+        }
+      }
     }
   }
 
-  try {
-    const enrichedProps = await loader(section.props as Record<string, unknown>, request);
-    return { ...section, props: enrichedProps };
-  } catch (error) {
-    console.error(`[SectionLoader] Error in "${section.component}":`, error);
-    return section;
+  if (promises.length === 0) return props;
+
+  const results = await Promise.all(promises.map((p) => p.promise));
+  const updated = { ...props };
+
+  for (let i = 0; i < promises.length; i++) {
+    const { key, index } = promises[i];
+    const enriched = results[i];
+    const nestedValue = { Component: enriched.component, props: enriched.props };
+
+    if (index != null) {
+      // Array item — clone the array on first mutation for this key
+      if (updated[key] === props[key]) {
+        updated[key] = [...(props[key] as unknown[])];
+      }
+      (updated[key] as unknown[])[index] = nestedValue;
+    } else {
+      updated[key] = nestedValue;
+    }
   }
+
+  return updated;
 }
