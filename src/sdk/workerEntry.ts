@@ -873,10 +873,12 @@ export function createDecoWorkerEntry(
         return resp;
       }
 
-      // Store in Cache API and return
-      const toReturn = dressResponse(origin, "MISS");
+      // Clone for cache BEFORE dressResponse consumes the body stream.
+      // dressResponse() calls new Response(resp.body, resp) which locks
+      // the ReadableStream. Calling clone() on a locked body corrupts
+      // the stream in Workers runtime, causing Error 1101.
       storeInCache(origin);
-      return toReturn;
+      return dressResponse(origin, "MISS");
     },
   };
 }
