@@ -1,6 +1,7 @@
 export { corsHeaders, isAdminOrLocalhost, registerAdminOrigin, registerAdminOrigins } from "./cors";
 export { handleDecofileRead, handleDecofileReload } from "./decofile";
 export {
+  clearInvokeHandlers,
   handleInvoke,
   type InvokeAction,
   type InvokeLoader,

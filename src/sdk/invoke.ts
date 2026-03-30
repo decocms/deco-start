@@ -217,7 +217,7 @@ export function createAppInvoke(
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(props ?? {}),
           });
-          if (response.status === 404) continue;
+          if (response.status === 404) { await response.body?.cancel(); continue; }
           if (!response.ok) {
             const error = await response.json().catch(() => ({ error: response.statusText }));
             throw new Error(
@@ -229,7 +229,8 @@ export function createAppInvoke(
         throw new Error(`invoke(${key}) failed: handler not found`);
       }, {}),
       {
-        get(_target: any, prop: string) {
+        get(_target: any, prop: string | symbol) {
+          if (typeof prop === "symbol") return undefined;
           if (prop === "then" || prop === "catch" || prop === "finally") {
             return undefined;
           }

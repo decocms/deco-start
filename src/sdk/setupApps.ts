@@ -19,7 +19,7 @@
  * ```
  */
 
-import { registerInvokeHandlers } from "../admin/invoke";
+import { clearInvokeHandlers, registerInvokeHandlers } from "../admin/invoke";
 import { registerSections } from "../cms/registry";
 import { RequestContext } from "./requestContext";
 
@@ -60,18 +60,32 @@ export interface AppDefinitionWithHandlers<TState = unknown>
 // App middleware registry
 // ---------------------------------------------------------------------------
 
+/** Per-app state entries — injected into RequestContext.bag on every request. */
+const appStates: Array<{ name: string; state: unknown }> = [];
+
 const appMiddlewares: Array<{
   name: string;
-  state: unknown;
   middleware: AppMiddleware;
 }> = [];
 
+function registerAppState(name: string, state: unknown) {
+  appStates.push({ name, state });
+}
+
 export function registerAppMiddleware(
   name: string,
-  state: unknown,
   mw: AppMiddleware,
 ) {
-  appMiddlewares.push({ name, state, middleware: mw });
+  appMiddlewares.push({ name, middleware: mw });
+}
+
+/**
+ * Clear all registrations. Called before re-running setupApps()
+ * on admin hot-reload to prevent duplicate middleware/state entries.
+ */
+function clearRegistrations() {
+  appStates.length = 0;
+  appMiddlewares.length = 0;
 }
 
 /**
@@ -81,18 +95,19 @@ export function registerAppMiddleware(
  * Before running app middlewares, all app states are injected into
  * RequestContext.bag so loaders can access them via getAppState().
  *
- * Returns undefined if no app middlewares were registered.
+ * Returns undefined if no app states or middlewares were registered.
  */
 export function getAppMiddleware(): AppMiddleware | undefined {
-  if (appMiddlewares.length === 0) return undefined;
+  if (appStates.length === 0 && appMiddlewares.length === 0) return undefined;
 
   return async (request, next) => {
     // Inject all app states into RequestContext bag
-    for (const { name, state } of appMiddlewares) {
+    for (const { name, state } of appStates) {
       RequestContext.setBag(`app:${name}:state`, state);
     }
 
     // Chain app middlewares (first registered runs outermost)
+    if (appMiddlewares.length === 0) return next();
     const run = async (i: number): Promise<Response> => {
       if (i >= appMiddlewares.length) return next();
       return appMiddlewares[i].middleware(request, () => run(i + 1));
@@ -105,6 +120,12 @@ export function getAppMiddleware(): AppMiddleware | undefined {
 // Dependency flattening
 // ---------------------------------------------------------------------------
 
+/**
+ * Topological sort: dependencies before parents.
+ * Combined with first-wins registration in registerInvokeHandlers,
+ * this means parent apps can override handlers from their dependencies
+ * by providing explicit `handlers` (registered before manifest flatten).
+ */
 function flattenDependencies(apps: AppDefinition[]): AppDefinition[] {
   const seen = new Set<string>();
   const result: AppDefinition[] = [];
@@ -136,6 +157,10 @@ export async function setupApps(
   apps: Array<AppDefinitionWithHandlers | AppDefinition>,
 ): Promise<void> {
   if (typeof document !== "undefined") return; // server-only
+
+  // Clear previous registrations (safe for hot-reload via onChange)
+  clearRegistrations();
+  clearInvokeHandlers();
 
   for (const app of flattenDependencies(apps as AppDefinition[])) {
     const appWithHandlers = app as AppDefinitionWithHandlers;
@@ -175,9 +200,12 @@ export async function setupApps(
       );
     }
 
-    // 4. Register middleware + state for RequestContext injection
+    // 4. Always register app state (so getAppState() works for all apps)
+    registerAppState(app.name, app.state);
+
+    // 5. Register middleware (optional — not all apps have middleware)
     if (app.middleware) {
-      registerAppMiddleware(app.name, app.state, app.middleware);
+      registerAppMiddleware(app.name, app.middleware);
     }
   }
 }

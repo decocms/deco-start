@@ -48,6 +48,14 @@ export function registerInvokeHandlers(
   }
 }
 
+/**
+ * Clear all registered invoke handlers.
+ * Called by setupApps() before re-registering on hot-reload.
+ */
+export function clearInvokeHandlers(): void {
+  handlerRegistry.clear();
+}
+
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
 
 const isDev =
