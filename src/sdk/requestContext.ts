@@ -44,6 +44,17 @@ export interface RequestContextData {
   _isBot?: boolean;
   /** Arbitrary bag for middleware to attach custom data. */
   bag: Map<string, unknown>;
+  /**
+   * Outgoing response headers that handlers can write to.
+   * Invoke handlers (actions/loaders) use this to forward Set-Cookie
+   * and other headers from upstream APIs (e.g., VTEX checkout).
+   * The invoke HTTP handler copies these into the final Response.
+   *
+   * This mirrors deco-cx/deco's `ctx.response.headers` pattern where
+   * `proxySetCookie(apiResponse.headers, ctx.response.headers)` forwards
+   * cookies transparently.
+   */
+  responseHeaders: Headers;
 }
 
 // -------------------------------------------------------------------------
@@ -87,6 +98,7 @@ export const RequestContext = {
       signal: controller.signal,
       startedAt: Date.now(),
       bag: new Map(),
+      responseHeaders: new Headers(),
     };
 
     return storage.run(ctx, fn);
@@ -167,6 +179,17 @@ export const RequestContext = {
       ...init,
       signal: init?.signal ?? ctx.signal,
     });
+  },
+
+  /**
+   * Outgoing response headers. Handlers write here; the invoke endpoint
+   * copies them into the HTTP Response (mirroring ctx.response.headers
+   * from deco-cx/deco).
+   */
+  get responseHeaders(): Headers {
+    const ctx = storage.getStore();
+    if (!ctx) throw new Error("RequestContext.responseHeaders accessed outside a request scope");
+    return ctx.responseHeaders;
   },
 
   /**

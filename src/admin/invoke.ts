@@ -7,7 +7,13 @@
  * - FormData parsing for file uploads and form submissions
  * - `?select=field1,field2` to pick fields from the result
  * - Resolves __resolveType in batch payloads
+ *
+ * Handlers can write to `RequestContext.responseHeaders` to forward
+ * headers (e.g., Set-Cookie from VTEX checkout). The invoke endpoint
+ * copies those headers into the final HTTP Response.
  */
+
+import { RequestContext } from "../sdk/requestContext";
 
 export type InvokeLoader = (props: any, request: Request) => Promise<any>;
 export type InvokeAction = (props: any, request: Request) => Promise<any>;
@@ -150,15 +156,25 @@ export async function handleInvoke(request: Request): Promise<Response> {
 
     try {
       const result = await found.handler(body, request);
-      // Response passthrough: if the loader/action returns a Response object,
-      // forward it as-is (preserving headers like Set-Cookie). This matches
-      // deco-cx/deco's invokeToHttpResponse behavior where auth loaders return
-      // Response objects with Set-Cookie headers for HttpOnly cookies.
+      // Response passthrough: if the handler returns a Response object,
+      // forward it as-is (preserving headers like Set-Cookie).
       if (result instanceof Response) {
         return result;
       }
       const filtered = selectFields(result, select);
-      return new Response(JSON.stringify(filtered), { status: 200, headers: JSON_HEADERS });
+      const response = new Response(JSON.stringify(filtered), { status: 200, headers: JSON_HEADERS });
+
+      // Copy any headers that handlers wrote to RequestContext.responseHeaders
+      // (e.g., Set-Cookie from proxySetCookie). This mirrors deco-cx/deco's
+      // ctx.response.headers → HTTP Response forwarding.
+      const ctx = RequestContext.current;
+      if (ctx) {
+        for (const [key, value] of ctx.responseHeaders.entries()) {
+          response.headers.append(key, value);
+        }
+      }
+
+      return response;
     } catch (error) {
       return errorResponse((error as Error).message, 500, error);
     }
