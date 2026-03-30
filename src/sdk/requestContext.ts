@@ -44,6 +44,17 @@ export interface RequestContextData {
   _isBot?: boolean;
   /** Arbitrary bag for middleware to attach custom data. */
   bag: Map<string, unknown>;
+  /**
+   * Outgoing response headers that handlers can write to.
+   * Invoke handlers (actions/loaders) use this to forward Set-Cookie
+   * and other headers from upstream APIs (e.g., VTEX checkout).
+   * The invoke HTTP handler copies these into the final Response.
+   *
+   * This mirrors deco-cx/deco's `ctx.response.headers` pattern where
+   * `proxySetCookie(apiResponse.headers, ctx.response.headers)` forwards
+   * cookies transparently.
+   */
+  responseHeaders: Headers;
 }
 
 // -------------------------------------------------------------------------
@@ -87,6 +98,7 @@ export const RequestContext = {
       signal: controller.signal,
       startedAt: Date.now(),
       bag: new Map(),
+      responseHeaders: new Headers(),
     };
 
     return storage.run(ctx, fn);
@@ -170,6 +182,17 @@ export const RequestContext = {
   },
 
   /**
+   * Outgoing response headers. Handlers write here; the invoke endpoint
+   * copies them into the HTTP Response (mirroring ctx.response.headers
+   * from deco-cx/deco).
+   */
+  get responseHeaders(): Headers {
+    const ctx = storage.getStore();
+    if (!ctx) throw new Error("RequestContext.responseHeaders accessed outside a request scope");
+    return ctx.responseHeaders;
+  },
+
+  /**
    * Get/set arbitrary values in the request bag.
    * Useful for middleware to pass data to loaders.
    */
@@ -181,5 +204,24 @@ export const RequestContext = {
   setBag(key: string, value: unknown): void {
     const ctx = storage.getStore();
     ctx?.bag.set(key, value);
+  },
+
+  /**
+   * Get an app's state from the request bag.
+   * Apps register their state via `setupApps()` which injects it
+   * into the bag as `app:{name}:state` before each request.
+   *
+   * @example
+   * ```ts
+   * import { RequestContext } from "@decocms/start/sdk/requestContext";
+   * import type { VtexState } from "@decocms/apps/vtex/mod";
+   *
+   * const vtex = RequestContext.getAppState<VtexState>("vtex");
+   * if (vtex) console.log(vtex.config.account);
+   * ```
+   */
+  getAppState<T>(appName: string): T | undefined {
+    const ctx = storage.getStore();
+    return ctx?.bag.get(`app:${appName}:state`) as T | undefined;
   },
 };

@@ -8,7 +8,13 @@
  * import from "@decocms/start/admin" instead.
  */
 
-export { type InvokeAction, type InvokeLoader, setInvokeActions, setInvokeLoaders } from "./invoke";
+export {
+  type InvokeAction,
+  type InvokeLoader,
+  registerInvokeHandlers,
+  setInvokeActions,
+  setInvokeLoaders,
+} from "./invoke";
 export { setMetaData } from "./meta";
 export {
   type LoaderConfig,

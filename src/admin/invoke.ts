@@ -7,11 +7,21 @@
  * - FormData parsing for file uploads and form submissions
  * - `?select=field1,field2` to pick fields from the result
  * - Resolves __resolveType in batch payloads
+ *
+ * Handlers can write to `RequestContext.responseHeaders` to forward
+ * headers (e.g., Set-Cookie from VTEX checkout). The invoke endpoint
+ * copies those headers into the final HTTP Response.
  */
+
+import { RequestContext } from "../sdk/requestContext";
 
 export type InvokeLoader = (props: any, request: Request) => Promise<any>;
 export type InvokeAction = (props: any, request: Request) => Promise<any>;
 
+// Additive handler registry — registerInvokeHandlers() adds to this map.
+const handlerRegistry = new Map<string, InvokeLoader | InvokeAction>();
+
+// Legacy getter-based registries (backward compat for setInvokeLoaders/Actions).
 let getRegisteredLoaders: () => Record<string, InvokeLoader> = () => ({});
 let getRegisteredActions: () => Record<string, InvokeAction> = () => ({});
 
@@ -21,6 +31,29 @@ export function setInvokeLoaders(getter: () => Record<string, InvokeLoader>) {
 
 export function setInvokeActions(getter: () => Record<string, InvokeAction>) {
   getRegisteredActions = getter;
+}
+
+/**
+ * Additive handler registration — adds handlers without replacing existing ones.
+ * First registration wins: if a key already exists, it is NOT overwritten.
+ * Use this for automatic manifest-based registration from setupApps().
+ */
+export function registerInvokeHandlers(
+  handlers: Record<string, InvokeLoader | InvokeAction>,
+): void {
+  for (const [key, handler] of Object.entries(handlers)) {
+    if (!handlerRegistry.has(key)) {
+      handlerRegistry.set(key, handler);
+    }
+  }
+}
+
+/**
+ * Clear all registered invoke handlers.
+ * Called by setupApps() before re-registering on hot-reload.
+ */
+export function clearInvokeHandlers(): void {
+  handlerRegistry.clear();
 }
 
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
@@ -100,6 +133,11 @@ async function parseBody(request: Request): Promise<any> {
 function findHandler(
   key: string,
 ): { handler: InvokeLoader | InvokeAction; type: "loader" | "action" } | null {
+  // 1. Check additive registry first (from registerInvokeHandlers / setupApps)
+  const registered = handlerRegistry.get(key);
+  if (registered) return { handler: registered, type: "action" };
+
+  // 2. Fall back to legacy getter-based registries
   const loaders = getRegisteredLoaders();
   if (loaders[key]) return { handler: loaders[key], type: "loader" };
 
@@ -126,15 +164,25 @@ export async function handleInvoke(request: Request): Promise<Response> {
 
     try {
       const result = await found.handler(body, request);
-      // Response passthrough: if the loader/action returns a Response object,
-      // forward it as-is (preserving headers like Set-Cookie). This matches
-      // deco-cx/deco's invokeToHttpResponse behavior where auth loaders return
-      // Response objects with Set-Cookie headers for HttpOnly cookies.
+      // Response passthrough: if the handler returns a Response object,
+      // forward it as-is (preserving headers like Set-Cookie).
       if (result instanceof Response) {
         return result;
       }
       const filtered = selectFields(result, select);
-      return new Response(JSON.stringify(filtered), { status: 200, headers: JSON_HEADERS });
+      const response = new Response(JSON.stringify(filtered), { status: 200, headers: JSON_HEADERS });
+
+      // Copy any headers that handlers wrote to RequestContext.responseHeaders
+      // (e.g., Set-Cookie from proxySetCookie). This mirrors deco-cx/deco's
+      // ctx.response.headers → HTTP Response forwarding.
+      const ctx = RequestContext.current;
+      if (ctx) {
+        for (const [key, value] of ctx.responseHeaders.entries()) {
+          response.headers.append(key, value);
+        }
+      }
+
+      return response;
     } catch (error) {
       return errorResponse((error as Error).message, 500, error);
     }
