@@ -544,66 +544,19 @@ export function cmsRouteConfig(options: CmsRouteOptions) {
         await preloadSectionComponents(keys);
       }
 
-      // SSR: create unawaited promises for TanStack native streaming.
-      // Each deferred section becomes a promise that TanStack streams
-      // via SSR chunked transfer — all resolved in the SAME request.
+      // Deferred sections use client-side IntersectionObserver loading.
+      // DecoPageRenderer renders skeletons (LoadingFallback) during SSR and
+      // loads full section content via _serverFn when scrolled into view.
       //
-      // IMPORTANT: We call resolveDeferredSectionFull directly instead of
-      // loadDeferredSection (server function). Server functions serialize
-      // their return via JSON-RPC — TanStack only streams promises that
-      // are directly in the loader return, not serialized server fn results.
-      if (isServer && page.deferredSections?.length) {
-        const originRequest = getRequest();
-        const serverUrl = getRequestUrl();
-        const matcherCtx: MatcherContext = {
-          userAgent: getRequestHeader("user-agent") ?? "",
-          url: page.pageUrl ?? serverUrl.toString(),
-          path: page.pagePath ?? basePath,
-          cookies: getCookies(),
-          request: originRequest,
-        };
-        const deferredRequest = new Request(page.pageUrl ?? serverUrl.toString(), {
-          headers: originRequest.headers,
-        });
-
-        const deferredPromises: Record<string, Promise<ResolvedSection | null>> = {};
-        for (const ds of page.deferredSections) {
-          deferredPromises[`d_${ds.index}`] = resolveDeferredSectionFull(
-            ds,
-            page.pagePath ?? basePath,
-            deferredRequest,
-            matcherCtx,
-          ).catch((e) => {
-            console.error(`[CMS] Deferred section "${ds.component}" failed:`, e);
-            return null;
-          });
-        }
-        return { ...page, deferredPromises };
-      }
-
-      // Client SPA navigation: resolve all deferred sections via server
-      // function batch and merge into resolvedSections for immediate render.
-      if (!isServer && page.deferredSections?.length) {
-        const resolved = await Promise.all(
-          page.deferredSections.map((ds: DeferredSection) =>
-            loadDeferredSection({
-              data: {
-                component: ds.component,
-                rawProps: ds.rawProps,
-                pagePath: page.pagePath ?? basePath,
-                pageUrl: page.pageUrl,
-                index: ds.index,
-              },
-            }).catch(() => null),
-          ),
-        );
-        const all = [
-          ...page.resolvedSections,
-          ...resolved.filter((s): s is ResolvedSection => s != null),
-        ].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
-        return { ...page, resolvedSections: all, deferredSections: [] };
-      }
-
+      // Previously, SSR streaming via TanStack <Await> resolved ALL deferred
+      // sections server-side and streamed them in the initial HTML. This caused
+      // the browser to load ALL product shelf images at once (~3x more image
+      // requests than the IntersectionObserver path). Client SPA navigation
+      // also blocked on await Promise.all() for all deferred sections.
+      //
+      // The IO path (DeferredSectionWrapper) only fetches section data when
+      // the skeleton scrolls into view, matching Fresh/Deno partial behavior
+      // and significantly reducing initial image load and TBT.
       return page;
     },
 
@@ -653,55 +606,8 @@ export function cmsHomeRouteConfig(options: {
         await preloadSectionComponents(keys);
       }
 
-      // SSR: create unawaited promises for TanStack native streaming
-      if (isServer && page.deferredSections?.length) {
-        const originRequest = getRequest();
-        const serverUrl = getRequestUrl();
-        const matcherCtx: MatcherContext = {
-          userAgent: getRequestHeader("user-agent") ?? "",
-          url: page.pageUrl ?? serverUrl.toString(),
-          path: "/",
-          cookies: getCookies(),
-          request: originRequest,
-        };
-        const deferredRequest = new Request(page.pageUrl ?? serverUrl.toString(), {
-          headers: originRequest.headers,
-        });
-
-        const deferredPromises: Record<string, Promise<ResolvedSection | null>> = {};
-        for (const ds of page.deferredSections) {
-          deferredPromises[`d_${ds.index}`] = resolveDeferredSectionFull(
-            ds, "/", deferredRequest, matcherCtx,
-          ).catch((e) => {
-            console.error(`[CMS] Deferred section "${ds.component}" failed:`, e);
-            return null;
-          });
-        }
-        return { ...page, deferredPromises };
-      }
-
-      // Client SPA navigation: resolve all deferred via server function batch
-      if (!isServer && page.deferredSections?.length) {
-        const resolved = await Promise.all(
-          page.deferredSections.map((ds: DeferredSection) =>
-            loadDeferredSection({
-              data: {
-                component: ds.component,
-                rawProps: ds.rawProps,
-                pagePath: "/",
-                pageUrl: page.pageUrl,
-                index: ds.index,
-              },
-            }).catch(() => null),
-          ),
-        );
-        const all = [
-          ...page.resolvedSections,
-          ...resolved.filter((s): s is ResolvedSection => s != null),
-        ].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
-        return { ...page, resolvedSections: all, deferredSections: [] };
-      }
-
+      // Deferred sections use client-side IntersectionObserver loading.
+      // See cmsRouteConfig loader for rationale.
       return page;
     },
     ...(options.pendingComponent ? { pendingComponent: options.pendingComponent } : {}),
