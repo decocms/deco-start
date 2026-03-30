@@ -4,6 +4,7 @@ export {
   handleInvoke,
   type InvokeAction,
   type InvokeLoader,
+  registerInvokeHandlers,
   setInvokeActions,
   setInvokeLoaders,
 } from "./invoke";

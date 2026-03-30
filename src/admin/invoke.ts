@@ -12,6 +12,10 @@
 export type InvokeLoader = (props: any, request: Request) => Promise<any>;
 export type InvokeAction = (props: any, request: Request) => Promise<any>;
 
+// Additive handler registry — registerInvokeHandlers() adds to this map.
+const handlerRegistry = new Map<string, InvokeLoader | InvokeAction>();
+
+// Legacy getter-based registries (backward compat for setInvokeLoaders/Actions).
 let getRegisteredLoaders: () => Record<string, InvokeLoader> = () => ({});
 let getRegisteredActions: () => Record<string, InvokeAction> = () => ({});
 
@@ -21,6 +25,21 @@ export function setInvokeLoaders(getter: () => Record<string, InvokeLoader>) {
 
 export function setInvokeActions(getter: () => Record<string, InvokeAction>) {
   getRegisteredActions = getter;
+}
+
+/**
+ * Additive handler registration — adds handlers without replacing existing ones.
+ * First registration wins: if a key already exists, it is NOT overwritten.
+ * Use this for automatic manifest-based registration from setupApps().
+ */
+export function registerInvokeHandlers(
+  handlers: Record<string, InvokeLoader | InvokeAction>,
+): void {
+  for (const [key, handler] of Object.entries(handlers)) {
+    if (!handlerRegistry.has(key)) {
+      handlerRegistry.set(key, handler);
+    }
+  }
 }
 
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
@@ -100,6 +119,11 @@ async function parseBody(request: Request): Promise<any> {
 function findHandler(
   key: string,
 ): { handler: InvokeLoader | InvokeAction; type: "loader" | "action" } | null {
+  // 1. Check additive registry first (from registerInvokeHandlers / setupApps)
+  const registered = handlerRegistry.get(key);
+  if (registered) return { handler: registered, type: "action" };
+
+  // 2. Fall back to legacy getter-based registries
   const loaders = getRegisteredLoaders();
   if (loaders[key]) return { handler: loaders[key], type: "loader" };
 

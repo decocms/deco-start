@@ -182,4 +182,23 @@ export const RequestContext = {
     const ctx = storage.getStore();
     ctx?.bag.set(key, value);
   },
+
+  /**
+   * Get an app's state from the request bag.
+   * Apps register their state via `setupApps()` which injects it
+   * into the bag as `app:{name}:state` before each request.
+   *
+   * @example
+   * ```ts
+   * import { RequestContext } from "@decocms/start/sdk/requestContext";
+   * import type { VtexState } from "@decocms/apps/vtex/mod";
+   *
+   * const vtex = RequestContext.getAppState<VtexState>("vtex");
+   * if (vtex) console.log(vtex.config.account);
+   * ```
+   */
+  getAppState<T>(appName: string): T | undefined {
+    const ctx = storage.getStore();
+    return ctx?.bag.get(`app:${appName}:state`) as T | undefined;
+  },
 };

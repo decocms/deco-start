@@ -1,9 +1,9 @@
 /**
- * Auto-configures known apps from CMS blocks.
+ * Auto-configures known apps from CMS blocks using AppModContract.
  *
- * Scans the decofile for known app block keys (e.g. "deco-resend") and:
- * 1. Configures the app client with CMS-provided credentials
- * 2. Registers invoke handlers so `invoke.app.actions.*` works via the proxy
+ * Scans the decofile for known app block keys (e.g. "deco-vtex", "deco-resend")
+ * and calls each app's `configure()` function from its mod.ts.
+ * Then delegates to `setupApps()` for invoke handler registration, middleware, etc.
  *
  * Usage in setup.ts:
  *   import { autoconfigApps } from "@decocms/start/apps/autoconfig";
@@ -11,62 +11,60 @@
  *   await autoconfigApps(generatedBlocks);
  */
 
-import { setInvokeActions, type InvokeAction } from "../admin/invoke";
 import { onChange } from "../cms/loader";
 import { resolveSecret } from "../sdk/crypto";
+import {
+	setupApps,
+	type AppDefinition,
+	type AppDefinitionWithHandlers,
+} from "../sdk/setupApps";
 
 // ---------------------------------------------------------------------------
-// Known app block keys → dynamic import + configure
+// Known app block keys → dynamic import of their mod.ts
 // ---------------------------------------------------------------------------
 
-interface AppAutoconfigurator {
-	/** Try to import, configure, and return invoke actions for this app */
-	(blockData: unknown): Promise<Record<string, InvokeAction>>;
-}
-
-const KNOWN_APPS: Record<string, AppAutoconfigurator> = {
-	"deco-resend": async (block: any): Promise<Record<string, InvokeAction>> => {
-		try {
-			const [resendClient, resendActions] = await Promise.all([
-				import("@decocms/apps/resend/client" as string),
-				import("@decocms/apps/resend/actions/send" as string),
-			]);
-			const { configureResend } = resendClient as { configureResend: (cfg: any) => void };
-			const { sendEmail } = resendActions as { sendEmail: (props: any) => Promise<any> };
-
-			const apiKey = await resolveSecret(block.apiKey, "RESEND_API_KEY");
-			if (!apiKey) {
-				console.warn(
-					"[autoconfig] deco-resend: no API key found." +
-					" Set DECO_CRYPTO_KEY to decrypt CMS secrets, or set RESEND_API_KEY as fallback.",
-				);
-				return {} as Record<string, InvokeAction>;
-			}
-
-			configureResend({
-				apiKey,
-				emailFrom: block.emailFrom
-					? `${block.emailFrom.name || "Contact"} ${block.emailFrom.domain || "<onboarding@resend.dev>"}`
-					: undefined,
-				emailTo: block.emailTo,
-				subject: block.subject,
-			});
-
-			const handler: InvokeAction = async (props: any) => sendEmail(props);
-			return {
-				"resend/actions/emails/send": handler,
-				"resend/actions/emails/send.ts": handler,
-			};
-		} catch {
-			// @decocms/apps not installed or doesn't have resend — skip
-			return {};
-		}
-	},
+const APP_MODS: Record<string, () => Promise<any>> = {
+	"deco-vtex": () => import("@decocms/apps/vtex/mod" as string),
+	"deco-shopify": () => import("@decocms/apps/shopify/mod" as string),
+	"deco-resend": () => import("@decocms/apps/resend/mod" as string),
 };
 
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
+
+async function configureAllApps(
+	blocks: Record<string, unknown>,
+): Promise<AppDefinitionWithHandlers[]> {
+	const apps: AppDefinitionWithHandlers[] = [];
+
+	for (const [blockKey, importMod] of Object.entries(APP_MODS)) {
+		const block = blocks[blockKey];
+		if (!block) continue;
+
+		try {
+			const mod = await importMod();
+			if (typeof mod.configure !== "function") continue;
+
+			const appDef: AppDefinition | null = await mod.configure(
+				block,
+				resolveSecret,
+			);
+			if (!appDef) continue;
+
+			// Attach explicit handlers from mod.ts (e.g. resend's pre-wrapped handlers)
+			const withHandlers: AppDefinitionWithHandlers = {
+				...appDef,
+				handlers: mod.handlers,
+			};
+			apps.push(withHandlers);
+		} catch {
+			// App not installed or configure failed — skip silently
+		}
+	}
+
+	return apps;
+}
 
 /**
  * Auto-configure apps from CMS blocks.
@@ -75,37 +73,17 @@ const KNOWN_APPS: Record<string, AppAutoconfigurator> = {
 export async function autoconfigApps(blocks: Record<string, unknown>) {
 	if (typeof document !== "undefined") return; // server-only
 
-	const actions: Record<string, InvokeAction> = {};
-
-	for (const [blockKey, configurator] of Object.entries(KNOWN_APPS)) {
-		const block = blocks[blockKey];
-		if (!block) continue;
-
-		try {
-			const appActions = await configurator(block);
-			Object.assign(actions, appActions);
-		} catch (e) {
-			console.warn(`[autoconfig] ${blockKey}:`, e);
-		}
-	}
-
-	if (Object.keys(actions).length > 0) {
-		setInvokeActions(() => ({ ...actions }));
+	const apps = await configureAllApps(blocks);
+	if (apps.length > 0) {
+		await setupApps(apps);
 	}
 
 	// Re-configure on admin hot-reload
 	onChange(async (newBlocks) => {
 		if (typeof document !== "undefined") return;
-		const updatedActions: Record<string, InvokeAction> = {};
-		for (const [blockKey, configurator] of Object.entries(KNOWN_APPS)) {
-			const block = newBlocks[blockKey];
-			if (!block) continue;
-			try {
-				Object.assign(updatedActions, await configurator(block));
-			} catch {}
-		}
-		if (Object.keys(updatedActions).length > 0) {
-			setInvokeActions(() => ({ ...updatedActions }));
+		const updatedApps = await configureAllApps(newBlocks);
+		if (updatedApps.length > 0) {
+			await setupApps(updatedApps);
 		}
 	});
 }
