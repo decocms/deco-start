@@ -36,6 +36,7 @@ import { buildHtmlShell } from "./htmlShell";
 import { cleanPathForCacheKey } from "./urlUtils";
 import { isMobileUA } from "./useDevice";
 import { getRenderShellConfig } from "../admin/setup";
+import { RequestContext } from "./requestContext";
 
 /**
  * Append Link preload headers for CSS and fonts so the browser starts
@@ -653,6 +654,10 @@ export function createDecoWorkerEntry(
       env: Record<string, unknown>,
       ctx: WorkerExecutionContext,
     ): Promise<Response> {
+      // Wrap the entire request in a RequestContext so that all code
+      // in the call stack (loaders, invoke handlers, vtexFetchWithCookies)
+      // can access the request and write response headers.
+      return RequestContext.run(request, async () => {
       const url = new URL(request.url);
 
       // Admin routes (/_meta, /.decofile, /live/previews) — always handled first
@@ -879,6 +884,7 @@ export function createDecoWorkerEntry(
       // the stream in Workers runtime, causing Error 1101.
       storeInCache(origin);
       return dressResponse(origin, "MISS");
+      }); // end RequestContext.run()
     },
   };
 }
