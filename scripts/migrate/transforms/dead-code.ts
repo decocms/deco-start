@@ -22,11 +22,19 @@ function removeExportConstBlock(src: string, name: string): string {
   const match = pattern.exec(src);
   if (!match) return src;
 
-  // Find the opening brace of the arrow function body
+  // Find the arrow `=>` first, then the opening `{` of the body.
+  // This avoids matching destructuring braces in parameters like
+  // `export const loader = ({ groups }: Props) => { ... }`
   let pos = match.index + match[0].length;
-  // Skip past the arrow: (params) => {
-  while (pos < src.length && src[pos] !== "{") {
-    pos++;
+  // Look for `=>`
+  const arrowIdx = src.indexOf("=>", pos);
+  if (arrowIdx === -1) {
+    // No arrow function — try simple brace from current position
+    while (pos < src.length && src[pos] !== "{") pos++;
+  } else {
+    // Start searching for `{` after the arrow
+    pos = arrowIdx + 2;
+    while (pos < src.length && src[pos] !== "{") pos++;
   }
   if (pos >= src.length) return src; // no brace body, skip
 
