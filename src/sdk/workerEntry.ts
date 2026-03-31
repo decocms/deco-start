@@ -37,6 +37,9 @@ import { cleanPathForCacheKey } from "./urlUtils";
 import { isMobileUA } from "./useDevice";
 import { getRenderShellConfig } from "../admin/setup";
 import { RequestContext } from "./requestContext";
+import type { MatcherContext } from "../cms/resolve";
+import { resolveDecoPage } from "../cms/resolve";
+import { runSectionLoaders } from "../cms/sectionLoaders";
 
 /**
  * Append Link preload headers for CSS and fonts so the browser starts
@@ -667,6 +670,40 @@ export function createDecoWorkerEntry(
       // Purge endpoint
       if (url.pathname === "/_cache/purge" && request.method === "POST") {
         return handlePurge(request, env);
+      }
+
+      // ?asJson — return resolved page data as JSON (legacy deco compat)
+      if (url.searchParams.has("asJson") && request.method === "GET") {
+        const basePath = url.pathname;
+        const cookies: Record<string, string> = {};
+        for (const pair of (request.headers.get("cookie") ?? "").split(";")) {
+          const [k, ...v] = pair.split("=");
+          if (k?.trim()) cookies[k.trim()] = v.join("=").trim();
+        }
+        const matcherCtx: MatcherContext = {
+          userAgent: request.headers.get("user-agent") ?? "",
+          url: url.toString(),
+          path: basePath,
+          cookies,
+          request,
+        };
+        const page = await resolveDecoPage(basePath, matcherCtx);
+        if (!page) {
+          return Response.json(null, { status: 404, headers: { "Access-Control-Allow-Origin": "*" } });
+        }
+        const enrichedSections = await runSectionLoaders(page.resolvedSections, request);
+        const { seoSection: _seo, ...pageData } = page;
+        const result = {
+          ...pageData,
+          resolvedSections: enrichedSections,
+        };
+        return Response.json(result, {
+          headers: {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+          },
+        });
       }
 
       // Commerce proxy (checkout, account, API, etc.)
