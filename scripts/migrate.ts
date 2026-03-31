@@ -5,8 +5,8 @@
  * Converts a Deco storefront from the old Fresh/Deno stack to the new TanStack Start stack.
  * Part of the @decocms/start framework — run from a site's root directory.
  *
- * Usage (from site root):
- *   npx tsx node_modules/@decocms/start/scripts/migrate.ts [options]
+ * Usage (from your Fresh site directory):
+ *   npx -p @decocms/start deco-migrate [options]
  *
  * Options:
  *   --source <dir>    Source directory (default: current directory)
@@ -71,7 +71,7 @@ function showHelp() {
   @decocms/start — Migration Script: Fresh/Deno → TanStack Start
 
   Usage:
-    npx tsx node_modules/@decocms/start/scripts/migrate.ts [options]
+    npx -p @decocms/start deco-migrate [options]
 
   Options:
     --source <dir>    Source directory (default: .)
