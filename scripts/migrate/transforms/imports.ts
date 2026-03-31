@@ -234,6 +234,15 @@ export function transformImports(content: string): TransformResult {
     notes.push("Split useDevice into separate import from @decocms/start/sdk/useDevice");
   }
 
+  // Rewrite dynamic imports: import("$store/...") and import("site/...")
+  const dynamicImportRe = /\bimport\(\s*(["'])(\$store\/|site\/)([^"']+)\1\s*\)/g;
+  result = result.replace(dynamicImportRe, (_match, quote, _prefix, rest) => {
+    const cleaned = rest.replace(/\.tsx?$/, "");
+    changed = true;
+    notes.push(`Rewrote dynamic import: ${_prefix}${rest} → ~/${cleaned}`);
+    return `import(${quote}~/${cleaned}${quote})`;
+  });
+
   // Clean up blank lines left by removed imports (collapse multiple to one)
   result = result.replace(/\n{3,}/g, "\n\n");
 
