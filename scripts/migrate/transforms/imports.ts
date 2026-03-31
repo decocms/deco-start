@@ -53,7 +53,8 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
   // Deco old CDN imports
   [/^"deco\/([^"]+)"$/, null],
 
-  // Std lib — not needed in Node (Deno std lib)
+  // Std lib — redirect useful utils, remove the rest
+  [/^"std\/async\/debounce(?:\.ts)?"$/, `"~/sdk/debounce"`],
   [/^"std\/([^"]+)"$/, null],
   [/^"@std\/crypto"$/, null], // Use globalThis.crypto instead
 
