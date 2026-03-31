@@ -97,30 +97,6 @@ export function transformDeadCode(content: string): TransformResult {
     notes.push("MANUAL: crypto.subtle.digestSync is Deno-only — replaced with crypto.subtle.digest (needs await)");
   }
 
-  // Remove `loader` from re-export lines: export { default, loader } from "..."
-  // These break when the target component's loader was removed above.
-  const beforeReExport = result;
-  result = result.replace(
-    /^(export\s+\{[^}]*)\b,?\s*loader\s*,?([^}]*\}\s+from\s+["'][^"']+["'];?)$/gm,
-    (_match, before, after) => {
-      // Clean up double commas or leading/trailing commas
-      return (before + after)
-        .replace(/\{\s*,/, "{ ")
-        .replace(/,\s*\}/, " }")
-        .replace(/,\s*,/, ",");
-    },
-  );
-  if (result !== beforeReExport) {
-    changed = true;
-    notes.push("Removed `loader` from re-export (target loader was removed)");
-  }
-
-  // Also remove standalone re-export lines that only re-export loader
-  result = result.replace(
-    /^export\s+\{\s*loader\s*\}\s+from\s+["'][^"']+["'];?\s*\n?/gm,
-    "",
-  );
-
   // invoke.* calls are server RPC via runtime.ts proxy → keep as-is
   // The runtime.ts scaffolded file creates a proxy that routes to /deco/invoke/*
   // where the CMS config (API keys, tokens) is available server-side.
