@@ -65,6 +65,9 @@ export function scaffold(ctx: MigrationContext): void {
   // Styles
   writeFile(ctx, "src/styles/app.css", generateAppCss(ctx));
 
+  // SDK — signal shim (replaces @preact/signals)
+  writeFile(ctx, "src/sdk/signal.ts", generateSignalShim());
+
   // Apps
   writeFile(ctx, "src/apps/site.ts", generateSiteApp(ctx));
 
@@ -221,6 +224,70 @@ vite.config.timestamp_*
 # IDE
 .vscode/
 .idea/
+`;
+}
+
+function generateSignalShim(): string {
+  return `import { Store } from "@tanstack/store";
+import { useSyncExternalStore, useMemo } from "react";
+
+export interface Signal<T> {
+  readonly store: Store<T>;
+  value: T;
+  peek(): T;
+  subscribe(fn: () => void): () => void;
+}
+
+export function signal<T>(initialValue: T): Signal<T> {
+  const store = new Store<T>(initialValue);
+  return {
+    store,
+    get value() { return store.state; },
+    set value(v: T) { store.setState(() => v); },
+    peek() { return store.state; },
+    subscribe(fn) {
+      // @tanstack/store@0.9.x returns { unsubscribe: Function },
+      // NOT a plain function. React's useSyncExternalStore cleanup
+      // expects a bare function — unwrap it.
+      const sub = store.subscribe(() => fn());
+      return typeof sub === "function" ? sub : sub.unsubscribe;
+    },
+  };
+}
+
+export function useSignal<T>(initialValue: T): Signal<T> {
+  const sig = useMemo(() => signal(initialValue), []);
+  useSyncExternalStore(
+    (cb) => sig.subscribe(cb),
+    () => sig.value,
+    () => sig.value,
+  );
+  return sig;
+}
+
+export function useComputed<T>(fn: () => T): Signal<T> {
+  const sig = useMemo(() => signal(fn()), []);
+  return sig;
+}
+
+export function computed<T>(fn: () => T): Signal<T> {
+  return signal(fn());
+}
+
+export function effect(fn: () => void | (() => void)): () => void {
+  const cleanup = fn();
+  return typeof cleanup === "function" ? cleanup : () => {};
+}
+
+export function batch(fn: () => void): void {
+  fn();
+}
+
+export function useSignalEffect(fn: () => void | (() => void)): void {
+  fn();
+}
+
+export type { Signal as ReadonlySignal };
 `;
 }
 
