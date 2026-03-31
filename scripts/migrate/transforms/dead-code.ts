@@ -6,7 +6,7 @@ import type { TransformResult } from "../types.ts";
  *
  * - `export const cache = "stale-while-revalidate"` (old cache system)
  * - `export const cacheKey = ...` (old cache key generation)
- * - `export const loader = (props, req, ctx) => ...` (old section loader pattern)
+ * NOTE: `export const loader` is kept — it's a server-side function the CMS calls.
  * - `crypto.subtle.digestSync(...)` (Deno-only sync API)
  *
  * NOTE: invoke.* calls are NOT migrated — they are RPC calls to the server
@@ -84,20 +84,8 @@ export function transformDeadCode(content: string): TransformResult {
     notes.push("Removed dead `export const cacheKey` (old caching system)");
   }
 
-  // Remove old section loader export: export const loader = (props, req, ctx) => { ... };
-  // This is the old pattern where sections had co-located loaders.
-  // In TanStack Start, section loaders are handled differently.
-  // Uses brace-counting to handle nested blocks (for loops, if/else, etc.)
-  if (/^export\s+const\s+loader\s*=\s*\(/m.test(result)) {
-    result = removeExportConstBlock(result, "loader");
-    // Also handle simpler inline forms (no braces, single expression)
-    result = result.replace(
-      /^export\s+const\s+loader\s*=\s*\([^)]*\)\s*=>[^;{]*;\s*\n?/gm,
-      "",
-    );
-    changed = true;
-    notes.push("Removed dead `export const loader` (old section loader — use section loaders in @decocms/start)");
-  }
+  // NOTE: `export const loader` is kept — these are server-side functions
+  // that the CMS calls to modify section props before rendering.
 
   // Replace crypto.subtle.digestSync (Deno-only) with a note
   if (result.includes("digestSync")) {
@@ -108,30 +96,6 @@ export function transformDeadCode(content: string): TransformResult {
     changed = true;
     notes.push("MANUAL: crypto.subtle.digestSync is Deno-only — replaced with crypto.subtle.digest (needs await)");
   }
-
-  // Remove `loader` from re-export lines: export { default, loader } from "..."
-  // These break when the target component's loader was removed above.
-  const beforeReExport = result;
-  result = result.replace(
-    /^(export\s+\{[^}]*)\b,?\s*loader\s*,?([^}]*\}\s+from\s+["'][^"']+["'];?)$/gm,
-    (_match, before, after) => {
-      // Clean up double commas or leading/trailing commas
-      return (before + after)
-        .replace(/\{\s*,/, "{ ")
-        .replace(/,\s*\}/, " }")
-        .replace(/,\s*,/, ",");
-    },
-  );
-  if (result !== beforeReExport) {
-    changed = true;
-    notes.push("Removed `loader` from re-export (target loader was removed)");
-  }
-
-  // Also remove standalone re-export lines that only re-export loader
-  result = result.replace(
-    /^export\s+\{\s*loader\s*\}\s+from\s+["'][^"']+["'];?\s*\n?/gm,
-    "",
-  );
 
   // invoke.* calls are server RPC via runtime.ts proxy → keep as-is
   // The runtime.ts scaffolded file creates a proxy that routes to /deco/invoke/*
