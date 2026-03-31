@@ -79,12 +79,18 @@ The skill handles compatibility checking, import rewrites, config generation, se
 ### Or run the script manually
 
 ```bash
-# From a new TanStack Start project with @decocms/start installed:
-npx tsx node_modules/@decocms/start/scripts/migrate.ts --source /path/to/fresh-site
-
-# Preview first without writing:
-npx tsx node_modules/@decocms/start/scripts/migrate.ts --source /path/to/fresh-site --dry-run --verbose
+# From your Fresh site directory (nothing to install beforehand):
+npx -p @decocms/start deco-migrate
 ```
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--source <dir>` | Source directory (default: current directory) |
+| `--dry-run` | Preview changes without writing files |
+| `--verbose` | Show detailed output |
+| `--help`, `-h` | Show help message |
 
 The script runs 7 phases automatically:
 

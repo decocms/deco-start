@@ -4,6 +4,9 @@
   "type": "module",
   "description": "Deco framework for TanStack Start - CMS bridge, admin protocol, hooks, schema generation",
   "main": "./src/index.ts",
+  "bin": {
+    "deco-migrate": "./scripts/migrate.ts"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./cms": "./src/cms/index.ts",
@@ -79,6 +82,9 @@
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
     "access": "public"
+  },
+  "dependencies": {
+    "tsx": "^4.19.0"
   },
   "peerDependencies": {
     "@tanstack/react-start": ">=1.0.0",
