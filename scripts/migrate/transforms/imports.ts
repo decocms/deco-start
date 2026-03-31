@@ -55,11 +55,7 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
   [/^"\$store\/sdk\/useOffer(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useOffer"`],
   [/^"\$store\/sdk\/useVariantPossiblities(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useVariantPossibilities"`],
   [/^"\$store\/sdk\/usePlatform(?:\.tsx?)?.*"$/, null],
-  [/^"\$store\/islands\/(.+)"$/, `"~/sections/$1"`],
   [/^"\$store\/(.+)"$/, `"~/$1"`],
-
-  // site/islands/ → ~/sections/ (islands are merged into sections during migration)
-  [/^"site\/islands\/(.+)"$/, `"~/sections/$1"`],
 
   // site/ → ~/
   [/^"site\/(.+)"$/, `"~/$1"`],
