@@ -15,8 +15,8 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
   [/^"preact\/jsx-runtime"$/, null],
   [/^"preact\/compat"$/, `"react"`],
   [/^"preact"$/, `"react"`],
-  [/^"@preact\/signals-core"$/, null],
-  [/^"@preact\/signals"$/, null],
+  [/^"@preact\/signals-core"$/, `"@decocms/start/sdk/signal"`],
+  [/^"@preact\/signals"$/, `"@decocms/start/sdk/signal"`],
 
   // Deco framework
   [/^"@deco\/deco\/hooks"$/, `"@decocms/start/sdk/useScript"`],
