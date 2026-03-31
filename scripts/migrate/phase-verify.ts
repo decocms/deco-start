@@ -173,14 +173,14 @@ const checks: Check[] = [
     },
   },
   {
-    name: "No site/ imports (should be ~/)",
+    name: "No site/ or $store/ imports (should be ~/)",
     severity: "warning",
     fn: (ctx) => {
       const srcDir = path.join(ctx.sourceDir, "src");
       if (!fs.existsSync(srcDir)) return true;
-      const bad = findFilesWithPattern(srcDir, /from\s+["']site\//);
+      const bad = findFilesWithPattern(srcDir, /from\s+["'](site\/|\$store\/)/);
       if (bad.length > 0) {
-        console.log(`    Still has site/ imports: ${bad.join(", ")}`);
+        console.log(`    Still has site/ or $store/ imports: ${bad.join(", ")}`);
         return false;
       }
       return true;

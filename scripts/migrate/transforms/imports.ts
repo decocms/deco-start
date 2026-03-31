@@ -49,6 +49,14 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
   [/^"site\/sdk\/useVariantPossiblities(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useVariantPossibilities"`],
   [/^"site\/sdk\/usePlatform(?:\.tsx?)?.*"$/, null],
 
+  // $store/ → ~/ (common Deno import map alias for project root)
+  [/^"\$store\/sdk\/clx(?:\.tsx?)?.*"$/, `"@decocms/start/sdk/clx"`],
+  [/^"\$store\/sdk\/useId(?:\.tsx?)?.*"$/, `"react"`],
+  [/^"\$store\/sdk\/useOffer(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useOffer"`],
+  [/^"\$store\/sdk\/useVariantPossiblities(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useVariantPossibilities"`],
+  [/^"\$store\/sdk\/usePlatform(?:\.tsx?)?.*"$/, null],
+  [/^"\$store\/(.+)"$/, `"~/$1"`],
+
   // site/ → ~/
   [/^"site\/(.+)"$/, `"~/$1"`],
 ];
