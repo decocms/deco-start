@@ -43,14 +43,14 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
   [/^"@std\/crypto"$/, null], // Use globalThis.crypto instead
 
   // site/sdk/* → framework equivalents (before the catch-all site/ → ~/ rule)
-  [/^"site\/sdk\/clx(?:\.tsx?)?.*"$/, `"@decocms/start/sdk/clx"`],
+  [/^"site\/sdk\/clx(?:\.tsx?)?.*"$/, `"~/sdk/clx"`],
   [/^"site\/sdk\/useId(?:\.tsx?)?.*"$/, `"react"`],
   [/^"site\/sdk\/useOffer(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useOffer"`],
   [/^"site\/sdk\/useVariantPossiblities(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useVariantPossibilities"`],
   [/^"site\/sdk\/usePlatform(?:\.tsx?)?.*"$/, null],
 
   // $store/ → ~/ (common Deno import map alias for project root)
-  [/^"\$store\/sdk\/clx(?:\.tsx?)?.*"$/, `"@decocms/start/sdk/clx"`],
+  [/^"\$store\/sdk\/clx(?:\.tsx?)?.*"$/, `"~/sdk/clx"`],
   [/^"\$store\/sdk\/useId(?:\.tsx?)?.*"$/, `"react"`],
   [/^"\$store\/sdk\/useOffer(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useOffer"`],
   [/^"\$store\/sdk\/useVariantPossiblities(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useVariantPossibilities"`],
@@ -67,8 +67,8 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
  * The key is the ending of the import path, the value is the replacement specifier.
  */
 const RELATIVE_SDK_REWRITES: Array<[RegExp, string]> = [
-  // sdk/clx → @decocms/start/sdk/clx
-  [/(?:\.\.\/)*sdk\/clx(?:\.tsx?)?$/, "@decocms/start/sdk/clx"],
+  // sdk/clx → ~/sdk/clx (scaffolded locally with default export)
+  [/(?:\.\.\/)*sdk\/clx(?:\.tsx?)?$/, "~/sdk/clx"],
   // sdk/useId → react (useId is built-in in React 19)
   [/(?:\.\.\/)*sdk\/useId(?:\.tsx?)?$/, "react"],
   // sdk/useOffer → @decocms/apps/commerce/sdk/useOffer
