@@ -80,9 +80,9 @@ function showHelp() {
     --help, -h        Show this help message
 
   Examples:
-    npx tsx node_modules/@decocms/start/scripts/migrate.ts --dry-run --verbose
-    npx tsx node_modules/@decocms/start/scripts/migrate.ts --source ./my-site
-    npx tsx node_modules/@decocms/start/scripts/migrate.ts
+    npx -p @decocms/start deco-migrate --dry-run --verbose
+    npx -p @decocms/start deco-migrate --source ./my-site
+    npx -p @decocms/start deco-migrate
   `);
 }
 
