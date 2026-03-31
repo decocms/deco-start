@@ -71,6 +71,9 @@ export function scaffold(ctx: MigrationContext): void {
   // SDK — clx (class name joiner, with default export for compat)
   writeFile(ctx, "src/sdk/clx.ts", generateClxShim());
 
+  // SDK — debounce (replaces Deno std/async/debounce)
+  writeFile(ctx, "src/sdk/debounce.ts", generateDebounceShim());
+
   // Apps
   writeFile(ctx, "src/apps/site.ts", generateSiteApp(ctx));
 
@@ -239,6 +242,36 @@ export const clx = (...args: (string | null | undefined | false)[]) =>
 export const clsx = clx;
 
 export default clx;
+`;
+}
+
+function generateDebounceShim(): string {
+  return `/** Debounce a function call — drop-in replacement for Deno std/async/debounce */
+export function debounce<T extends (...args: any[]) => any>(
+  fn: T,
+  delay = 250,
+): T & { clear(): void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const debounced = ((...args: Parameters<T>) => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = undefined;
+      fn(...args);
+    }, delay);
+  }) as T & { clear(): void };
+
+  debounced.clear = () => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+
+  return debounced;
+}
+
+export default debounce;
 `;
 }
 
