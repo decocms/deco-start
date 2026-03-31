@@ -1,5 +1,9 @@
 import type { MigrationContext } from "../types.ts";
 
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 export function generateServerEntry(
   ctx: MigrationContext,
 ): Record<string, string> {
@@ -22,13 +26,41 @@ export default createStartHandler(defaultStreamHandler);
 `;
 }
 
-function generateWorkerEntry(_ctx: MigrationContext): string {
+function generateWorkerEntry(ctx: MigrationContext): string {
+  const isCommerce = ctx.platform !== "custom";
+  const proxyImport = isCommerce
+    ? `\n// Uncomment to enable checkout/API proxy for ${ctx.platform}:
+// import { shouldProxyTo${ctx.platform === "vtex" ? "Vtex" : capitalize(ctx.platform)}, proxyTo${ctx.platform === "vtex" ? "Vtex" : capitalize(ctx.platform)} } from "@decocms/apps/${ctx.platform}/utils/proxy";\n`
+    : "";
+
+  const proxyOption = isCommerce
+    ? `
+  // Uncomment to enable checkout/API proxy for ${ctx.platform}:
+  // proxyHandler: (request, url) => {
+  //   if (shouldProxyTo${ctx.platform === "vtex" ? "Vtex" : capitalize(ctx.platform)}(url.pathname)) {
+  //     return proxyTo${ctx.platform === "vtex" ? "Vtex" : capitalize(ctx.platform)}(request);
+  //   }
+  //   return null;
+  // },`
+    : "";
+
+  const segmentOption = ctx.platform === "vtex"
+    ? `
+  // Uncomment for per-sales-channel/region cache segmentation:
+  // buildSegment: (request) => {
+  //   const ua = request.headers.get("user-agent") ?? "";
+  //   return {
+  //     device: /mobile|android|iphone/i.test(ua) ? "mobile" : "desktop",
+  //     // loggedIn: true bypasses cache automatically
+  //   };
+  // },`
+    : "";
+
   return `/**
  * Cloudflare Worker entry point.
  *
- * For a simple site without VTEX proxy or A/B testing, this is a thin wrapper
- * around the TanStack Start handler. Add proxy logic, security headers, or
- * A/B testing as needed.
+ * Wraps TanStack Start with admin protocol handlers and edge caching.
+ * For commerce sites, uncomment proxyHandler and buildSegment options.
  */
 import "./setup";
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
@@ -40,7 +72,7 @@ import {
   handleRender,
   corsHeaders,
 } from "@decocms/start/admin";
-
+${proxyImport}
 const serverEntry = createServerEntry({ fetch: handler.fetch });
 
 export default createDecoWorkerEntry(serverEntry, {
@@ -50,7 +82,7 @@ export default createDecoWorkerEntry(serverEntry, {
     handleDecofileReload,
     handleRender,
     corsHeaders,
-  },
+  },${proxyOption}${segmentOption}
 });
 `;
 }
@@ -113,36 +145,9 @@ function generateRuntime(): string {
  *   invoke.vtex.loaders.productList(props)
  *   → POST /deco/invoke/vtex/loaders/productList
  */
-function createNestedInvokeProxy(path: string[] = []): any {
-  return new Proxy(
-    Object.assign(async (props: any) => {
-      const key = path.join("/");
-      for (const k of [key, \`\${key}.ts\`]) {
-        const response = await fetch(\`/deco/invoke/\${k}\`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(props ?? {}),
-        });
-        if (response.status === 404) continue;
-        if (!response.ok) {
-          throw new Error(\`invoke(\${k}) failed: \${response.status}\`);
-        }
-        return response.json();
-      }
-      throw new Error(\`invoke(\${key}) failed: handler not found\`);
-    }, {}),
-    {
-      get(_target: any, prop: string) {
-        if (prop === "then" || prop === "catch" || prop === "finally") {
-          return undefined;
-        }
-        return createNestedInvokeProxy([...path, prop]);
-      },
-    },
-  );
-}
+import { createAppInvoke } from "@decocms/start/sdk/invoke";
 
-export const invoke = createNestedInvokeProxy() as any;
+export const invoke = createAppInvoke();
 export const Runtime = { invoke };
 `;
 }

@@ -37,6 +37,7 @@ import { cleanPathForCacheKey } from "./urlUtils";
 import { isMobileUA } from "./useDevice";
 import { getRenderShellConfig } from "../admin/setup";
 import { RequestContext } from "./requestContext";
+import { getAppMiddleware } from "./setupApps";
 import type { MatcherContext } from "../cms/resolve";
 import { resolveDecoPage } from "../cms/resolve";
 import { runSectionLoaders } from "../cms/sectionLoaders";
@@ -661,6 +662,22 @@ export function createDecoWorkerEntry(
       // in the call stack (loaders, invoke handlers, vtexFetchWithCookies)
       // can access the request and write response headers.
       return RequestContext.run(request, async () => {
+      // Run app middleware (injects app state into RequestContext.bag,
+      // runs registered middleware like VTEX cookie forwarding).
+      const appMw = getAppMiddleware();
+      if (appMw) {
+        return appMw(request, () => handleRequest(request, env, ctx));
+      }
+      return handleRequest(request, env, ctx);
+      });
+    },
+  };
+
+  async function handleRequest(
+    request: Request,
+    env: Record<string, unknown>,
+    ctx: WorkerExecutionContext,
+  ): Promise<Response> {
       const url = new URL(request.url);
 
       // Admin routes (/_meta, /.decofile, /live/previews) — always handled first
@@ -921,7 +938,5 @@ export function createDecoWorkerEntry(
       // the stream in Workers runtime, causing Error 1101.
       storeInCache(origin);
       return dressResponse(origin, "MISS");
-      }); // end RequestContext.run()
-    },
-  };
+  }
 }
