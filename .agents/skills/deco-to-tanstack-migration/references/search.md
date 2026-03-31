@@ -1,13 +1,9 @@
----
-name: deco-tanstack-search
-description: Implement and debug search functionality in Deco storefronts on TanStack Start. Covers the full search data flow from SearchBar to VTEX Intelligent Search API, including URL parameter propagation, CMS page resolution, filter toggling, pagination, and common pitfalls.
----
 
 # Deco TanStack Search
 
 Complete reference for implementing search in Deco storefronts running on TanStack Start / React / Cloudflare Workers.
 
-## When to Use This Skill
+## When to Use This Reference
 
 - Implementing or debugging search (`/s?q=...`) pages
 - Fixing "search returns no results" or "search page shows 404"
@@ -389,14 +385,6 @@ TanStack Router's `search` is a plain `Record<string, string>` — it **cannot r
 ```
 
 **Sort** (single key) can safely use `navigate({ search })` since there are no duplicate keys.
-
-## Related Skills
-
-- `deco-tanstack-storefront-patterns` — General runtime patterns for TanStack storefronts
-- `deco-apps-vtex-porting` — Full guide for porting VTEX loaders to apps-start
-- `deco-tanstack-navigation` — Navigation patterns including Link, prefetch, search params
-- `deco-tanstack-hydration-fixes` — Fixing hydration and flash-of-white issues
-- `deco-cms-route-config` — Deep dive into cmsRouteConfig and route helpers
 
 ## Files Reference
 

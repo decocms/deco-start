@@ -1,7 +1,3 @@
----
-name: deco-islands-migration
-description: Eliminate the src/islands/ directory when migrating Deco storefronts from Fresh/Preact to TanStack Start/React. Explains why islands don't make sense in the new stack, the problems they cause, how to systematically repoint or move them, and how to fix vanilla-JS DOM patterns that break React hydration. Use when auditing or removing islands from a migrated storefront.
----
 
 # Deco Islands Migration — From Fresh Islands to React Components
 
@@ -239,13 +235,3 @@ function Drawer({ class: classProp = "", className = "" }: Props) {
 - [ ] Build succeeds (`npm run build` / `bun run build`)
 - [ ] Dev server starts without errors
 - [ ] Interactive elements work: add to cart, sliders, drawers, modals
-
-## Related Skills
-
-| Skill | Purpose |
-|-------|---------|
-| `deco-to-tanstack-migration` | Full migration playbook (imports, signals, architecture) |
-| `deco-tanstack-navigation` | SPA navigation patterns (`<a>` → `<Link>`, `useNavigate`, `loaderDeps`, forms) |
-| `deco-tanstack-storefront-patterns` | Runtime fixes post-migration (nested sections, caching, SliderJS, async_hooks, cart, server functions) |
-| `deco-storefront-test-checklist` | Context-aware QA checklist generation |
-| `deco-typescript-fixes` | TypeScript error patterns and fixes |

@@ -62,6 +62,51 @@ Request → createDecoWorkerEntry()
 | `/cart`, `/checkout` | private | none |
 | Everything else | listing | 2 min |
 
+## Migrating from Fresh/Preact/Deno
+
+`@decocms/start` includes an Agent Skill that handles migration for you. It works with Claude Code, Cursor, Codex, and other AI coding tools. Install the skill, open your Fresh storefront, and tell the AI to migrate:
+
+```bash
+npx skills add decocms/deco-start
+```
+
+Then open your project in any supported tool and say:
+
+> migrate this project to TanStack Start
+
+The skill handles compatibility checking, import rewrites, config generation, section registry setup, and worker entry creation. It knows what `@decocms/start` supports and will flag anything that needs manual attention.
+
+### Or run the script manually
+
+```bash
+# From a new TanStack Start project with @decocms/start installed:
+npx tsx node_modules/@decocms/start/scripts/migrate.ts --source /path/to/fresh-site
+
+# Preview first without writing:
+npx tsx node_modules/@decocms/start/scripts/migrate.ts --source /path/to/fresh-site --dry-run --verbose
+```
+
+The script runs 7 phases automatically:
+
+1. **Analyze** — scan source, detect Preact/Fresh/Deco patterns
+2. **Scaffold** — generate `vite.config.ts`, `wrangler.jsonc`, routes, `setup.ts`, worker entry
+3. **Transform** — rewrite imports (70+ rules), JSX attrs, Fresh APIs, Deno-isms, Tailwind v3→v4
+4. **Cleanup** — delete `islands/`, old routes, `deno.json`, move `static/` → `public/`
+5. **Report** — generate `MIGRATION_REPORT.md` with manual review items
+6. **Verify** — 18+ smoke tests (zero old imports, scaffolded files exist)
+7. **Bootstrap** — `npm install`, generate CMS blocks, generate routes
+
+Your existing `src/sections/`, `src/components/`, and `.deco/blocks/` work as-is. The script gets you to "builds clean with zero old imports" — manual work starts at platform hooks (`useCart`) and runtime tuning.
+
+### Agent Skills
+
+Skills live in [`.agents/skills/`](.agents/skills/) and provide deep context to AI coding tools:
+
+| Skill | What it covers |
+|-------|---------------|
+| `deco-to-tanstack-migration` | Full 12-phase migration playbook with 22 reference docs and 6 templates |
+| `deco-migrate-script` | How the automated `scripts/migrate.ts` works, how to extend it |
+
 ## Peer Dependencies
 
 - `@tanstack/react-start` >= 1.0.0

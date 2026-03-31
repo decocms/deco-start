@@ -1,13 +1,9 @@
----
-name: deco-tanstack-navigation
-description: "Complete guide for migrating Fresh/Deno navigation to TanStack Router in Deco storefronts. Covers: replacing <a href> with <Link>, prefetch strategies for instant navigation, type-safe params, activeProps for menus, search state as URL source of truth, SSR-first SEO architecture, loaderDeps for reactive search params, form submissions via server actions, and programmatic preloading. Use when porting any Deco site from Fresh to TanStack Start."
----
 
 # Deco TanStack Navigation Migration
 
 Complete playbook for replacing Fresh/Deno navigation with TanStack Router in Deco storefronts. Goes beyond simple `<a>` to `<Link>` — covers the full power of the router to build sites that feel like native apps while keeping SSR-first SEO.
 
-## When to Use This Skill
+## When to Use This Reference
 
 - Migrating a Fresh/Deno storefront to TanStack Start
 - Links cause full page reloads instead of SPA transitions
@@ -668,14 +664,3 @@ rg '<form[^>]*action=' src/ --glob '*.tsx' | rg -v 'onSubmit'
 | No prefetch | `preload="intent"` | Data ready before click |
 | `req.url` in loader | `loaderDeps + deps.search` | Reactive to URL changes |
 | `router.push(url)` | `router.preloadRoute + navigate` | Preload then navigate |
-
----
-
-## Related Skills
-
-| Skill | Purpose |
-|-------|---------|
-| `deco-to-tanstack-migration` | Full migration playbook (imports, signals, framework) |
-| `deco-islands-migration` | Eliminating the islands/ directory |
-| `deco-tanstack-storefront-patterns` | Runtime patterns and fixes post-migration |
-| `deco-storefront-test-checklist` | Context-aware QA checklist generation |

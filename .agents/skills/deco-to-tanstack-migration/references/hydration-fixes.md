@@ -1,7 +1,3 @@
----
-name: deco-tanstack-hydration-fixes
-description: Fix hydration mismatches, flash-of-white, CLS from third-party scripts, scroll-to-top bugs, and React DOM warnings in Deco storefronts on TanStack Start/React/Cloudflare Workers. Use when debugging hydration errors, page flicker during navigation, blank screen on F5, layout shifts from external scripts, or React console warnings about invalid DOM properties.
----
 
 # Hydration & Navigation Fixes for Deco TanStack Storefronts
 
@@ -466,3 +462,142 @@ When investigating hydration/flash issues on a Deco TanStack storefront:
 8. **Test with F5 (hard reload)** — SPA navigation may hide issues that appear on cold load
 9. **Check scroll behavior** — navigate from shelf to PDP; verify page scrolls to top
 10. **Compare SSR HTML vs client render** — view source (`Ctrl+U`) and compare with inspected DOM to find hydration diffs
+
+---
+
+## 13. `useDevice()` Hydration Mismatch in Eager Sections
+
+### Root Cause
+
+`@decocms/start` shell-renders sections in a **separate React root** that does NOT include providers from `__root.tsx`. This means `useDevice()` — which reads from `Device.Provider` — falls back to the context default (`isMobile: true`) on the server, while the client goes through `__root.tsx` and gets whatever value the Provider has.
+
+Result: server renders mobile layout, client renders desktop layout → structural hydration mismatch.
+
+This affects ONLY **eager sections** (sections in `alwaysEager` or not wrapped in CMS `Lazy.tsx`). Deferred sections render a skeleton server-side, and the real component loads client-side AFTER hydration — no mismatch.
+
+### Which sections are affected
+
+Check `alwaysEager` in `setup.ts`:
+```typescript
+setAsyncRenderingConfig({
+  alwaysEager: [
+    "site/sections/Header/Header.tsx",
+    "site/sections/Header/NewHeader.tsx",
+    "site/sections/Footer/Footer.tsx",
+    "site/sections/Theme/Theme.tsx",
+    "site/sections/Images/Carousel.tsx",
+    "site/sections/Tipbar.tsx",
+  ],
+});
+```
+
+Any of these that call `useDevice()` and render different HTML structure based on `isMobile` will have a hydration error.
+
+`LoadingFallback` components are also server-rendered (they're the skeleton while deferred section loads). LoadingFallbacks that use `useDevice()` to change the count or structure of elements will cause hydration mismatches on the skeleton itself.
+
+### Fix Pattern A: Use `device` prop from loader (structural branches)
+
+For sections that already receive `device` from their loader (`ctx.device`), use the prop instead of the hook:
+
+```typescript
+// Before — useDevice() reads from context, missing during shell render
+function Header({ device, ...props }: Props) {
+  const { isMobile } = useDevice(); // ← wrong: context not available in shell render
+  if (isMobile) return <MobileLayout />;
+  return <DesktopLayout />;
+}
+
+// After — device prop comes from loaderData, consistent on server + client
+function Header({ device, ...props }: Props) {
+  const isMobile = device === "mobile" || device === "tablet"; // ← correct
+  if (isMobile) return <MobileLayout />;
+  return <DesktopLayout />;
+}
+```
+
+The `device` prop comes from the section loader:
+```typescript
+export async function loader(props: Props, req: Request, ctx: AppContext) {
+  return {
+    ...props,
+    device: ctx.device as "mobile" | "desktop" | "tablet",
+  };
+}
+```
+
+`ctx.device` is detected from the request `User-Agent` header server-side. TanStack Start serializes loaderData and sends it to the client, so both server and client always use the same value. No mismatch.
+
+Also fix the section's `LoadingFallback` to use `props.device` instead of `useDevice()`:
+```tsx
+// Before
+export const LoadingFallback = (props: LoadingFallbackProps & Props) => {
+  const device = useDevice();
+  const deviceProp = device.isMobile ? "mobile" : "desktop";
+  return <Header {...props} device={deviceProp} />;
+};
+
+// After
+export const LoadingFallback = (props: LoadingFallbackProps & Props) => {
+  return <Header {...props} device={props.device ?? "desktop"} />;
+};
+```
+
+### Fix Pattern B: Remove redundant JS conditionals (show/hide with CSS)
+
+When a section renders show/hide elements based on `isMobile` but the containing elements ALREADY have responsive CSS classes (`hidden lg:block`, `hidden lg:flex`, `lg:hidden`), the JS conditional is redundant and causes the mismatch. Simply remove it:
+
+```tsx
+// Before — JS conditional + CSS class (redundant, causes mismatch)
+{!isMobile && (
+  <div className="hidden lg:flex">...</div>
+)}
+
+// After — CSS alone handles responsive behavior
+<div className="hidden lg:flex">...</div>
+```
+
+This is the correct fix for Footer and similar layout sections where mobile/desktop differences are already handled by Tailwind responsive prefixes.
+
+### Fix Pattern C: CSS-only responsive sizing (LoadingFallback skeletons)
+
+For `LoadingFallback` components that use `useDevice()` to vary sizes or counts, replace JS with responsive Tailwind classes:
+
+```tsx
+// Before — causes hydration mismatch on skeleton
+function LoadingCard() {
+  const device = useDevice();
+  return (
+    <div className={`max-w-[${device.isMobile ? "160px" : "320px"}]`}>
+      <div className={`h-${device.isMobile ? "40" : "60"}`} />
+    </div>
+  );
+}
+
+// After — CSS handles responsive sizing, no JS needed
+function LoadingCard({ className }: { className?: string }) {
+  return (
+    <div className={`max-w-[160px] sm:max-w-[320px] ${className ?? ""}`}>
+      <div className="h-40 sm:h-60" />
+    </div>
+  );
+}
+
+// For count variations in LoadingFallback:
+// Before (renders 2 on mobile / 4 on desktop)
+{Array(device.isMobile ? 2 : 4).fill(0).map((_, i) => <LoadingCard key={i} />)}
+
+// After (always renders 4, CSS hides extras on mobile)
+<LoadingCard />
+<LoadingCard />
+<LoadingCard className="hidden sm:flex" />
+<LoadingCard className="hidden sm:flex" />
+```
+
+### Quick diagnosis
+
+Search for `useDevice` in eager sections to find candidates:
+```bash
+rg "useDevice" src/sections/ src/components/header/ src/components/footer/ --glob "*.tsx"
+```
+
+Any result in a component that's always-eager and renders different element types/counts based on `isMobile` needs one of the fix patterns above.
