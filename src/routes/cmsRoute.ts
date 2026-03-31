@@ -444,10 +444,13 @@ function buildHead(
     meta.push({ name: "description", content: description });
   }
 
-  // Robots
-  if (noIndex) {
-    meta.push({ name: "robots", content: "noindex, nofollow" });
-  }
+  // Robots — always emit a directive so crawlers see an explicit signal
+  meta.push({
+    name: "robots",
+    content: noIndex
+      ? "noindex, nofollow"
+      : "index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1",
+  });
 
   // Open Graph
   meta.push({ property: "og:title", content: title });
