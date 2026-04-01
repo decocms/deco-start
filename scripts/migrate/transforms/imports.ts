@@ -235,13 +235,23 @@ export function transformImports(content: string): TransformResult {
     notes.push("Split useDevice into separate import from @decocms/start/sdk/useDevice");
   }
 
-  // Rewrite dynamic imports: import("$store/...") and import("site/...")
-  const dynamicImportRe = /\bimport\(\s*(["'])(\$store\/|site\/)([^"']+)\1\s*\)/g;
-  result = result.replace(dynamicImportRe, (_match, quote, _prefix, rest) => {
-    const cleaned = rest.replace(/\.tsx?$/, "");
-    changed = true;
-    notes.push(`Rewrote dynamic import: ${_prefix}${rest} → ~/${cleaned}`);
-    return `import(${quote}~/${cleaned}${quote})`;
+  // Rewrite dynamic imports: route through rewriteSpecifier so sdk-specific
+  // rules (e.g. site/sdk/useId → react) are applied consistently.
+  const dynamicImportRe = /\bimport\(\s*(["'])([^"']+)\1\s*\)/g;
+  result = result.replace(dynamicImportRe, (_match, quote, specifier) => {
+    const quoted = `"${specifier}"`;
+    const rewritten = rewriteSpecifier(quoted);
+    if (rewritten === null) {
+      // Rule says remove — leave the dynamic import as-is (caller must fix manually)
+      return _match;
+    }
+    if (rewritten !== quoted) {
+      const newSpecifier = rewritten.slice(1, -1);
+      changed = true;
+      notes.push(`Rewrote dynamic import: ${specifier} → ${newSpecifier}`);
+      return `import(${quote}${newSpecifier}${quote})`;
+    }
+    return _match;
   });
 
   // Clean up blank lines left by removed imports (collapse multiple to one)

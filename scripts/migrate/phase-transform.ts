@@ -145,7 +145,7 @@ function fixIslandImports(ctx: MigrationContext): void {
         if (entry.name === "node_modules" || entry.name === ".git") continue;
         scanDir(path.join(dir, entry.name));
       } else if (entry.name.endsWith(".tsx") || entry.name.endsWith(".ts")) {
-        const relPath = path.relative(srcDir, path.join(dir, entry.name));
+        const relPath = path.relative(srcDir, path.join(dir, entry.name)).replace(/\\/g, "/");
         const base = entry.name.replace(/\.tsx?$/, "");
         if (!fileLookup.has(base)) fileLookup.set(base, []);
         fileLookup.get(base)!.push(relPath);

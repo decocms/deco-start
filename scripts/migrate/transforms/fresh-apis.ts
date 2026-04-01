@@ -146,8 +146,10 @@ export function transformFreshApis(content: string): TransformResult {
   // Replace <Head>...</Head> with <>...</>
   // React 19 auto-hoists <title>, <meta>, <link> tags to document <head>.
   if (result.includes("<Head>") || result.includes("<Head ")) {
+    // Handle self-closing <Head /> first so it becomes <></> (not just <>)
+    result = result.replace(/<Head\s*\/>/g, "<></>");
     result = result.replace(/<Head>/g, "<>");
-    result = result.replace(/<Head\s[^>]*>/g, "<>");
+    result = result.replace(/<Head\s[^/][^>]*>/g, "<>");
     result = result.replace(/<\/Head>/g, "</>");
     changed = true;
     notes.push("Replaced <Head> with fragment — React 19 hoists head tags automatically");

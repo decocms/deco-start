@@ -277,7 +277,7 @@ export default debounce;
 
 function generateSignalShim(): string {
   return `import { Store } from "@tanstack/store";
-import { useSyncExternalStore, useMemo } from "react";
+import { useSyncExternalStore, useMemo, useEffect } from "react";
 
 export interface Signal<T> {
   readonly store: Store<T>;
@@ -314,7 +314,7 @@ export function useSignal<T>(initialValue: T): Signal<T> {
 }
 
 export function useComputed<T>(fn: () => T): Signal<T> {
-  const sig = useMemo(() => signal(fn()), []);
+  const sig = useMemo(() => signal(fn()), [fn]);
   return sig;
 }
 
@@ -332,7 +332,7 @@ export function batch(fn: () => void): void {
 }
 
 export function useSignalEffect(fn: () => void | (() => void)): void {
-  fn();
+  useEffect(fn);
 }
 
 export type { Signal as ReadonlySignal };
