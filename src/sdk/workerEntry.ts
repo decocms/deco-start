@@ -252,6 +252,45 @@ export interface DecoWorkerEntryOptions {
    * ```
    */
   cacheVersionEnv?: string | false;
+
+  /**
+   * Security headers appended to every SSR response (HTML pages).
+   * Pass `false` to disable entirely.
+   *
+   * Default headers: X-Content-Type-Options, X-Frame-Options, Referrer-Policy,
+   * Permissions-Policy, X-XSS-Protection, HSTS, Cross-Origin-Opener-Policy.
+   *
+   * Custom entries are merged with defaults (custom values take precedence).
+   *
+   * @default DEFAULT_SECURITY_HEADERS
+   */
+  securityHeaders?: Record<string, string> | false;
+
+  /**
+   * Content Security Policy directives (report-only by default).
+   * Pass an array of directive strings which are joined with "; ".
+   * Pass `false` to omit CSP entirely.
+   *
+   * @example
+   * ```ts
+   * csp: [
+   *   "default-src 'self'",
+   *   "script-src 'self' 'unsafe-inline' https://www.googletagmanager.com",
+   *   "img-src 'self' data: https:",
+   * ]
+   * ```
+   */
+  csp?: string[] | false;
+
+  /**
+   * Automatically inject Cloudflare geo data (country, region, city)
+   * as internal cookies on every request so location matchers can read
+   * them from MatcherContext.cookies. The cookies are only visible
+   * within the Worker — they are never sent to the browser.
+   *
+   * @default true
+   */
+  autoInjectGeoCookies?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -322,6 +361,20 @@ export function injectGeoCookies(request: Request): Request {
 
 const ONE_YEAR = 31536000;
 
+/**
+ * Sensible security headers for any production storefront.
+ * CSP is intentionally not included — it's site-specific (third-party script domains).
+ */
+export const DEFAULT_SECURITY_HEADERS: Record<string, string> = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "SAMEORIGIN",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+  "X-XSS-Protection": "1; mode=block",
+  "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+  "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+};
+
 const DEFAULT_BYPASS_PATHS = ["/_server", "/_build", "/deco/", "/live/", "/.decofile"];
 
 const FINGERPRINTED_ASSET_RE = /(?:\/_build)?\/assets\/.*-[a-zA-Z0-9_-]{8,}\.\w+$/;
@@ -361,7 +414,34 @@ export function createDecoWorkerEntry(
     stripTrackingParams: shouldStripTracking = true,
     previewShell: customPreviewShell,
     cacheVersionEnv = "BUILD_HASH",
+    securityHeaders: securityHeadersOpt,
+    csp: cspOpt,
+    autoInjectGeoCookies: geoOpt = true,
   } = options;
+
+  // Build the final security headers map (merged defaults + custom + CSP)
+  const secHeaders: Record<string, string> | null = (() => {
+    if (securityHeadersOpt === false) return null;
+    const base = { ...DEFAULT_SECURITY_HEADERS };
+    if (securityHeadersOpt) {
+      for (const [k, v] of Object.entries(securityHeadersOpt)) base[k] = v;
+    }
+    if (cspOpt && cspOpt.length > 0) {
+      base["Content-Security-Policy-Report-Only"] = cspOpt.join("; ");
+    }
+    return base;
+  })();
+
+  function applySecurityHeaders(resp: Response): Response {
+    if (!secHeaders) return resp;
+    const ct = resp.headers.get("content-type") ?? "";
+    if (!ct.includes("text/html")) return resp;
+    const out = new Response(resp.body, resp);
+    for (const [k, v] of Object.entries(secHeaders)) {
+      if (!out.headers.has(k)) out.headers.set(k, v);
+    }
+    return out;
+  }
 
   const allBypassPaths = [...(bypassPaths ?? DEFAULT_BYPASS_PATHS), ...extraBypassPaths];
 
@@ -654,10 +734,15 @@ export function createDecoWorkerEntry(
       env: Record<string, unknown>,
       ctx: WorkerExecutionContext,
     ): Promise<Response> {
+      // Inject CF geo data as cookies for location matchers (before anything reads cookies)
+      if (geoOpt) {
+        request = injectGeoCookies(request);
+      }
+
       // Wrap the entire request in a RequestContext so that all code
       // in the call stack (loaders, invoke handlers, vtexFetchWithCookies)
       // can access the request and write response headers.
-      return RequestContext.run(request, async () => {
+      const response = await RequestContext.run(request, async () => {
       const url = new URL(request.url);
 
       // Admin routes (/_meta, /.decofile, /live/previews) — always handled first
@@ -885,6 +970,8 @@ export function createDecoWorkerEntry(
       storeInCache(origin);
       return dressResponse(origin, "MISS");
       }); // end RequestContext.run()
+
+      return applySecurityHeaders(response);
     },
   };
 }
