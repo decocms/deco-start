@@ -119,4 +119,89 @@ export function transform(ctx: MigrationContext): void {
   }
 
   console.log(`  Transformed ${ctx.transformedFiles.length} files`);
+
+  // Post-transform: resolve ~/islands/ imports to actual file locations.
+  // Islands are moved to src/sections/ during migration, but components
+  // import them via ~/islands/X which no longer exists. Scan src/ for
+  // the actual file and rewrite the import.
+  if (!ctx.dryRun) {
+    fixIslandImports(ctx);
+  }
+}
+
+/**
+ * Scan all transformed files for ~/islands/ imports and rewrite them
+ * to the actual path where the file was placed (sections/, components/, etc.).
+ */
+function fixIslandImports(ctx: MigrationContext): void {
+  const srcDir = path.join(ctx.sourceDir, "src");
+  if (!fs.existsSync(srcDir)) return;
+
+  // Build a lookup: filename → relative path from src/
+  const fileLookup = new Map<string, string[]>();
+  function scanDir(dir: string) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (entry.name === "node_modules" || entry.name === ".git") continue;
+        scanDir(path.join(dir, entry.name));
+      } else if (entry.name.endsWith(".tsx") || entry.name.endsWith(".ts")) {
+        const relPath = path.relative(srcDir, path.join(dir, entry.name)).replace(/\\/g, "/");
+        const base = entry.name.replace(/\.tsx?$/, "");
+        if (!fileLookup.has(base)) fileLookup.set(base, []);
+        fileLookup.get(base)!.push(relPath);
+      }
+    }
+  }
+  scanDir(srcDir);
+
+  // Scan all .ts/.tsx files in src/ for ~/islands/ imports
+  const islandImportRe = /from\s+["'](~\/islands\/([^"']+))["']/g;
+  let fixCount = 0;
+
+  function walkAndFix(dir: string) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (entry.name === "node_modules" || entry.name === ".git") continue;
+        walkAndFix(path.join(dir, entry.name));
+      } else if (entry.name.endsWith(".tsx") || entry.name.endsWith(".ts")) {
+        const filePath = path.join(dir, entry.name);
+        let content = fs.readFileSync(filePath, "utf-8");
+        let modified = false;
+
+        content = content.replace(islandImportRe, (match, fullImport, islandPath) => {
+          // islandPath = "Cart/Indicator" or "SliderJS" or "Searchbar"
+          const basename = islandPath.replace(/\.tsx?$/, "").split("/").pop()!;
+
+          // Try to find the file — prefer components/ over sections/
+          const candidates = fileLookup.get(basename) || [];
+          // Exclude islands/ paths themselves and routes/
+          const valid = candidates.filter(
+            (c) => !c.startsWith("islands/") && !c.startsWith("routes/"),
+          );
+
+          if (valid.length === 0) return match; // can't resolve, leave as-is
+
+          // Prefer components/ over sections/
+          const preferred =
+            valid.find((c) => c.startsWith("components/")) ??
+            valid.find((c) => c.startsWith("sections/")) ??
+            valid[0];
+
+          const newPath = "~/" + preferred.replace(/\.tsx?$/, "");
+          modified = true;
+          return match.replace(fullImport, newPath);
+        });
+
+        if (modified) {
+          fs.writeFileSync(filePath, content, "utf-8");
+          fixCount++;
+        }
+      }
+    }
+  }
+
+  walkAndFix(srcDir);
+  if (fixCount > 0) {
+    console.log(`  Fixed ~/islands/ imports in ${fixCount} files`);
+  }
 }

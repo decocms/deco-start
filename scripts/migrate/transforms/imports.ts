@@ -15,8 +15,8 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
   [/^"preact\/jsx-runtime"$/, null],
   [/^"preact\/compat"$/, `"react"`],
   [/^"preact"$/, `"react"`],
-  [/^"@preact\/signals-core"$/, null],
-  [/^"@preact\/signals"$/, null],
+  [/^"@preact\/signals-core"$/, `"~/sdk/signal"`],
+  [/^"@preact\/signals"$/, `"~/sdk/signal"`],
 
   // Deco framework
   [/^"@deco\/deco\/hooks"$/, `"@decocms/start/sdk/useScript"`],
@@ -32,25 +32,41 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
   [/^"apps\/website\/components\/Theme\.tsx"$/, `"~/components/ui/Theme"`],
   [/^"apps\/commerce\/types\.ts"$/, `"@decocms/apps/commerce/types"`],
 
-  // Apps — catch-all (things like apps/website/mod.ts, apps/vtex/mod.ts, etc.)
+  // Apps — VTEX (hooks, utils, actions, loaders, types)
+  [/^"apps\/vtex\/hooks\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/vtex/hooks/$1"`],
+  [/^"apps\/vtex\/utils\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/vtex/utils/$1"`],
+  [/^"apps\/vtex\/actions\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/vtex/actions/$1"`],
+  [/^"apps\/vtex\/loaders\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/vtex/loaders/$1"`],
+  [/^"apps\/vtex\/types(?:\.ts)?"$/, `"@decocms/apps/vtex/types"`],
+  // Apps — Shopify (hooks, utils, actions, loaders)
+  [/^"apps\/shopify\/hooks\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/shopify/hooks/$1"`],
+  [/^"apps\/shopify\/utils\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/shopify/utils/$1"`],
+  [/^"apps\/shopify\/actions\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/shopify/actions/$1"`],
+  [/^"apps\/shopify\/loaders\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/shopify/loaders/$1"`],
+  // Apps — commerce (types, SDK, utils)
+  [/^"apps\/commerce\/sdk\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/commerce/sdk/$1"`],
+  [/^"apps\/commerce\/utils\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/commerce/utils/$1"`],
+
+  // Apps — catch-all (things like apps/website/mod.ts, apps/analytics/mod.ts, etc.)
   [/^"apps\/([^"]+)"$/, null], // Remove — site.ts is rewritten
 
   // Deco old CDN imports
   [/^"deco\/([^"]+)"$/, null],
 
-  // Std lib — not needed in Node (Deno std lib)
+  // Std lib — redirect useful utils, remove the rest
+  [/^"std\/async\/debounce(?:\.ts)?"$/, `"~/sdk/debounce"`],
   [/^"std\/([^"]+)"$/, null],
   [/^"@std\/crypto"$/, null], // Use globalThis.crypto instead
 
   // site/sdk/* → framework equivalents (before the catch-all site/ → ~/ rule)
-  [/^"site\/sdk\/clx(?:\.tsx?)?.*"$/, `"@decocms/start/sdk/clx"`],
+  [/^"site\/sdk\/clx(?:\.tsx?)?.*"$/, `"~/sdk/clx"`],
   [/^"site\/sdk\/useId(?:\.tsx?)?.*"$/, `"react"`],
   [/^"site\/sdk\/useOffer(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useOffer"`],
   [/^"site\/sdk\/useVariantPossiblities(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useVariantPossibilities"`],
   [/^"site\/sdk\/usePlatform(?:\.tsx?)?.*"$/, null],
 
   // $store/ → ~/ (common Deno import map alias for project root)
-  [/^"\$store\/sdk\/clx(?:\.tsx?)?.*"$/, `"@decocms/start/sdk/clx"`],
+  [/^"\$store\/sdk\/clx(?:\.tsx?)?.*"$/, `"~/sdk/clx"`],
   [/^"\$store\/sdk\/useId(?:\.tsx?)?.*"$/, `"react"`],
   [/^"\$store\/sdk\/useOffer(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useOffer"`],
   [/^"\$store\/sdk\/useVariantPossiblities(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useVariantPossibilities"`],
@@ -67,8 +83,8 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
  * The key is the ending of the import path, the value is the replacement specifier.
  */
 const RELATIVE_SDK_REWRITES: Array<[RegExp, string]> = [
-  // sdk/clx → @decocms/start/sdk/clx
-  [/(?:\.\.\/)*sdk\/clx(?:\.tsx?)?$/, "@decocms/start/sdk/clx"],
+  // sdk/clx → ~/sdk/clx (scaffolded locally with default export)
+  [/(?:\.\.\/)*sdk\/clx(?:\.tsx?)?$/, "~/sdk/clx"],
   // sdk/useId → react (useId is built-in in React 19)
   [/(?:\.\.\/)*sdk\/useId(?:\.tsx?)?$/, "react"],
   // sdk/useOffer → @decocms/apps/commerce/sdk/useOffer
@@ -218,6 +234,25 @@ export function transformImports(content: string): TransformResult {
     changed = true;
     notes.push("Split useDevice into separate import from @decocms/start/sdk/useDevice");
   }
+
+  // Rewrite dynamic imports: route through rewriteSpecifier so sdk-specific
+  // rules (e.g. site/sdk/useId → react) are applied consistently.
+  const dynamicImportRe = /\bimport\(\s*(["'])([^"']+)\1\s*\)/g;
+  result = result.replace(dynamicImportRe, (_match, quote, specifier) => {
+    const quoted = `"${specifier}"`;
+    const rewritten = rewriteSpecifier(quoted);
+    if (rewritten === null) {
+      // Rule says remove — leave the dynamic import as-is (caller must fix manually)
+      return _match;
+    }
+    if (rewritten !== quoted) {
+      const newSpecifier = rewritten.slice(1, -1);
+      changed = true;
+      notes.push(`Rewrote dynamic import: ${specifier} → ${newSpecifier}`);
+      return `import(${quote}${newSpecifier}${quote})`;
+    }
+    return _match;
+  });
 
   // Clean up blank lines left by removed imports (collapse multiple to one)
   result = result.replace(/\n{3,}/g, "\n\n");
