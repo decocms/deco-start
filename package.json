@@ -40,6 +40,7 @@
     "./sdk/mergeCacheControl": "./src/sdk/mergeCacheControl.ts",
     "./sdk/requestContext": "./src/sdk/requestContext.ts",
     "./sdk/createInvoke": "./src/sdk/createInvoke.ts",
+    "./sdk/router": "./src/sdk/router.ts",
     "./matchers/posthog": "./src/matchers/posthog.ts",
     "./apps/autoconfig": "./src/apps/autoconfig.ts",
     "./sdk/setupApps": "./src/sdk/setupApps.ts",
