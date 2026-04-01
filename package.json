@@ -46,6 +46,7 @@
     "./sdk/setupApps": "./src/sdk/setupApps.ts",
     "./matchers/builtins": "./src/matchers/builtins.ts",
     "./types/widgets": "./src/types/widgets.ts",
+    "./setup": "./src/setup.ts",
     "./routes": "./src/routes/index.ts",
     "./scripts/generate-blocks": "./scripts/generate-blocks.ts",
     "./scripts/generate-schema": "./scripts/generate-schema.ts",
