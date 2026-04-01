@@ -25,6 +25,7 @@
     "./sdk/invoke": "./src/sdk/invoke.ts",
     "./sdk/instrumentedFetch": "./src/sdk/instrumentedFetch.ts",
     "./sdk/workerEntry": "./src/sdk/workerEntry.ts",
+    "./sdk/abTesting": "./src/sdk/abTesting.ts",
     "./sdk/redirects": "./src/sdk/redirects.ts",
     "./sdk/sitemap": "./src/sdk/sitemap.ts",
     "./sdk/useDevice": "./src/sdk/useDevice.ts",
