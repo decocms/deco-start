@@ -32,7 +32,22 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
   [/^"apps\/website\/components\/Theme\.tsx"$/, `"~/components/ui/Theme"`],
   [/^"apps\/commerce\/types\.ts"$/, `"@decocms/apps/commerce/types"`],
 
-  // Apps — catch-all (things like apps/website/mod.ts, apps/vtex/mod.ts, etc.)
+  // Apps — VTEX (hooks, utils, actions, loaders, types)
+  [/^"apps\/vtex\/hooks\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/vtex/hooks/$1"`],
+  [/^"apps\/vtex\/utils\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/vtex/utils/$1"`],
+  [/^"apps\/vtex\/actions\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/vtex/actions/$1"`],
+  [/^"apps\/vtex\/loaders\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/vtex/loaders/$1"`],
+  [/^"apps\/vtex\/types(?:\.ts)?"$/, `"@decocms/apps/vtex/types"`],
+  // Apps — Shopify (hooks, utils, actions, loaders)
+  [/^"apps\/shopify\/hooks\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/shopify/hooks/$1"`],
+  [/^"apps\/shopify\/utils\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/shopify/utils/$1"`],
+  [/^"apps\/shopify\/actions\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/shopify/actions/$1"`],
+  [/^"apps\/shopify\/loaders\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/shopify/loaders/$1"`],
+  // Apps — commerce (types, SDK, utils)
+  [/^"apps\/commerce\/sdk\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/commerce/sdk/$1"`],
+  [/^"apps\/commerce\/utils\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/commerce/utils/$1"`],
+
+  // Apps — catch-all (things like apps/website/mod.ts, apps/analytics/mod.ts, etc.)
   [/^"apps\/([^"]+)"$/, null], // Remove — site.ts is rewritten
 
   // Deco old CDN imports
