@@ -82,6 +82,7 @@
     "access": "public"
   },
   "peerDependencies": {
+    "@tanstack/react-query": ">=5.0.0",
     "@tanstack/react-start": ">=1.0.0",
     "@tanstack/store": ">=0.7.0",
     "react": "^19.0.0",
@@ -92,6 +93,7 @@
     "@biomejs/biome": "^2.4.6",
     "@semantic-release/exec": "^7.1.0",
     "@semantic-release/git": "^10.0.1",
+    "@tanstack/react-query": "^5.96.0",
     "@tanstack/store": "^0.9.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
