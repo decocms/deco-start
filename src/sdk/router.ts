@@ -45,8 +45,22 @@ export const decoStringifySearch: SearchSerializer = (search) => {
 export interface CreateDecoRouterOptions {
 	routeTree: AnyRoute;
 	scrollRestoration?: boolean;
-	defaultPreload?: "intent" | "viewport" | false;
+	defaultPreload?: "intent" | "viewport" | "render" | false;
 	trailingSlash?: TrailingSlashOption;
+	/**
+	 * Router context — passed to all route loaders/components via routeContext.
+	 * Commonly used for { queryClient } per TanStack Query integration docs.
+	 */
+	context?: Record<string, unknown>;
+	/**
+	 * Non-DOM provider component to wrap the entire router.
+	 * Per TanStack docs, only non-DOM-rendering components (providers) should
+	 * be used — anything else causes hydration errors.
+	 *
+	 * Example: QueryClientProvider wrapping
+	 *   Wrap: ({ children }) => <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+	 */
+	Wrap?: (props: { children: any }) => any;
 }
 
 /**
@@ -61,6 +75,8 @@ export function createDecoRouter(options: CreateDecoRouterOptions) {
 		scrollRestoration = true,
 		defaultPreload = "intent",
 		trailingSlash,
+		context,
+		Wrap,
 	} = options;
 
 	return createTanStackRouter({
@@ -68,6 +84,8 @@ export function createDecoRouter(options: CreateDecoRouterOptions) {
 		scrollRestoration,
 		defaultPreload,
 		trailingSlash,
+		context: context as any,
+		Wrap,
 		parseSearch: decoParseSearch,
 		stringifySearch: decoStringifySearch,
 	});

@@ -1,6 +1,5 @@
-import { useState, useEffect, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { HeadContent, Scripts, ScriptOnce } from "@tanstack/react-router";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { LiveControls } from "./LiveControls";
 import { ANALYTICS_SCRIPT } from "../sdk/analytics";
 import { NavigationProgress } from "./NavigationProgress";
@@ -48,25 +47,31 @@ export interface DecoRootLayoutProps {
 	account?: string;
 	/** CSS class for <body>. Default: "bg-base-200 text-base-content" */
 	bodyClassName?: string;
-	/** QueryClient default staleTime in ms. Default: 30_000 */
-	staleTime?: number;
 	/** Delay in ms before firing deco:ready event. Default: 500 */
 	decoReadyDelay?: number;
-	/** Extra content rendered inside <body> after the main outlet (e.g. Toast, custom analytics). */
+	/**
+	 * Extra content rendered inside <body> after the main outlet
+	 * (e.g. Toast, custom analytics components).
+	 */
 	children?: ReactNode;
 }
 
 /**
- * Standard Deco root layout. Provides:
+ * Standard Deco root layout component for use in __root.tsx.
+ *
+ * Provides:
  * - NavigationProgress (loading bar during SPA nav)
  * - StableOutlet (height-preserved content area)
- * - QueryClientProvider
  * - DECO.events bootstrap (via ScriptOnce — runs before hydration, once)
  * - LiveControls for admin
- * - Analytics script
+ * - Analytics script (via ScriptOnce)
  * - deco:ready hydration signal
  *
- * Sites that need full control should compose from the individual pieces instead.
+ * QueryClientProvider should be configured via createDecoRouter's `Wrap` option
+ * (per TanStack docs — non-DOM providers go on the router, not in components).
+ *
+ * Sites that need full control should compose from the individual exported
+ * pieces (NavigationProgress, StableOutlet, etc.) instead.
  */
 export function DecoRootLayout({
 	lang = "en",
@@ -74,19 +79,9 @@ export function DecoRootLayout({
 	siteName,
 	account,
 	bodyClassName = "bg-base-200 text-base-content",
-	staleTime = 30_000,
 	decoReadyDelay = 500,
 	children,
 }: DecoRootLayoutProps) {
-	const [queryClient] = useState(
-		() =>
-			new QueryClient({
-				defaultOptions: {
-					queries: { staleTime },
-				},
-			}),
-	);
-
 	useEffect(() => {
 		const id = setTimeout(() => {
 			window.__deco_ready = true;
@@ -102,12 +97,10 @@ export function DecoRootLayout({
 			</head>
 			<body className={bodyClassName} suppressHydrationWarning>
 				<ScriptOnce children={buildDecoEventsBootstrap(account)} />
-				<QueryClientProvider client={queryClient}>
-					<NavigationProgress />
-					<main>
-						<StableOutlet />
-					</main>
-				</QueryClientProvider>
+				<NavigationProgress />
+				<main>
+					<StableOutlet />
+				</main>
 				{children}
 				<LiveControls site={siteName} />
 				<ScriptOnce children={ANALYTICS_SCRIPT} />
