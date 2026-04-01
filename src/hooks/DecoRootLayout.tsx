@@ -1,5 +1,5 @@
 import { useState, useEffect, type ReactNode } from "react";
-import { HeadContent, Scripts } from "@tanstack/react-router";
+import { HeadContent, Scripts, ScriptOnce } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { LiveControls } from "./LiveControls";
 import { ANALYTICS_SCRIPT } from "../sdk/analytics";
@@ -12,11 +12,6 @@ declare global {
 	}
 }
 
-/**
- * Build the DECO.events bootstrap script.
- * Initializes the global event bus, dataLayer, and __RUNTIME__ before
- * any analytics script runs.
- */
 function buildDecoEventsBootstrap(account?: string): string {
 	const accountJson = JSON.stringify(account ?? "");
 	return `
@@ -66,7 +61,7 @@ export interface DecoRootLayoutProps {
  * - NavigationProgress (loading bar during SPA nav)
  * - StableOutlet (height-preserved content area)
  * - QueryClientProvider
- * - DECO.events bootstrap
+ * - DECO.events bootstrap (via ScriptOnce — runs before hydration, once)
  * - LiveControls for admin
  * - Analytics script
  * - deco:ready hydration signal
@@ -106,11 +101,7 @@ export function DecoRootLayout({
 				<HeadContent />
 			</head>
 			<body className={bodyClassName} suppressHydrationWarning>
-				<script
-					dangerouslySetInnerHTML={{
-						__html: buildDecoEventsBootstrap(account),
-					}}
-				/>
+				<ScriptOnce children={buildDecoEventsBootstrap(account)} />
 				<QueryClientProvider client={queryClient}>
 					<NavigationProgress />
 					<main>
@@ -119,10 +110,7 @@ export function DecoRootLayout({
 				</QueryClientProvider>
 				{children}
 				<LiveControls site={siteName} />
-				<script
-					type="module"
-					dangerouslySetInnerHTML={{ __html: ANALYTICS_SCRIPT }}
-				/>
+				<ScriptOnce children={ANALYTICS_SCRIPT} />
 				<Scripts />
 			</body>
 		</html>
