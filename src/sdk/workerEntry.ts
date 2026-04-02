@@ -256,6 +256,7 @@ export interface DecoWorkerEntryOptions {
    * ```
    */
   cacheVersionEnv?: string | false;
+
 }
 
 // ---------------------------------------------------------------------------
@@ -652,7 +653,7 @@ export function createDecoWorkerEntry(
 
   // -- Main fetch handler -----------------------------------------------------
 
-  return {
+  const handler = {
     async fetch(
       request: Request,
       env: Record<string, unknown>,
@@ -672,6 +673,8 @@ export function createDecoWorkerEntry(
       });
     },
   };
+
+  return handler;
 
   async function handleRequest(
     request: Request,
