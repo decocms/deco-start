@@ -173,14 +173,14 @@ const checks: Check[] = [
     },
   },
   {
-    name: "No site/ imports (should be ~/)",
+    name: "No site/ or $store/ imports (should be ~/)",
     severity: "warning",
     fn: (ctx) => {
       const srcDir = path.join(ctx.sourceDir, "src");
       if (!fs.existsSync(srcDir)) return true;
-      const bad = findFilesWithPattern(srcDir, /from\s+["']site\//);
+      const bad = findFilesWithPattern(srcDir, /from\s+["'](site\/|\$store\/)/);
       if (bad.length > 0) {
-        console.log(`    Still has site/ imports: ${bad.join(", ")}`);
+        console.log(`    Still has site/ or $store/ imports: ${bad.join(", ")}`);
         return false;
       }
       return true;
@@ -261,14 +261,14 @@ const checks: Check[] = [
     },
   },
   {
-    name: "No dead cache/cacheKey/loader exports",
+    name: "No dead cache/cacheKey exports",
     severity: "warning",
     fn: (ctx) => {
       const srcDir = path.join(ctx.sourceDir, "src");
       if (!fs.existsSync(srcDir)) return true;
-      const bad = findFilesWithPattern(srcDir, /^export\s+const\s+(?:cache|cacheKey|loader)\s*=/m);
+      const bad = findFilesWithPattern(srcDir, /^export\s+const\s+(?:cache|cacheKey)\s*=/m);
       if (bad.length > 0) {
-        console.log(`    Dead exports found (old cache/loader system): ${bad.join(", ")}`);
+        console.log(`    Dead exports found (old cache system): ${bad.join(", ")}`);
         return false;
       }
       return true;

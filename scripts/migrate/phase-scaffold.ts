@@ -65,6 +65,15 @@ export function scaffold(ctx: MigrationContext): void {
   // Styles
   writeFile(ctx, "src/styles/app.css", generateAppCss(ctx));
 
+  // SDK — signal shim (replaces @preact/signals)
+  writeFile(ctx, "src/sdk/signal.ts", generateSignalShim());
+
+  // SDK — clx (class name joiner, with default export for compat)
+  writeFile(ctx, "src/sdk/clx.ts", generateClxShim());
+
+  // SDK — debounce (replaces Deno std/async/debounce)
+  writeFile(ctx, "src/sdk/debounce.ts", generateDebounceShim());
+
   // Apps
   writeFile(ctx, "src/apps/site.ts", generateSiteApp(ctx));
 
@@ -221,6 +230,112 @@ vite.config.timestamp_*
 # IDE
 .vscode/
 .idea/
+`;
+}
+
+function generateClxShim(): string {
+  return `/** Filter out nullable values, join and minify class names */
+export const clx = (...args: (string | null | undefined | false)[]) =>
+  args.filter(Boolean).join(" ").replace(/\\s\\s+/g, " ");
+
+/** Alias for compat — some files import as clsx */
+export const clsx = clx;
+
+export default clx;
+`;
+}
+
+function generateDebounceShim(): string {
+  return `/** Debounce a function call — drop-in replacement for Deno std/async/debounce */
+export function debounce<T extends (...args: any[]) => any>(
+  fn: T,
+  delay = 250,
+): T & { clear(): void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const debounced = ((...args: Parameters<T>) => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = undefined;
+      fn(...args);
+    }, delay);
+  }) as T & { clear(): void };
+
+  debounced.clear = () => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+
+  return debounced;
+}
+
+export default debounce;
+`;
+}
+
+function generateSignalShim(): string {
+  return `import { Store } from "@tanstack/store";
+import { useSyncExternalStore, useMemo, useEffect } from "react";
+
+export interface Signal<T> {
+  readonly store: Store<T>;
+  value: T;
+  peek(): T;
+  subscribe(fn: () => void): () => void;
+}
+
+export function signal<T>(initialValue: T): Signal<T> {
+  const store = new Store<T>(initialValue);
+  return {
+    store,
+    get value() { return store.state; },
+    set value(v: T) { store.setState(() => v); },
+    peek() { return store.state; },
+    subscribe(fn) {
+      // @tanstack/store@0.9.x returns { unsubscribe: Function },
+      // NOT a plain function. React's useSyncExternalStore cleanup
+      // expects a bare function — unwrap it.
+      const sub = store.subscribe(() => fn());
+      return typeof sub === "function" ? sub : sub.unsubscribe;
+    },
+  };
+}
+
+export function useSignal<T>(initialValue: T): Signal<T> {
+  const sig = useMemo(() => signal(initialValue), []);
+  useSyncExternalStore(
+    (cb) => sig.subscribe(cb),
+    () => sig.value,
+    () => sig.value,
+  );
+  return sig;
+}
+
+export function useComputed<T>(fn: () => T): Signal<T> {
+  const sig = useMemo(() => signal(fn()), [fn]);
+  return sig;
+}
+
+export function computed<T>(fn: () => T): Signal<T> {
+  return signal(fn());
+}
+
+export function effect(fn: () => void | (() => void)): () => void {
+  const cleanup = fn();
+  return typeof cleanup === "function" ? cleanup : () => {};
+}
+
+export function batch(fn: () => void): void {
+  fn();
+}
+
+export function useSignalEffect(fn: () => void | (() => void)): void {
+  useEffect(fn);
+}
+
+export type { Signal as ReadonlySignal };
 `;
 }
 

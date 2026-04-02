@@ -34,7 +34,7 @@ ${layoutSections.map((s) => `  "${s}",`).join("\n")}
   return `/**
  * Site setup — registers all sections, loaders and matchers with the CMS.
  *
- * This file is imported by router.tsx at startup.
+ * This file is imported by router.tsx and worker-entry.ts at startup.
  * It uses import.meta.glob to lazily discover all section components.
  */
 import { blocks as generatedBlocks } from "./server/cms/blocks.gen";
@@ -49,7 +49,8 @@ import { autoconfigApps } from "@decocms/start/apps/autoconfig";
 // The Vite plugin intercepts the blocks.gen import and injects .deco/blocks/ data.
 if (typeof document === "undefined") {
   setBlocks(generatedBlocks);
-  // Auto-configure apps (Resend, etc.) from CMS blocks
+  // Auto-configure apps from CMS blocks — registers invoke handlers,
+  // app state, and middleware (cookie forwarding, etc.)
   autoconfigApps(generatedBlocks);
 }
 

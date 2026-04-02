@@ -143,12 +143,17 @@ export function transformFreshApis(content: string): TransformResult {
     );
   }
 
-  // Remove <Head> wrapper — its children should go into route head() config
-  // This is complex to do with regex, so we flag it
+  // Replace <Head>...</Head> with <>...</>
+  // React 19 auto-hoists <title>, <meta>, <link> tags to document <head>.
   if (result.includes("<Head>") || result.includes("<Head ")) {
-    notes.push(
-      "MANUAL: <Head> component found — move contents to route head() config",
-    );
+    // Handle self-closing <Head ... /> first so it becomes <></> (not just <>)
+    result = result.replace(/<Head\s[^>]*\/>/g, "<></>");
+    result = result.replace(/<Head\s*\/>/g, "<></>");
+    result = result.replace(/<Head>/g, "<>");
+    result = result.replace(/<Head\s[^>]*>/g, "<>");
+    result = result.replace(/<\/Head>/g, "</>");
+    changed = true;
+    notes.push("Replaced <Head> with fragment — React 19 hoists head tags automatically");
   }
 
   // scriptAsDataURI → useScript with dangerouslySetInnerHTML

@@ -1,9 +1,12 @@
 {
   "name": "@decocms/start",
-  "version": "0.40.0",
+  "version": "0.43.0",
   "type": "module",
   "description": "Deco framework for TanStack Start - CMS bridge, admin protocol, hooks, schema generation",
   "main": "./src/index.ts",
+  "bin": {
+    "deco-migrate": "./scripts/migrate.ts"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./cms": "./src/cms/index.ts",
@@ -24,6 +27,7 @@
     "./sdk/crypto": "./src/sdk/crypto.ts",
     "./sdk/invoke": "./src/sdk/invoke.ts",
     "./sdk/instrumentedFetch": "./src/sdk/instrumentedFetch.ts",
+    "./sdk/otel": "./src/sdk/otel.ts",
     "./sdk/workerEntry": "./src/sdk/workerEntry.ts",
     "./sdk/abTesting": "./src/sdk/abTesting.ts",
     "./sdk/redirects": "./src/sdk/redirects.ts",
@@ -83,7 +87,12 @@
     "registry": "https://registry.npmjs.org",
     "access": "public"
   },
+  "dependencies": {
+    "tsx": "^4.19.0"
+  },
   "peerDependencies": {
+    "@microlabs/otel-cf-workers": ">=1.0.0-rc.0",
+    "@opentelemetry/api": ">=1.9.0",
     "@tanstack/react-query": ">=5.0.0",
     "@tanstack/react-start": ">=1.0.0",
     "@tanstack/store": ">=0.7.0",
@@ -91,8 +100,18 @@
     "react-dom": "^19.0.0",
     "vite": ">=6.0.0 || >=7.0.0 || >=8.0.0"
   },
+  "peerDependenciesMeta": {
+    "@microlabs/otel-cf-workers": {
+      "optional": true
+    },
+    "@opentelemetry/api": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.4.6",
+    "@microlabs/otel-cf-workers": "^1.0.0-rc.52",
+    "@opentelemetry/api": "^1.9.1",
     "@semantic-release/exec": "^7.1.0",
     "@semantic-release/git": "^10.0.1",
     "@tanstack/react-query": "^5.96.0",
