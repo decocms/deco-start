@@ -674,37 +674,7 @@ export function createDecoWorkerEntry(
     },
   };
 
-  // Auto-detect OTel from env on first request (mirrors deco-cx/deco behavior).
-  // When OTEL_EXPORTER_OTLP_ENDPOINT is set, dynamically import ./otel and
-  // wrap the handler with @microlabs/otel-cf-workers instrumentation.
-  let otelResolved: { fetch: typeof handler.fetch } | null = null;
-  let otelChecked = false;
-
-  return {
-    async fetch(
-      request: Request,
-      env: Record<string, unknown>,
-      ctx: WorkerExecutionContext,
-    ): Promise<Response> {
-      if (!otelChecked) {
-        otelChecked = true;
-        if (env.OTEL_EXPORTER_OTLP_ENDPOINT) {
-          try {
-            const { instrumentWorker } = await import("./otel");
-            const serviceName =
-              (env.DECO_SITE_NAME as string) || (env.ENV_SITE_NAME as string) || "deco-site";
-            otelResolved = instrumentWorker(handler, { serviceName });
-          } catch {
-            // @microlabs/otel-cf-workers not installed — continue without instrumentation
-          }
-        }
-      }
-      if (otelResolved) {
-        return otelResolved.fetch(request, env, ctx);
-      }
-      return handler.fetch(request, env, ctx);
-    },
-  };
+  return handler;
 
   async function handleRequest(
     request: Request,
