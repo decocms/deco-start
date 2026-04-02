@@ -93,9 +93,12 @@ export function instrumentWorker(
 function parseHeaders(str?: string): Record<string, string> {
   if (!str) return {};
   return Object.fromEntries(
-    str.split(",").map((kv) => {
-      const [k, ...v] = kv.split("=");
-      return [k.trim(), v.join("=").trim()];
-    }),
+    str
+      .split(",")
+      .map((kv) => {
+        const [k, ...v] = kv.split("=");
+        return [k.trim(), v.join("=").trim()] as const;
+      })
+      .filter(([k]) => k.length > 0),
   );
 }
