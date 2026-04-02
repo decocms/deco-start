@@ -17,6 +17,7 @@
     "./sdk/useScript": "./src/sdk/useScript.ts",
     "./sdk/signal": "./src/sdk/signal.ts",
     "./sdk/clx": "./src/sdk/clx.ts",
+    "./sdk/retry": "./src/sdk/retry.ts",
     "./sdk/useId": "./src/sdk/useId.ts",
     "./sdk/cookie": "./src/sdk/cookie.ts",
     "./sdk/cookiePassthrough": "./src/sdk/cookiePassthrough.ts",

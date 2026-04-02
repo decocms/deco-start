@@ -9,3 +9,5 @@ export { SectionErrorBoundary } from "./SectionErrorFallback";
 export { NavigationProgress } from "./NavigationProgress";
 export { StableOutlet } from "./StableOutlet";
 export { DecoRootLayout, type DecoRootLayoutProps } from "./DecoRootLayout";
+export { default as RenderSection } from "./RenderSection";
+export { default as PreviewProviders } from "./PreviewProviders";
