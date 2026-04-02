@@ -77,7 +77,7 @@ export function applySectionConventions(input: ApplySectionConventionsInput): vo
   }
 
   if (eagerSections.length > 0) {
-    const existing = getAsyncRenderingConfig();
+    const existing = getAsyncRenderingConfig() ?? {};
     setAsyncRenderingConfig({
       ...existing,
       alwaysEager: [...(existing.alwaysEager ?? []), ...eagerSections],
