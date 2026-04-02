@@ -70,3 +70,4 @@ export {
   runSectionLoaders,
   runSingleSectionLoader,
 } from "./sectionLoaders";
+export { compose, withDevice, withMobile, withSearchParam } from "./sectionMixins";
