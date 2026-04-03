@@ -504,12 +504,21 @@ async function internalResolve(value: unknown, rctx: ResolveContext): Promise<un
   // Unknown type — resolve props but preserve __resolveType (it's a section)
   const { __resolveType: _, ...rest } = obj;
 
+  if (resolveType.includes("eader")) {
+    console.log(`[HEADER-RESOLVE] resolveType="${resolveType}" restKeys=[${Object.keys(rest).join(",")}] depth=${rctx.depth}`);
+  }
+
   // onBeforeResolveProps: let sections transform raw props before resolution.
   // This runs with unresolved props (containing __resolveType refs) so sections
   // can extract metadata that would be lost after resolution (e.g., collection IDs).
   const propsToResolve = await applyOnBeforeResolveProps(resolveType, rest);
 
   const resolvedRest = await resolveProps(propsToResolve, childCtx);
+
+  if (resolveType.includes("eader")) {
+    console.log(`[HEADER-RESOLVE] DONE resolvedKeys=[${Object.keys(resolvedRest).join(",")}]`);
+  }
+
   return { __resolveType: resolveType, ...resolvedRest };
 }
 
