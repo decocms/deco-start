@@ -967,6 +967,11 @@ function resolveSectionShallow(
     const rt = current.__resolveType as string | undefined;
     if (!rt) return null;
 
+    // Debug: trace section resolution for Header
+    if (String(rt).includes("eader") || (depth > 0 && String(current.__resolveType).includes("eader"))) {
+      console.log(`[SECTION-RESOLVE] depth=${depth} rt="${rt}" currentKeys=${Object.keys(current).length} getSection=${!!getSection(rt)} inBlocks=${!!loadBlocks()[rt]}`);
+    }
+
     if (SKIP_RESOLVE_TYPES.has(rt)) return null;
 
     // Lazy wrapper — unwrap to the inner section
@@ -1020,6 +1025,9 @@ function resolveSectionShallow(
     // Check if this is a registered section — we found it
     if (getSection(rt)) {
       const { __resolveType: _, ...rawProps } = current;
+      if (rt.includes("eader")) {
+        console.log(`[SECTION-RESOLVE] FOUND section "${rt}" rawProps keys: [${Object.keys(rawProps).join(", ")}]`);
+      }
       return {
         component: rt,
         key: rt,
