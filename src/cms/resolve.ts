@@ -504,21 +504,12 @@ async function internalResolve(value: unknown, rctx: ResolveContext): Promise<un
   // Unknown type — resolve props but preserve __resolveType (it's a section)
   const { __resolveType: _, ...rest } = obj;
 
-  if (resolveType.includes("eader")) {
-    console.log(`[HEADER-RESOLVE] resolveType="${resolveType}" restKeys=[${Object.keys(rest).join(",")}] depth=${rctx.depth}`);
-  }
-
   // onBeforeResolveProps: let sections transform raw props before resolution.
   // This runs with unresolved props (containing __resolveType refs) so sections
   // can extract metadata that would be lost after resolution (e.g., collection IDs).
   const propsToResolve = await applyOnBeforeResolveProps(resolveType, rest);
 
   const resolvedRest = await resolveProps(propsToResolve, childCtx);
-
-  if (resolveType.includes("eader")) {
-    console.log(`[HEADER-RESOLVE] DONE resolvedKeys=[${Object.keys(resolvedRest).join(",")}]`);
-  }
-
   return { __resolveType: resolveType, ...resolvedRest };
 }
 
@@ -627,17 +618,7 @@ async function resolveRawSection(
   section: unknown,
   rctx: ResolveContext,
 ): Promise<ResolvedSection[]> {
-  const sectionRt = (section as any)?.__resolveType;
-  if (String(sectionRt).includes("eader")) {
-    console.log(`[RAW-SECTION-ENTER] sectionRt="${sectionRt}"`);
-  }
-
   const resolved = await internalResolve(section, rctx);
-
-  if (String(sectionRt).includes("eader")) {
-    console.log(`[RAW-SECTION-RESOLVED] resolved type=${typeof resolved} isObj=${resolved && typeof resolved === 'object'} keys=${resolved && typeof resolved === 'object' ? Object.keys(resolved as any).join(',') : 'N/A'}`);
-  }
-
   if (!resolved || typeof resolved !== "object") return [];
 
   const items = Array.isArray(resolved) ? resolved : [resolved];
@@ -649,11 +630,6 @@ async function resolveRawSection(
     if (!obj.__resolveType) continue;
 
     const resolveType = obj.__resolveType as string;
-
-    if (resolveType.includes("eader")) {
-      console.log(`[RAW-SECTION] resolveType="${resolveType}" objKeys=[${Object.keys(obj).join(",")}]`);
-    }
-
     const sectionLoader = getSection(resolveType);
     if (!sectionLoader) {
       console.warn(`[CMS] No component registered for: ${resolveType}`);
@@ -662,11 +638,6 @@ async function resolveRawSection(
 
     const { __resolveType: _, ...rawProps } = obj;
     const props = normalizeNestedSections(rawProps) as Record<string, unknown>;
-
-    if (resolveType.includes("eader")) {
-      console.log(`[RAW-SECTION] rawPropKeys=[${Object.keys(rawProps).join(",")}] normalizedPropKeys=[${Object.keys(props).join(",")}]`);
-    }
-
     results.push({
       component: resolveType,
       props,
@@ -996,11 +967,6 @@ function resolveSectionShallow(
     const rt = current.__resolveType as string | undefined;
     if (!rt) return null;
 
-    // Debug: trace section resolution for Header
-    if (String(rt).includes("eader") || (depth > 0 && String(current.__resolveType).includes("eader"))) {
-      console.log(`[SECTION-RESOLVE] depth=${depth} rt="${rt}" currentKeys=${Object.keys(current).length} getSection=${!!getSection(rt)} inBlocks=${!!loadBlocks()[rt]}`);
-    }
-
     if (SKIP_RESOLVE_TYPES.has(rt)) return null;
 
     // Lazy wrapper — unwrap to the inner section
@@ -1054,9 +1020,6 @@ function resolveSectionShallow(
     // Check if this is a registered section — we found it
     if (getSection(rt)) {
       const { __resolveType: _, ...rawProps } = current;
-      if (rt.includes("eader")) {
-        console.log(`[SECTION-RESOLVE] FOUND section "${rt}" rawProps keys: [${Object.keys(rawProps).join(", ")}]`);
-      }
       return {
         component: rt,
         key: rt,

@@ -99,20 +99,7 @@ async function loadCmsPageInternal(fullPath: string) {
   const request = new Request(urlWithSearch, {
     headers: originRequest.headers,
   });
-
-  for (const s of page.resolvedSections) {
-    if (s.component?.includes("eader")) {
-      console.log(`[CMS-ROUTE] BEFORE loaders: "${s.component}" propKeys=[${Object.keys(s.props || {}).join(",")}]`);
-    }
-  }
-
   const enrichedSections = await runSectionLoaders(page.resolvedSections, request);
-
-  for (const s of enrichedSections) {
-    if (s.component?.includes("eader")) {
-      console.log(`[CMS-ROUTE] AFTER loaders: "${s.component}" propKeys=[${Object.keys(s.props || {}).join(",")}]`);
-    }
-  }
 
   // Pre-import eager section modules so their default exports are cached
   // in resolvedComponents. This ensures SSR renders with direct component
@@ -175,20 +162,7 @@ export const loadCmsHomePage = createServerFn({ method: "GET" }).handler(async (
   };
   const page = await resolveDecoPage("/", matcherCtx);
   if (!page) return null;
-
-  for (const s of page.resolvedSections) {
-    if (s.component?.includes("eader")) {
-      console.log(`[HOME-ROUTE] BEFORE loaders: "${s.component}" propKeys=[${Object.keys(s.props || {}).join(",")}] propsSize=${JSON.stringify(s.props || {}).length}`);
-    }
-  }
-
   const enrichedSections = await runSectionLoaders(page.resolvedSections, request);
-
-  for (const s of enrichedSections) {
-    if (s.component?.includes("eader")) {
-      console.log(`[HOME-ROUTE] AFTER loaders: "${s.component}" propKeys=[${Object.keys(s.props || {}).join(",")}]`);
-    }
-  }
 
   const eagerKeys = enrichedSections.map((s) => s.component);
   await preloadSectionComponents(eagerKeys);
