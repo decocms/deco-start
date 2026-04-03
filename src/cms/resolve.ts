@@ -627,7 +627,17 @@ async function resolveRawSection(
   section: unknown,
   rctx: ResolveContext,
 ): Promise<ResolvedSection[]> {
+  const sectionRt = (section as any)?.__resolveType;
+  if (String(sectionRt).includes("eader")) {
+    console.log(`[RAW-SECTION-ENTER] sectionRt="${sectionRt}"`);
+  }
+
   const resolved = await internalResolve(section, rctx);
+
+  if (String(sectionRt).includes("eader")) {
+    console.log(`[RAW-SECTION-RESOLVED] resolved type=${typeof resolved} isObj=${resolved && typeof resolved === 'object'} keys=${resolved && typeof resolved === 'object' ? Object.keys(resolved as any).join(',') : 'N/A'}`);
+  }
+
   if (!resolved || typeof resolved !== "object") return [];
 
   const items = Array.isArray(resolved) ? resolved : [resolved];
