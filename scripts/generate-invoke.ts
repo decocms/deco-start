@@ -281,12 +281,12 @@ for (const action of actions) {
 }
 
 // Count how many actually parsed vs. stubbed
-const parsed = actions.filter((a) => a.callBody && a.importedFn).length;
+const parsed = actions.filter((a) => a.importedFn).length;
 const stubbed = actions.length - parsed;
 if (stubbed > 0) {
   console.warn(`⚠ ${stubbed} action(s) could not be parsed — generated as stubs:`);
   for (const a of actions) {
-    if (!a.callBody || !a.importedFn) console.warn(`  - ${a.name}`);
+    if (!a.importedFn) console.warn(`  - ${a.name}`);
   }
 }
 
@@ -333,25 +333,22 @@ function unwrapResult<T>(result: unknown): T {
 for (const action of actions) {
   const varName = `$${action.name}`;
 
-  if (action.callBody && action.importedFn) {
-    // Replace "input" references with "data" in the call body.
-    // The handler receives `{ data }` destructured from the validated input.
-    let body = action.callBody;
-    body = body.replace(/\binput\./g, "data.");
-    body = body.replace(/\binput\b(?!\.)/g, "data");
-
+  if (action.importedFn) {
+    // All @decocms/apps action functions take a single props object.
+    // Pass the validated `data` object directly — never destructure into
+    // positional arguments, which breaks when function signatures change.
     if (action.unwrap) {
       out += `\nconst ${varName} = createServerFn({ method: "POST" })
   .inputValidator((data: ${action.inputType}) => data)
   .handler(async ({ data }): Promise<any> => {
-    const result = await ${body};
+    const result = await ${action.importedFn}(data);
     return unwrapResult(result);
   });\n`;
     } else {
       out += `\nconst ${varName} = createServerFn({ method: "POST" })
   .inputValidator((data: ${action.inputType}) => data)
   .handler(async ({ data }): Promise<any> => {
-    return ${body};
+    return ${action.importedFn}(data);
   });\n`;
     }
   } else {

@@ -133,13 +133,15 @@ export const loadCmsPage = createServerFn({ method: "GET" })
   .inputValidator((data: unknown) => data as string)
   .handler(async (ctx) => {
     const fullPath = ctx.data;
-    const [basePath] = fullPath.split("?");
 
-    const existing = pageInflight.get(basePath);
+    // Use the full path (including query string) as the dedup key.
+    // Using basePath only caused /s?q=a and /s?q=b to share one promise,
+    // returning wrong/empty results for search and filtered PLPs.
+    const existing = pageInflight.get(fullPath);
     if (existing) return existing;
 
-    const promise = loadCmsPageInternal(fullPath).finally(() => pageInflight.delete(basePath));
-    pageInflight.set(basePath, promise);
+    const promise = loadCmsPageInternal(fullPath).finally(() => pageInflight.delete(fullPath));
+    pageInflight.set(fullPath, promise);
     return promise;
   });
 
@@ -519,6 +521,12 @@ export function cmsRouteConfig(options: CmsRouteOptions) {
   const ignoreSet = new Set(ignoreSearchParams);
 
   return {
+    // Catch-all search validation: preserve all URL search params so they
+    // reach loaderDeps. Without this, TanStack Router may strip unknown
+    // params (e.g. ?q=, filter.*, page, sort) during SPA navigation.
+    validateSearch: (search: Record<string, unknown>) =>
+      search as Record<string, string>,
+
     loaderDeps: ({ search }: { search: Record<string, string> }) => {
       const filtered = Object.fromEntries(
         Object.entries(search ?? {}).filter(([k]) => !ignoreSet.has(k)),
