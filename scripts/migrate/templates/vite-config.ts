@@ -1,6 +1,23 @@
 import type { MigrationContext } from "../types.ts";
 
 export function generateViteConfig(ctx: MigrationContext): string {
+  const isVtex = ctx.platform === "vtex";
+
+  const vtexProxy = isVtex ? `
+    // VTEX API proxy for local development
+    proxy: {
+      "/api/": {
+        target: "https://\${process.env.VTEX_ACCOUNT || "${ctx.siteName}"}.vtexcommercestable.com.br",
+        changeOrigin: true,
+        secure: true,
+      },
+      "/checkout/": {
+        target: "https://\${process.env.VTEX_ACCOUNT || "${ctx.siteName}"}.vtexcommercestable.com.br",
+        changeOrigin: true,
+        secure: true,
+      },
+    },` : "";
+
   return `import { cloudflare } from "@cloudflare/vite-plugin";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import { decoVitePlugin } from "@decocms/start/vite";
@@ -13,7 +30,7 @@ const srcDir = path.resolve(__dirname, "src");
 
 export default defineConfig({
   server: {
-    allowedHosts: [".decocdn.com"],
+    allowedHosts: [".decocdn.com"],${vtexProxy}
   },
   plugins: [
     cloudflare({ viteEnvironment: { name: "ssr" } }),

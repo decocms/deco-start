@@ -93,25 +93,53 @@ export function report(ctx: MigrationContext): void {
     lines.push("");
   }
 
+  // Analyzer summaries
+  if (ctx.sectionMetas.length > 0) {
+    lines.push("## Section Analysis");
+    lines.push("");
+    const withLoader = ctx.sectionMetas.filter((m) => m.hasLoader).length;
+    const layouts = ctx.sectionMetas.filter((m) => m.isHeader || m.isFooter || m.isTheme).length;
+    const listings = ctx.sectionMetas.filter((m) => m.isListing).length;
+    lines.push(`- **${ctx.sectionMetas.length}** sections analyzed`);
+    lines.push(`- **${withLoader}** have loaders (extracted to \`setup/section-loaders.ts\`)`);
+    lines.push(`- **${layouts}** are layout sections (eager + sync + layout)`);
+    lines.push(`- **${listings}** are listing sections (cache = "listing")`);
+    lines.push("");
+  }
+
+  if (ctx.islandClassifications.length > 0) {
+    const wrappers = ctx.islandClassifications.filter((c) => c.type === "wrapper").length;
+    const standalone = ctx.islandClassifications.filter((c) => c.type === "standalone").length;
+    lines.push("## Island Elimination");
+    lines.push("");
+    lines.push(`- **${ctx.islandClassifications.length}** islands classified`);
+    lines.push(`- **${wrappers}** wrappers (deleted, imports repointed)`);
+    lines.push(`- **${standalone}** standalone (moved to \`src/components/\`)`);
+    lines.push("");
+  }
+
+  if (ctx.loaderInventory.length > 0) {
+    const custom = ctx.loaderInventory.filter((l) => l.isCustom).length;
+    const mapped = ctx.loaderInventory.filter((l) => l.appsEquivalent).length;
+    lines.push("## Loader Inventory");
+    lines.push("");
+    lines.push(`- **${ctx.loaderInventory.length}** loaders inventoried`);
+    lines.push(`- **${mapped}** mapped to \`@decocms/apps\` equivalents`);
+    lines.push(`- **${custom}** custom (included in \`setup/commerce-loaders.ts\`)`);
+    lines.push("");
+  }
+
   // Always-present manual review items
   lines.push("## Always Check (site-specific)");
   lines.push("");
-  lines.push(
-    "- [ ] `FormEmail.tsx` — `invoke.resend.actions.emails.send()` needs new server function pattern",
-  );
-  lines.push(
-    "- [ ] `Slider.tsx` — verify `scriptAsDataURI` pattern works with React",
-  );
-  lines.push(
-    "- [ ] `Theme.tsx` — verify `SiteTheme` mapping to `@decocms/start`",
-  );
-  lines.push("- [ ] DaisyUI v4 → v5 class name changes");
-  lines.push(
-    "- [ ] Tailwind v3 → v4: verify all utility classes still work",
-  );
-  lines.push(
-    "- [ ] Check `src/styles/app.css` theme colors match the original design",
-  );
+  lines.push("- [ ] `src/setup/commerce-loaders.ts` — verify each loader mapping is correct");
+  lines.push("- [ ] `src/setup/section-loaders.ts` — verify extracted loaders work correctly");
+  lines.push("- [ ] `src/hooks/useCart.ts` — wire to actual server functions for your platform");
+  lines.push("- [ ] `src/worker-entry.ts` — verify CSP, proxy, and segment builder");
+  lines.push("- [ ] DaisyUI v4 to v5 class name changes");
+  lines.push("- [ ] Tailwind v3 to v4: verify all utility classes still work");
+  lines.push("- [ ] Check `src/styles/app.css` theme colors match the original design");
+  lines.push("- [ ] Run `npm run generate:blocks` and `npm run generate:schema` after migration");
   lines.push("");
 
   // Known Issues

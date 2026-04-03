@@ -62,12 +62,22 @@ export function transformDeadCode(content: string): TransformResult {
   let changed = false;
   let result = content;
 
-  // Remove old cache export: export const cache = "stale-while-revalidate";
-  if (/^export\s+const\s+cache\s*=\s*["'][^"']*["']/m.test(result)) {
+  // Remove old cache export: export const cache = "stale-while-revalidate" or { maxAge: ... }
+  if (/^export\s+const\s+cache\s*=/m.test(result)) {
+    // String form: export const cache = "stale-while-revalidate";
     result = result.replace(
       /^export\s+const\s+cache\s*=\s*["'][^"']*["'];?\s*\n?/gm,
       "",
     );
+    // Object form: export const cache = { maxAge: 60 * 10 };
+    result = result.replace(
+      /^export\s+const\s+cache\s*=\s*\{[^}]*\};?\s*\n?/gm,
+      "",
+    );
+    // Multiline object form (use brace-counting)
+    if (/^export\s+const\s+cache\s*=/m.test(result)) {
+      result = removeExportConstBlock(result, "cache");
+    }
     changed = true;
     notes.push("Removed dead `export const cache` (old caching system)");
   }
@@ -95,6 +105,17 @@ export function transformDeadCode(content: string): TransformResult {
     );
     changed = true;
     notes.push("MANUAL: crypto.subtle.digestSync is Deno-only — replaced with crypto.subtle.digest (needs await)");
+  }
+
+  // Replace logger usage from @deco/deco/o11y with console
+  if (result.includes("logger.")) {
+    result = result.replace(/\blogger\.error\b/g, "console.error");
+    result = result.replace(/\blogger\.warn\b/g, "console.warn");
+    result = result.replace(/\blogger\.info\b/g, "console.info");
+    result = result.replace(/\blogger\.debug\b/g, "console.debug");
+    result = result.replace(/\blogger\.log\b/g, "console.log");
+    changed = true;
+    notes.push("Replaced logger.* with console.* (logger from @deco/deco/o11y removed)");
   }
 
   // invoke.* calls are server RPC via runtime.ts proxy → keep as-is

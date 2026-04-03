@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { MigrationContext, TransformResult } from "./types.ts";
+import type { MigrationContext, TransformResult, SectionMeta } from "./types.ts";
 import { log, logPhase } from "./types.ts";
 import { transformImports } from "./transforms/imports.ts";
 import { transformJsx } from "./transforms/jsx.ts";
@@ -8,11 +8,25 @@ import { transformFreshApis } from "./transforms/fresh-apis.ts";
 import { transformDenoIsms } from "./transforms/deno-isms.ts";
 import { transformTailwind } from "./transforms/tailwind.ts";
 import { transformDeadCode } from "./transforms/dead-code.ts";
+import { transformSectionConventions } from "./transforms/section-conventions.ts";
+
+/** Map of section path → metadata, populated per-run */
+let sectionMetaMap: Map<string, SectionMeta> | null = null;
+
+function getSectionMeta(ctx: MigrationContext, relPath: string): SectionMeta | undefined {
+  if (!sectionMetaMap) {
+    sectionMetaMap = new Map();
+    for (const m of ctx.sectionMetas) {
+      sectionMetaMap.set(m.path, m);
+    }
+  }
+  return sectionMetaMap.get(relPath);
+}
 
 /**
  * Apply all transforms to a file's content in the correct order.
  */
-function applyTransforms(content: string, filePath: string): TransformResult {
+function applyTransforms(content: string, filePath: string, ctx?: MigrationContext, relPath?: string): TransformResult {
   const allNotes: string[] = [];
   let currentContent = content;
   let anyChanged = false;
@@ -42,6 +56,17 @@ function applyTransforms(content: string, filePath: string): TransformResult {
     }
   }
 
+  // Section conventions (sync/eager/layout/cache) — only for section files
+  if (ctx && relPath && relPath.startsWith("sections/")) {
+    const meta = getSectionMeta(ctx, relPath);
+    const result = transformSectionConventions(currentContent, meta);
+    if (result.changed) {
+      anyChanged = true;
+      currentContent = result.content;
+      allNotes.push(...result.notes.map((n) => `[section-conventions] ${n}`));
+    }
+  }
+
   return { content: currentContent, changed: anyChanged, notes: allNotes };
 }
 
@@ -59,7 +84,7 @@ export function transform(ctx: MigrationContext): void {
     const content = fs.readFileSync(absPath, "utf-8");
 
     // Apply transforms
-    const result = applyTransforms(content, absPath);
+    const result = applyTransforms(content, absPath, ctx, record.path);
 
     // Add manual review items
     for (const note of result.notes) {

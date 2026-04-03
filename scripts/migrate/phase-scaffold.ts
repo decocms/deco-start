@@ -10,6 +10,15 @@ import { generateKnipConfig } from "./templates/knip-config.ts";
 import { generateRoutes } from "./templates/routes.ts";
 import { generateSetup } from "./templates/setup.ts";
 import { generateServerEntry } from "./templates/server-entry.ts";
+import { generateAppCss } from "./templates/app-css.ts";
+import { generateTypeFiles } from "./templates/types-gen.ts";
+import { generateUiComponents } from "./templates/ui-components.ts";
+import { generateHooks } from "./templates/hooks.ts";
+import { generateCommerceLoaders } from "./templates/commerce-loaders.ts";
+import { generateSectionLoaders } from "./templates/section-loaders.ts";
+import { generateCacheConfig } from "./templates/cache-config.ts";
+import { generateSdkFiles } from "./templates/sdk-gen.ts";
+import { extractTheme } from "./analyzers/theme-extractor.ts";
 
 function writeFile(ctx: MigrationContext, relPath: string, content: string) {
   const fullPath = path.join(ctx.sourceDir, relPath);
@@ -20,13 +29,18 @@ function writeFile(ctx: MigrationContext, relPath: string, content: string) {
     return;
   }
 
-  // Ensure directory exists
   const dir = path.dirname(fullPath);
   fs.mkdirSync(dir, { recursive: true });
 
   fs.writeFileSync(fullPath, content, "utf-8");
   log(ctx, `Created: ${relPath}`);
   ctx.scaffoldedFiles.push(relPath);
+}
+
+function writeMultiFile(ctx: MigrationContext, files: Record<string, string>) {
+  for (const [filePath, content] of Object.entries(files)) {
+    writeFile(ctx, filePath, content);
+  }
 }
 
 export function scaffold(ctx: MigrationContext): void {
@@ -47,38 +61,41 @@ export function scaffold(ctx: MigrationContext): void {
     tabWidth: 2,
   }, null, 2) + "\n");
 
-  // Server entry files
-  const serverEntryFiles = generateServerEntry(ctx);
-  for (const [filePath, content] of Object.entries(serverEntryFiles)) {
-    writeFile(ctx, filePath, content);
-  }
+  // Server entry files (server.ts, worker-entry.ts, router.tsx, runtime.ts, context.ts)
+  writeMultiFile(ctx, generateServerEntry(ctx));
 
   // Route files
-  const routeFiles = generateRoutes(ctx);
-  for (const [filePath, content] of Object.entries(routeFiles)) {
-    writeFile(ctx, filePath, content);
-  }
+  writeMultiFile(ctx, generateRoutes(ctx));
 
-  // Setup
+  // Setup infrastructure
   writeFile(ctx, "src/setup.ts", generateSetup(ctx));
+  writeFile(ctx, "src/cache-config.ts", generateCacheConfig(ctx));
+  writeFile(ctx, "src/setup/commerce-loaders.ts", generateCommerceLoaders(ctx));
+  writeFile(ctx, "src/setup/section-loaders.ts", generateSectionLoaders(ctx));
 
-  // Styles
-  writeFile(ctx, "src/styles/app.css", generateAppCss(ctx));
+  // Theme extraction + Styles
+  const theme = extractTheme(ctx);
+  writeFile(ctx, "src/styles/app.css", generateAppCss(ctx, theme));
 
-  // SDK — signal shim (replaces @preact/signals)
+  // Type definitions
+  writeMultiFile(ctx, generateTypeFiles(ctx));
+
+  // UI components (Image, Picture, Video)
+  writeMultiFile(ctx, generateUiComponents(ctx));
+
+  // Platform hooks (useCart, useUser, useWishlist)
+  writeMultiFile(ctx, generateHooks(ctx));
+
+  // SDK shims + generated utilities
   writeFile(ctx, "src/sdk/signal.ts", generateSignalShim());
-
-  // SDK — clx (class name joiner, with default export for compat)
   writeFile(ctx, "src/sdk/clx.ts", generateClxShim());
-
-  // SDK — debounce (replaces Deno std/async/debounce)
   writeFile(ctx, "src/sdk/debounce.ts", generateDebounceShim());
+  writeMultiFile(ctx, generateSdkFiles(ctx));
 
   // Apps
   writeFile(ctx, "src/apps/site.ts", generateSiteApp(ctx));
 
   // SiteTheme component (replaces apps/website/components/Theme.tsx)
-  // Check if any source file uses SiteTheme
   const usesSiteTheme = ctx.files.some((f) => {
     if (f.action === "delete") return false;
     try {
@@ -112,10 +129,6 @@ export interface Props {
   variables?: Array<{ name: string; value: string }>;
 }
 
-/**
- * SiteTheme — injects CSS custom properties and font stylesheets into the page.
- * This replaces the old apps/website/components/Theme.tsx from the Deno stack.
- */
 export default function SiteTheme({ variables, fonts, colorScheme }: Props) {
   const cssVars = variables?.length
     ? \`:root { \${variables.map((v) => \`\${v.name}: \${v.value};\`).join(" ")} }\`
@@ -140,57 +153,6 @@ export default function SiteTheme({ variables, fonts, colorScheme }: Props) {
 }
 
 export { type Font as SiteThemeFont };
-`;
-}
-
-function generateAppCss(ctx: MigrationContext): string {
-  const c = ctx.themeColors;
-  // Map CMS color names to DaisyUI v5 CSS variables
-  const colors: Record<string, string> = {
-    "--color-primary": c["primary"] || "#6B21A8",
-    "--color-secondary": c["secondary"] || "#141414",
-    "--color-accent": c["tertiary"] || "#FFF100",
-    "--color-neutral": c["neutral"] || "#393939",
-    "--color-base-100": c["base-100"] || "#FFFFFF",
-    "--color-base-200": c["base-200"] || "#F3F3F3",
-    "--color-base-300": c["base-300"] || "#868686",
-    "--color-info": c["info"] || "#006CA1",
-    "--color-success": c["success"] || "#007552",
-    "--color-warning": c["warning"] || "#F8D13A",
-    "--color-error": c["error"] || "#CF040A",
-  };
-  // Add content colors if specified
-  if (c["primary-content"]) colors["--color-primary-content"] = c["primary-content"];
-  if (c["secondary-content"]) colors["--color-secondary-content"] = c["secondary-content"];
-  if (c["base-content"]) colors["--color-base-content"] = c["base-content"];
-
-  const colorLines = Object.entries(colors)
-    .map(([k, v]) => `  ${k}: ${v};`)
-    .join("\n");
-
-  return `@import "tailwindcss";
-@plugin "daisyui";
-@plugin "daisyui/theme" {
-  name: "light";
-  default: true;
-  color-scheme: light;
-
-${colorLines}
-}
-
-@theme {
-  --color-*: initial;
-  --color-white: #fff;
-  --color-black: #000;
-  --color-transparent: transparent;
-  --color-current: currentColor;
-  --color-inherit: inherit;${ctx.fontFamily ? `\n  --font-sans: "${ctx.fontFamily}", ui-sans-serif, system-ui, sans-serif;` : ""}
-}
-
-/* View transitions */
-@view-transition {
-  navigation: auto;
-}
 `;
 }
 
@@ -223,9 +185,6 @@ vite.config.timestamp_*
 
 # Deco CMS
 .deco/metadata/*
-
-# Bun lock file (if using npm, keep package-lock.json instead)
-# package-lock.json
 
 # IDE
 .vscode/
@@ -276,66 +235,13 @@ export default debounce;
 }
 
 function generateSignalShim(): string {
-  return `import { Store } from "@tanstack/store";
-import { useSyncExternalStore, useMemo, useEffect } from "react";
+  return `export { signal, type ReactiveSignal } from "@decocms/start/sdk/signal";
 
-export interface Signal<T> {
-  readonly store: Store<T>;
-  value: T;
-  peek(): T;
-  subscribe(fn: () => void): () => void;
-}
-
-export function signal<T>(initialValue: T): Signal<T> {
-  const store = new Store<T>(initialValue);
-  return {
-    store,
-    get value() { return store.state; },
-    set value(v: T) { store.setState(() => v); },
-    peek() { return store.state; },
-    subscribe(fn) {
-      // @tanstack/store@0.9.x returns { unsubscribe: Function },
-      // NOT a plain function. React's useSyncExternalStore cleanup
-      // expects a bare function — unwrap it.
-      const sub = store.subscribe(() => fn());
-      return typeof sub === "function" ? sub : sub.unsubscribe;
-    },
-  };
-}
-
-export function useSignal<T>(initialValue: T): Signal<T> {
-  const sig = useMemo(() => signal(initialValue), []);
-  useSyncExternalStore(
-    (cb) => sig.subscribe(cb),
-    () => sig.value,
-    () => sig.value,
-  );
-  return sig;
-}
-
-export function useComputed<T>(fn: () => T): Signal<T> {
-  const sig = useMemo(() => signal(fn()), [fn]);
-  return sig;
-}
-
-export function computed<T>(fn: () => T): Signal<T> {
-  return signal(fn());
-}
-
+/** Run a function immediately. Kept for legacy module-level side effects. */
 export function effect(fn: () => void | (() => void)): () => void {
   const cleanup = fn();
   return typeof cleanup === "function" ? cleanup : () => {};
 }
-
-export function batch(fn: () => void): void {
-  fn();
-}
-
-export function useSignalEffect(fn: () => void | (() => void)): void {
-  useEffect(fn);
-}
-
-export type { Signal as ReadonlySignal };
 `;
 }
 

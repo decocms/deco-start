@@ -31,8 +31,14 @@ function extractNpmDeps(importMap: Record<string, string>): Record<string, strin
     if (key.startsWith("@deco/")) continue;
     if (key === "daisyui") continue;
     if (key === "preact-render-to-string") continue;
-    if (key === "simple-git") continue; // dev tool, not needed in runtime
-    if (key === "fast-json-patch") continue; // used by old deco runtime
+    if (key === "simple-git") continue;
+    if (key === "fast-json-patch") continue;
+    if (key === "postcss") continue;
+    if (key === "cssnano") continue;
+    if (key.startsWith("@biomejs/")) continue;
+    if (key === "partytown") continue;
+    // Consolidate firebase/* split imports into single "firebase" package
+    if (key.startsWith("firebase/")) continue;
 
     const raw = value.slice(4); // remove "npm:"
     const atIdx = raw.lastIndexOf("@");
@@ -53,10 +59,22 @@ function extractNpmDeps(importMap: Record<string, string>): Record<string, strin
 }
 
 export function generatePackageJson(ctx: MigrationContext): string {
-  const siteDeps = {
+  const extractedDeps = {
     ...extractNpmDeps(ctx.importMap),
     ...ctx.discoveredNpmDeps,
   };
+
+  // Consolidate firebase/* split imports into single package
+  const hasFirebase = Object.keys(ctx.importMap).some((k) => k.startsWith("firebase"));
+  if (hasFirebase && !extractedDeps["firebase"]) {
+    extractedDeps["firebase"] = "^12.10.0";
+  }
+  // Remove wildcard versions
+  for (const [k, v] of Object.entries(extractedDeps)) {
+    if (v === "^*" || v === "*") extractedDeps[k] = "latest";
+  }
+
+  const siteDeps = extractedDeps;
 
   // Fetch latest versions from npm registry
   const startVersion = getLatestVersion("@decocms/start", "0.34.0");
@@ -75,8 +93,13 @@ export function generatePackageJson(ctx: MigrationContext): string {
         "tsx node_modules/@decocms/start/scripts/generate-blocks.ts",
       "generate:routes": "tsr generate",
       "generate:schema": `tsx node_modules/@decocms/start/scripts/generate-schema.ts --site ${ctx.siteName}`,
+      "generate:invoke":
+        "tsx node_modules/@decocms/start/scripts/generate-invoke.ts",
+      "generate:sections":
+        "tsx node_modules/@decocms/start/scripts/generate-sections.ts",
+      "generate:loaders": `tsx node_modules/@decocms/start/scripts/generate-loaders.ts --exclude vtex/loaders,vtex/actions`,
       build:
-        "npm run generate:blocks && npm run generate:schema && tsr generate && vite build",
+        "npm run generate:blocks && npm run generate:schema && npm run generate:sections && npm run generate:loaders && tsr generate && vite build",
       preview: "vite preview",
       deploy: "npm run build && wrangler deploy",
       types: "wrangler types",
@@ -87,9 +110,9 @@ export function generatePackageJson(ctx: MigrationContext): string {
       clean:
         "rm -rf node_modules .cache dist .wrangler/state node_modules/.vite && npm install",
       "tailwind:lint":
-        "tsx node_modules/@decocms/start/scripts/tailwind-lint.ts",
+        "tsx scripts/tailwind-lint.ts",
       "tailwind:fix":
-        "tsx node_modules/@decocms/start/scripts/tailwind-lint.ts --fix",
+        "tsx scripts/tailwind-lint.ts --fix",
     },
     author: "deco.cx",
     license: "MIT",

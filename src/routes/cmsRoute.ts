@@ -99,7 +99,20 @@ async function loadCmsPageInternal(fullPath: string) {
   const request = new Request(urlWithSearch, {
     headers: originRequest.headers,
   });
+
+  for (const s of page.resolvedSections) {
+    if (s.component?.includes("eader")) {
+      console.log(`[CMS-ROUTE] BEFORE loaders: "${s.component}" propKeys=[${Object.keys(s.props || {}).join(",")}]`);
+    }
+  }
+
   const enrichedSections = await runSectionLoaders(page.resolvedSections, request);
+
+  for (const s of enrichedSections) {
+    if (s.component?.includes("eader")) {
+      console.log(`[CMS-ROUTE] AFTER loaders: "${s.component}" propKeys=[${Object.keys(s.props || {}).join(",")}]`);
+    }
+  }
 
   // Pre-import eager section modules so their default exports are cached
   // in resolvedComponents. This ensures SSR renders with direct component

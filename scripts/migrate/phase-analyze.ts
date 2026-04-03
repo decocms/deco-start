@@ -7,6 +7,9 @@ import type {
   Platform,
 } from "./types.ts";
 import { log, logPhase } from "./types.ts";
+import { extractSectionMetadata } from "./analyzers/section-metadata.ts";
+import { classifyIslands } from "./analyzers/island-classifier.ts";
+import { inventoryLoaders } from "./analyzers/loader-inventory.ts";
 
 const PATTERN_DETECTORS: Array<[DetectedPattern, RegExp]> = [
   ["preact-hooks", /from\s+["']preact\/hooks["']/],
@@ -39,6 +42,8 @@ const SKIP_DIRS = new Set([
   ".deco",
   ".devcontainer",
   ".vscode",
+  ".claude",
+  ".cursor",
   "_fresh",
   "static",
   ".context",
@@ -46,17 +51,27 @@ const SKIP_DIRS = new Set([
   "src",
   "public",
   ".tanstack",
+  "tests",
+  "bin",
+  "fonts",
+  ".pilot",
 ]);
 
 const SKIP_FILES = new Set([
   "deno.lock",
   ".gitignore",
   "README.md",
+  "AGENTS.md",
   "LICENSE",
   "browserslist",
   "bw_stats.json",
+  "biome.json",
   "package.json",
   "package-lock.json",
+  "yarn.lock",
+  "bun.lock",
+  "bun.lockb",
+  "account.json",
 ]);
 
 /** Files that are generated and should be deleted */
@@ -66,13 +81,22 @@ const GENERATED_FILES = new Set([
   "fresh.config.ts",
 ]);
 
-/** SDK files that have framework equivalents */
+/** SDK files that have framework equivalents or are scaffolded fresh */
 const SDK_DELETE = new Set([
   "sdk/clx.ts",
   "sdk/useId.ts",
   "sdk/useOffer.ts",
   "sdk/useVariantPossiblities.ts",
   "sdk/usePlatform.tsx",
+  "sdk/signal.ts",
+  "sdk/format.ts",
+]);
+
+/** Component files that are scaffolded fresh (old versions must not overwrite) */
+const COMPONENT_DELETE = new Set([
+  "components/ui/Image.tsx",
+  "components/ui/Picture.tsx",
+  "components/ui/Video.tsx",
 ]);
 
 /** Loaders that depend on deleted admin tooling */
@@ -96,6 +120,7 @@ const ROOT_DELETE = new Set([
   "fresh.config.ts",
   "browserslist",
   "bw_stats.json",
+  "islands.ts",
 ]);
 
 /** Static files that are code/tooling, not assets — should be deleted */
@@ -152,7 +177,7 @@ function categorizeFile(
   if (relPath.startsWith("actions/")) return "action";
   if (relPath.startsWith("routes/")) return "route";
   if (relPath.startsWith("apps/")) return "app";
-  if (relPath.startsWith("static/")) return "static";
+  if (relPath.startsWith("static/") || relPath.startsWith("static-")) return "static";
   if (GENERATED_FILES.has(relPath)) return "generated";
   if (
     relPath === "deno.json" || relPath === "tsconfig.json" ||
@@ -201,11 +226,19 @@ function decideAction(
     };
   }
 
-  // SDK files to delete
+  // SDK files to delete (replaced by scaffolded or framework equivalents)
   if (SDK_DELETE.has(relPath)) {
     return {
       action: "delete",
       notes: "Use framework equivalent from @decocms/start or @decocms/apps",
+    };
+  }
+
+  // Component files replaced by scaffolded versions
+  if (COMPONENT_DELETE.has(relPath)) {
+    return {
+      action: "delete",
+      notes: "Scaffolded fresh from @decocms/apps re-exports",
     };
   }
 
@@ -214,19 +247,31 @@ function decideAction(
     return { action: "delete", notes: "Use @decocms/apps cart hooks" };
   }
 
-  // Islands — if the section is a re-export of this island, island becomes section
+  // Islands — classify and route to appropriate target
   if (category === "island") {
-    const sectionPath = relPath.replace("islands/", "sections/");
+    const classification = (record as any).__islandClassification;
+    if (classification?.type === "wrapper") {
+      return { action: "delete", notes: "Island wrapper — imports repointed to component" };
+    }
+    // Standalone islands go to components/, not sections/
+    const componentPath = relPath.replace("islands/", "components/");
     return {
       action: "transform",
-      targetPath: `src/${sectionPath}`,
-      notes: "Island merged into section",
+      targetPath: `src/${componentPath}`,
+      notes: "Standalone island moved to components",
     };
   }
 
-  // Sections that are re-exports of islands → delete (island takes their place)
+  // Sections that re-export from islands/ → delete (island takes their place)
+  // But sections that re-export from components/ or other dirs should be KEPT
   if (category === "section" && isReExp) {
-    return { action: "delete", notes: "Re-export wrapper, island merged" };
+    const target = record.reExportTarget || "";
+    const isIslandReExport = target.includes("islands/") ||
+      target.includes("islands\\");
+    if (isIslandReExport) {
+      return { action: "delete", notes: "Re-export wrapper for island, island merged" };
+    }
+    // Section re-exports from components/ — keep and transform
   }
 
   // Session component → delete (analytics moves to __root.tsx)
@@ -250,6 +295,19 @@ function decideAction(
     return { action: "move", targetPath: publicPath };
   }
 
+  // Non-code root files that shouldn't go into src/
+  const ext = path.extname(relPath);
+  const nonCodeExts = new Set([".md", ".csv", ".json", ".sh", ".lock", ".yml", ".yaml", ".xml", ".html", ".txt", ".log"]);
+  if (!relPath.includes("/") && nonCodeExts.has(ext)) {
+    return { action: "delete", notes: "Root-level non-code file" };
+  }
+
+  // Root-level loose TS/TSX files that are tooling, not app code
+  const rootToolingFiles = new Set(["islands.ts", "order-status.ts", "sync.sh"]);
+  if (!relPath.includes("/") && rootToolingFiles.has(relPath)) {
+    return { action: "delete", notes: "Root-level tooling file" };
+  }
+
   // Everything else → transform into src/
   return { action: "transform", targetPath: `src/${relPath}` };
 }
@@ -266,7 +324,7 @@ function scanDir(
     const relPath = path.relative(baseDir, fullPath);
 
     if (entry.isDirectory()) {
-      if (SKIP_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
+      if (SKIP_DIRS.has(entry.name) || entry.name.startsWith(".") || entry.name.startsWith("static-")) continue;
       scanDir(fullPath, baseDir, files);
       continue;
     }
@@ -317,15 +375,65 @@ function extractGtmId(sourceDir: string): string | null {
 }
 
 function extractPlatform(sourceDir: string): Platform {
+  const platforms: Platform[] = ["vtex", "shopify", "wake", "vnda", "linx", "nuvemshop"];
+
+  // Strategy 1: Check deno.json imports for platform-specific app imports
+  const denoPath = path.join(sourceDir, "deno.json");
+  if (fs.existsSync(denoPath)) {
+    try {
+      const deno = JSON.parse(fs.readFileSync(denoPath, "utf-8"));
+      const imports = deno.imports || {};
+      for (const p of platforms) {
+        // e.g. "apps/vtex/" or direct app import containing the platform name
+        const hasAppImport = Object.keys(imports).some(
+          (k) => k === `apps/${p}/` || k.includes(`/${p}/mod.ts`) || k.includes(`deco-apps`) && imports[k].includes(`/${p}/`),
+        );
+        const hasAppValue = Object.values(imports).some(
+          (v) => typeof v === "string" && (v as string).includes(`/${p}/`),
+        );
+        if (hasAppImport || hasAppValue) return p;
+      }
+      // Check if the import map value for "apps/" contains a platform hint
+      const appsUrl = imports["apps/"];
+      if (typeof appsUrl === "string") {
+        for (const p of platforms) {
+          // The apps/ URL itself doesn't indicate platform, but let's check apps/vtex.ts
+          const vtexAppPath = path.join(sourceDir, "apps", `${p}.ts`);
+          if (fs.existsSync(vtexAppPath)) return p;
+        }
+      }
+    } catch {}
+  }
+
+  // Strategy 2: Check for apps/{platform}.ts file existence
+  for (const p of platforms) {
+    if (fs.existsSync(path.join(sourceDir, "apps", `${p}.ts`))) return p;
+  }
+
+  // Strategy 3: Check apps/site.ts for platform type and default value
   const sitePath = path.join(sourceDir, "apps", "site.ts");
-  if (!fs.existsSync(sitePath)) return "custom";
+  if (fs.existsSync(sitePath)) {
+    const content = fs.readFileSync(sitePath, "utf-8");
+    // Look for platform default in state or props: state.platform || "vtex"
+    const defaultMatch = content.match(/(?:state\.platform|props\.platform)\s*\|\|\s*["'](\w+)["']/);
+    if (defaultMatch) {
+      const p = defaultMatch[1] as Platform;
+      if (platforms.includes(p)) return p;
+    }
+    // Look for platform in the Props type
+    for (const p of platforms) {
+      if (content.includes(`"${p}"`) && (content.includes("Platform") || content.includes("platform"))) {
+        return p;
+      }
+    }
+  }
 
-  const content = fs.readFileSync(sitePath, "utf-8");
-
-  // Check for platform in Props or default
-  for (const p of ["vtex", "shopify", "wake", "vnda", "linx", "nuvemshop"] as const) {
-    if (content.includes(`"${p}"`) && content.includes("_platform")) {
-      // This is just detecting what's available, default is usually "custom"
+  // Strategy 4: Check .deco/blocks for platform-specific block files
+  const blocksDir = path.join(sourceDir, ".deco", "blocks");
+  if (fs.existsSync(blocksDir)) {
+    const blockFiles = fs.readdirSync(blocksDir);
+    for (const p of platforms) {
+      if (blockFiles.some((f) => f.includes(`deco-${p}`) || f === `${p}.json`)) return p;
     }
   }
 
@@ -457,4 +565,26 @@ export function analyze(ctx: MigrationContext): void {
   console.log(`\n  Files found: ${ctx.files.length}`);
   console.log(`  By category: ${JSON.stringify(byCategory)}`);
   console.log(`  By action: ${JSON.stringify(byAction)}`);
+
+  // Run analyzers
+  extractSectionMetadata(ctx);
+  classifyIslands(ctx);
+  inventoryLoaders(ctx);
+
+  // Apply island classifications to file records
+  const classMap = new Map(ctx.islandClassifications.map((c) => [c.path, c]));
+  for (const f of ctx.files) {
+    if (f.category !== "island") continue;
+    const classification = classMap.get(f.path);
+    if (!classification) continue;
+
+    if (classification.type === "wrapper") {
+      f.action = "delete";
+      f.notes = "Island wrapper — imports repointed to component";
+    } else {
+      f.action = "transform";
+      f.targetPath = classification.suggestedTarget;
+      f.notes = "Standalone island moved to components";
+    }
+  }
 }

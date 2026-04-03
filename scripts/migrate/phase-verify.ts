@@ -22,8 +22,19 @@ const REQUIRED_FILES = [
   "src/runtime.ts",
   "src/context.ts",
   "src/setup.ts",
+  "src/cache-config.ts",
+  "src/setup/commerce-loaders.ts",
+  "src/setup/section-loaders.ts",
   "src/styles/app.css",
   "src/apps/site.ts",
+  "src/hooks/useCart.ts",
+  "src/hooks/useUser.ts",
+  "src/hooks/useWishlist.ts",
+  "src/types/widgets.ts",
+  "src/types/deco.ts",
+  "src/types/commerce-app.ts",
+  "src/components/ui/Image.tsx",
+  "src/components/ui/Picture.tsx",
   "src/routes/__root.tsx",
   "src/routes/index.tsx",
   "src/routes/$.tsx",
@@ -38,8 +49,8 @@ const MUST_NOT_EXIST = [
   "manifest.gen.ts",
   "dev.ts",
   "main.ts",
-  "islands/BlogFeed.tsx",
   "routes/_app.tsx",
+  "routes/_middleware.ts",
 ];
 
 const checks: Check[] = [
@@ -261,14 +272,16 @@ const checks: Check[] = [
     },
   },
   {
-    name: "No dead cache/cacheKey exports",
+    name: "No dead cache/cacheKey exports (old SWR system)",
     severity: "warning",
     fn: (ctx) => {
       const srcDir = path.join(ctx.sourceDir, "src");
       if (!fs.existsSync(srcDir)) return true;
-      const bad = findFilesWithPattern(srcDir, /^export\s+const\s+(?:cache|cacheKey)\s*=/m);
+      // Only flag the OLD cache patterns: cache = "stale-while-revalidate" or cache = { maxAge: ... }
+      // NOT the new-stack section convention: cache = "listing" / "product" / "search" / "static"
+      const bad = findFilesWithPattern(srcDir, /^export\s+const\s+cacheKey\s*=/m);
       if (bad.length > 0) {
-        console.log(`    Dead exports found (old cache system): ${bad.join(", ")}`);
+        console.log(`    Dead cacheKey exports found: ${bad.join(", ")}`);
         return false;
       }
       return true;
@@ -339,6 +352,110 @@ const checks: Check[] = [
       return true;
     },
   },
+  {
+    name: "No @deco/deco imports in src/",
+    severity: "error",
+    fn: (ctx) => {
+      const srcDir = path.join(ctx.sourceDir, "src");
+      if (!fs.existsSync(srcDir)) return true;
+      const bad = findFilesWithPattern(srcDir, /from\s+["']@deco\/deco/);
+      if (bad.length > 0) {
+        console.log(`    Still has @deco/deco imports: ${bad.join(", ")}`);
+        return false;
+      }
+      return true;
+    },
+  },
+  {
+    name: "No apps/ imports in src/ (should be @decocms/apps or ~/)",
+    severity: "error",
+    fn: (ctx) => {
+      const srcDir = path.join(ctx.sourceDir, "src");
+      if (!fs.existsSync(srcDir)) return true;
+      const bad = findFilesWithPattern(srcDir, /from\s+["']apps\//);
+      if (bad.length > 0) {
+        console.log(`    Still has apps/ imports: ${bad.join(", ")}`);
+        return false;
+      }
+      return true;
+    },
+  },
+  {
+    name: "Setup infrastructure is complete",
+    severity: "error",
+    fn: (ctx) => {
+      const setupFiles = [
+        "src/setup.ts",
+        "src/cache-config.ts",
+        "src/setup/commerce-loaders.ts",
+        "src/setup/section-loaders.ts",
+      ];
+      const missing = setupFiles.filter(
+        (f) => !fs.existsSync(path.join(ctx.sourceDir, f)),
+      );
+      if (missing.length > 0) {
+        console.log(`    Missing setup infrastructure: ${missing.join(", ")}`);
+        return false;
+      }
+      return true;
+    },
+  },
+  {
+    name: "No islands/ directory (should be eliminated)",
+    severity: "warning",
+    fn: (ctx) => {
+      const islandsDir = path.join(ctx.sourceDir, "src", "islands");
+      if (fs.existsSync(islandsDir)) {
+        try {
+          const files = fs.readdirSync(islandsDir, { recursive: true });
+          const tsxFiles = (files as string[]).filter((f: string) => f.endsWith(".tsx") || f.endsWith(".ts"));
+          if (tsxFiles.length > 0) {
+            console.log(`    src/islands/ still has ${tsxFiles.length} files — should be moved to components/`);
+            return false;
+          }
+        } catch {}
+      }
+      return true;
+    },
+  },
+  {
+    name: "Hooks are scaffolded",
+    severity: "warning",
+    fn: (ctx) => {
+      const hookFiles = [
+        "src/hooks/useCart.ts",
+        "src/hooks/useUser.ts",
+        "src/hooks/useWishlist.ts",
+      ];
+      const missing = hookFiles.filter(
+        (f) => !fs.existsSync(path.join(ctx.sourceDir, f)),
+      );
+      if (missing.length > 0) {
+        console.log(`    Missing hooks: ${missing.join(", ")}`);
+        return false;
+      }
+      return true;
+    },
+  },
+  {
+    name: "Type files are scaffolded",
+    severity: "warning",
+    fn: (ctx) => {
+      const typeFiles = [
+        "src/types/widgets.ts",
+        "src/types/deco.ts",
+        "src/types/commerce-app.ts",
+      ];
+      const missing = typeFiles.filter(
+        (f) => !fs.existsSync(path.join(ctx.sourceDir, f)),
+      );
+      if (missing.length > 0) {
+        console.log(`    Missing type files: ${missing.join(", ")}`);
+        return false;
+      }
+      return true;
+    },
+  },
 ];
 
 function findFilesWithPattern(
@@ -356,7 +473,12 @@ function findFilesWithPattern(
       findFilesWithPattern(fullPath, pattern, results, root);
     } else if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) {
       const content = fs.readFileSync(fullPath, "utf-8");
-      if (pattern.test(content)) {
+      // Only test non-comment lines
+      const uncommented = content
+        .split("\n")
+        .filter((line) => !line.trimStart().startsWith("//") && !line.trimStart().startsWith("*"))
+        .join("\n");
+      if (pattern.test(uncommented)) {
         results.push(path.basename(fullPath));
       }
     }

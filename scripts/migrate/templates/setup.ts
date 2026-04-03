@@ -1,69 +1,78 @@
 import type { MigrationContext } from "../types.ts";
 
 export function generateSetup(ctx: MigrationContext): string {
-  // Detect layout sections (Header, Footer, Theme) from source files
-  const layoutSections: string[] = [];
-  for (const f of ctx.files) {
-    if (f.category !== "section" || f.action === "delete") continue;
-    const name = f.path.replace(/^sections\//, "").replace(/\.tsx$/, "");
-    const lower = name.toLowerCase();
-    if (lower.includes("header") || lower.includes("footer") || lower.includes("theme")) {
-      layoutSections.push(`site/sections/${name}.tsx`);
-    }
-  }
-  // Also check islands that became sections
-  for (const f of ctx.files) {
-    if (f.category !== "island") continue;
-    const name = f.path.replace(/^islands\//, "").replace(/\.tsx$/, "");
-    const lower = name.toLowerCase();
-    if (lower.includes("header") || lower.includes("footer") || lower.includes("theme")) {
-      layoutSections.push(`site/sections/${name}.tsx`);
-    }
-  }
+  const isVtex = ctx.platform === "vtex";
+  const siteName = ctx.siteName;
 
-  const layoutRegistration = layoutSections.length > 0
-    ? `\n// -- Layout Sections (cached across navigations) --
-registerLayoutSections([
-${layoutSections.map((s) => `  "${s}",`).join("\n")}
-]);\n`
-    : "";
-
-  const layoutImport = layoutSections.length > 0
-    ? "\n  registerLayoutSections," : "";
+  const productionOrigins = [
+    `"https://www.${siteName}.com.br"`,
+    `"https://${siteName}.com.br"`,
+  ];
 
   return `/**
- * Site setup — registers all sections, loaders and matchers with the CMS.
+ * Site setup — orchestrator that wires framework, commerce, and sections.
  *
- * This file is imported by router.tsx and worker-entry.ts at startup.
- * It uses import.meta.glob to lazily discover all section components.
+ * Actual logic lives in focused modules:
+ *   setup/commerce-loaders.ts  — COMMERCE_LOADERS map (data fetchers)
+ *   setup/section-loaders.ts   — registerSectionLoaders (per-section prop enrichment)
+ *
+ * Section metadata (eager, sync, layout, cache, LoadingFallback) is declared
+ * in each section file and auto-extracted by generate-sections.ts.
  */
-import { blocks as generatedBlocks } from "./server/cms/blocks.gen";
+
+import "./cache-config";
+
 import {
-  registerSections,${layoutImport}
-  setBlocks,
+  registerCommerceLoaders,
+  applySectionConventions,
 } from "@decocms/start/cms";
-import { registerBuiltinMatchers } from "@decocms/start/matchers/builtins";
-import { autoconfigApps } from "@decocms/start/apps/autoconfig";
+import { createSiteSetup } from "@decocms/start/setup";
+import { setInvokeLoaders } from "@decocms/start/admin";${isVtex ? `
+import { createInstrumentedFetch } from "@decocms/start/sdk/instrumentedFetch";
+import { initVtexFromBlocks, setVtexFetch } from "@decocms/apps/vtex";` : ""}
+import { blocks as generatedBlocks } from "./server/cms/blocks.gen";
+import { sectionMeta, syncComponents, loadingFallbacks } from "./server/cms/sections.gen";
+import { PreviewProviders } from "@decocms/start/hooks";
+// @ts-ignore Vite ?url import
+import appCss from "./styles/app.css?url";
 
-// -- CMS Blocks --
-// The Vite plugin intercepts the blocks.gen import and injects .deco/blocks/ data.
-if (typeof document === "undefined") {
-  setBlocks(generatedBlocks);
-  // Auto-configure apps from CMS blocks — registers invoke handlers,
-  // app state, and middleware (cookie forwarding, etc.)
-  autoconfigApps(generatedBlocks);
-}
+import { COMMERCE_LOADERS } from "./setup/commerce-loaders";
+import "./setup/section-loaders";
 
-// -- Section Registry --
-// CMS blocks reference sections as "site/sections/X.tsx", so we remap the glob keys.
-const sectionGlob = import.meta.glob("./sections/**/*.tsx") as Record<string, () => Promise<any>>;
-const sections: Record<string, () => Promise<any>> = {};
-for (const [path, loader] of Object.entries(sectionGlob)) {
-  sections["site/" + path.slice(2)] = loader;
-}
-registerSections(sections);
-${layoutRegistration}
-// -- Matchers --
-registerBuiltinMatchers();
+// -- Framework setup --
+createSiteSetup({
+  sections: import.meta.glob("./sections/**/*.tsx") as Record<string, () => Promise<any>>,
+  blocks: generatedBlocks,
+  meta: () => import("./server/admin/meta.gen.json").then((m) => m.default),
+  css: appCss,
+  fonts: [],
+  productionOrigins: [
+    ${productionOrigins.join(",\n    ")},
+  ],
+  previewWrapper: PreviewProviders,${isVtex ? `
+  initPlatform: (blocks) => initVtexFromBlocks(blocks),` : ""}
+  onResolveError: (error, resolveType, context) => {
+    console.error(\`[CMS-DEBUG] \${context} "\${resolveType}" failed:\`, error);
+  },
+  onDanglingReference: (resolveType) => {
+    console.warn(\`[CMS-DEBUG] Dangling reference: \${resolveType}\`);
+    return null;
+  },
+});
+${isVtex ? `
+// -- VTEX wiring --
+setVtexFetch(createInstrumentedFetch("vtex"));
+` : ""}
+// -- Convention-driven section registration --
+applySectionConventions({
+  meta: sectionMeta,
+  syncComponents,
+  loadingFallbacks,
+  sectionGlob: import.meta.glob("./sections/**/*.tsx") as Record<string, () => Promise<any>>,
+});
+
+// -- Commerce + invoke --
+registerCommerceLoaders(COMMERCE_LOADERS);
+setInvokeLoaders(() => COMMERCE_LOADERS);
 `;
 }

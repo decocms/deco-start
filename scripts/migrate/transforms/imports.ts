@@ -9,6 +9,7 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
   // Fresh — remove entirely (handled by fresh-apis transform)
   [/^"\$fresh\/runtime\.ts"/, null],
   [/^"\$fresh\/server\.ts"/, null],
+  [/^"\$fresh\//, null], // catch-all for any $fresh/* import
 
   // Preact → React
   [/^"preact\/hooks"$/, `"react"`],
@@ -18,19 +19,25 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
   [/^"@preact\/signals-core"$/, `"~/sdk/signal"`],
   [/^"@preact\/signals"$/, `"~/sdk/signal"`],
 
-  // Deco framework
+  // Deco framework — hooks need splitting (useDevice, useScript, useSection)
   [/^"@deco\/deco\/hooks"$/, `"@decocms/start/sdk/useScript"`],
-  [/^"@deco\/deco\/blocks"$/, `"@decocms/start/types"`],
+  [/^"@deco\/deco\/blocks"$/, `"~/types/deco"`],
+  [/^"@deco\/deco\/o11y"$/, null], // logger — use console.log/warn/error instead
   [/^"@deco\/deco\/web"$/, null], // runtime.ts is rewritten
-  [/^"@deco\/deco"$/, `"@decocms/start"`],
+  [/^"@deco\/deco\/utils\/invoke\.types\.ts"$/, null],
+  [/^"@deco\/deco\/utils\/([^"]+)"$/, null],
+  [/^"@deco\/deco"$/, `"~/types/deco"`],
 
   // Apps — widgets & components
-  [/^"apps\/admin\/widgets\.ts"$/, `"@decocms/start/types/widgets"`],
-  [/^"apps\/website\/components\/Image\.tsx"$/, `"@decocms/apps/commerce/components/Image"`],
-  [/^"apps\/website\/components\/Picture\.tsx"$/, `"@decocms/apps/commerce/components/Picture"`],
-  [/^"apps\/website\/components\/Video\.tsx"$/, `"@decocms/apps/commerce/components/Video"`],
+  [/^"apps\/admin\/widgets\.ts"$/, `"~/types/widgets"`],
+  [/^"apps\/website\/components\/Image\.tsx"$/, `"~/components/ui/Image"`],
+  [/^"apps\/website\/components\/Picture\.tsx"$/, `"~/components/ui/Picture"`],
+  [/^"apps\/website\/components\/Video\.tsx"$/, `"~/components/ui/Video"`],
   [/^"apps\/website\/components\/Theme\.tsx"$/, `"~/components/ui/Theme"`],
+  [/^"apps\/website\/components\/([^"]+?)(?:\.tsx?)?"$/, `"~/components/ui/$1"`],
   [/^"apps\/commerce\/types\.ts"$/, `"@decocms/apps/commerce/types"`],
+  [/^"apps\/commerce\/mod\.ts"$/, `"~/types/commerce-app"`],
+  [/^"apps\/commerce\/types"$/, `"@decocms/apps/commerce/types"`],
 
   // Apps — VTEX (hooks, utils, actions, loaders, types)
   [/^"apps\/vtex\/hooks\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/vtex/hooks/$1"`],
@@ -65,15 +72,29 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
   [/^"site\/sdk\/useVariantPossiblities(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useVariantPossibilities"`],
   [/^"site\/sdk\/usePlatform(?:\.tsx?)?.*"$/, null],
 
+  // $store/account.json → ~/account.json (JSON import with assertion)
+  [/^"\$store\/account\.json"$/, `"~/account.json"`],
+  [/^"site\/account\.json"$/, `"~/account.json"`],
+
   // $store/ → ~/ (common Deno import map alias for project root)
   [/^"\$store\/sdk\/clx(?:\.tsx?)?.*"$/, `"~/sdk/clx"`],
   [/^"\$store\/sdk\/useId(?:\.tsx?)?.*"$/, `"react"`],
   [/^"\$store\/sdk\/useOffer(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useOffer"`],
+  [/^"\$store\/sdk\/format(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/formatPrice"`],
   [/^"\$store\/sdk\/useVariantPossiblities(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useVariantPossibilities"`],
   [/^"\$store\/sdk\/usePlatform(?:\.tsx?)?.*"$/, null],
   [/^"\$store\/(.+)"$/, `"~/$1"`],
 
+  // $home/ → ~/ (another common alias)
+  [/^"\$home\/(.+)"$/, `"~/$1"`],
+
   // site/ → ~/
+  [/^"site\/sdk\/clx(?:\.tsx?)?.*"$/, `"~/sdk/clx"`],
+  [/^"site\/sdk\/useId(?:\.tsx?)?.*"$/, `"react"`],
+  [/^"site\/sdk\/useOffer(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useOffer"`],
+  [/^"site\/sdk\/format(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/formatPrice"`],
+  [/^"site\/sdk\/useVariantPossiblities(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useVariantPossibilities"`],
+  [/^"site\/sdk\/usePlatform(?:\.tsx?)?.*"$/, null],
   [/^"site\/(.+)"$/, `"~/$1"`],
 ];
 
@@ -89,6 +110,8 @@ const RELATIVE_SDK_REWRITES: Array<[RegExp, string]> = [
   [/(?:\.\.\/)*sdk\/useId(?:\.tsx?)?$/, "react"],
   // sdk/useOffer → @decocms/apps/commerce/sdk/useOffer
   [/(?:\.\.\/)*sdk\/useOffer(?:\.tsx?)?$/, "@decocms/apps/commerce/sdk/useOffer"],
+  // sdk/format → @decocms/apps/commerce/sdk/formatPrice
+  [/(?:\.\.\/)*sdk\/format(?:\.tsx?)?$/, "@decocms/apps/commerce/sdk/formatPrice"],
   // sdk/useVariantPossiblities → @decocms/apps/commerce/sdk/useVariantPossibilities
   [/(?:\.\.\/)*sdk\/useVariantPossiblities(?:\.tsx?)?$/, "@decocms/apps/commerce/sdk/useVariantPossibilities"],
   // sdk/usePlatform → remove entirely
@@ -113,12 +136,19 @@ export function transformImports(content: string): TransformResult {
   const notes: string[] = [];
   let changed = false;
 
+  // Strip BOM that prevents ^ matching on the first line
+  if (content.charCodeAt(0) === 0xfeff) {
+    content = content.slice(1);
+    changed = true;
+  }
+
   // Match import/export lines with their specifiers
+  // The suffix group also captures import assertions (with { type: "json" }) and assert syntax
   const importLineRegex =
-    /^(import\s+(?:type\s+)?(?:\{[^}]*\}|[\w*]+(?:\s*,\s*\{[^}]*\})?)\s+from\s+)("[^"]+"|'[^']+')(;?\s*)$/gm;
+    /^(import\s+(?:type\s+)?(?:\{[^}]*\}|[\w*]+(?:\s*,\s*\{[^}]*\})?)\s+from\s+)("[^"]+"|'[^']+')((?:\s+(?:with|assert)\s+\{[^}]*\})?;?\s*)$/gm;
   const reExportLineRegex =
-    /^(export\s+(?:type\s+)?\{[^}]*\}\s+from\s+)("[^"]+"|'[^']+')(;?\s*)$/gm;
-  const sideEffectImportRegex = /^(import\s+)("[^"]+"|'[^']+')(;?\s*)$/gm;
+    /^(export\s+(?:type\s+)?\{[^}]*\}\s+from\s+)("[^"]+"|'[^']+')((?:\s+(?:with|assert)\s+\{[^}]*\})?;?\s*)$/gm;
+  const sideEffectImportRegex = /^(import\s+)("[^"]+"|'[^']+')((?:\s+(?:with|assert)\s+\{[^}]*\})?;?\s*)$/gm;
 
   /**
    * Post-process: split @deco/deco/hooks imports.

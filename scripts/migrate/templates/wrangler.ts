@@ -1,7 +1,6 @@
 import type { MigrationContext } from "../types.ts";
 
 export function generateWrangler(ctx: MigrationContext): string {
-  // Sanitize site name for worker name (lowercase, hyphens only)
   const workerName = ctx.siteName
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, "-")
@@ -14,6 +13,10 @@ export function generateWrangler(ctx: MigrationContext): string {
   "main": "./src/worker-entry.ts",
   "workers_dev": true,
   "preview_urls": true,
+  // Uncomment for redirect/AB testing support via KV:
+  // "kv_namespaces": [
+  //   { "binding": "SITES_KV", "id": "YOUR_KV_NAMESPACE_ID" }
+  // ],
   "observability": {
     "logs": {
       "enabled": true,

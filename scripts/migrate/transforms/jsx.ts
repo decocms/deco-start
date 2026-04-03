@@ -220,6 +220,15 @@ export function transformJsx(content: string): TransformResult {
     notes.push("Prefixed setTimeout/setInterval with window. for correct typing");
   }
 
+  // Strip data-fresh-disable-lock (Fresh-specific, not needed in React/TanStack)
+  if (result.includes("data-fresh-disable-lock")) {
+    result = result.replace(/\s*data-fresh-disable-lock=\{[^}]*\}/g, "");
+    result = result.replace(/\s*data-fresh-disable-lock="[^"]*"/g, "");
+    result = result.replace(/\s*data-fresh-disable-lock/g, "");
+    changed = true;
+    notes.push("Removed data-fresh-disable-lock attribute (Fresh-specific)");
+  }
+
   // Ensure React import exists if we introduced React.* references
   if (
     (result.includes("React.") || result.includes("React,")) &&
