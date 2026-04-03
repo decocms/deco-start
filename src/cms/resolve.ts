@@ -639,6 +639,11 @@ async function resolveRawSection(
     if (!obj.__resolveType) continue;
 
     const resolveType = obj.__resolveType as string;
+
+    if (resolveType.includes("eader")) {
+      console.log(`[RAW-SECTION] resolveType="${resolveType}" objKeys=[${Object.keys(obj).join(",")}]`);
+    }
+
     const sectionLoader = getSection(resolveType);
     if (!sectionLoader) {
       console.warn(`[CMS] No component registered for: ${resolveType}`);
@@ -647,6 +652,11 @@ async function resolveRawSection(
 
     const { __resolveType: _, ...rawProps } = obj;
     const props = normalizeNestedSections(rawProps) as Record<string, unknown>;
+
+    if (resolveType.includes("eader")) {
+      console.log(`[RAW-SECTION] rawPropKeys=[${Object.keys(rawProps).join(",")}] normalizedPropKeys=[${Object.keys(props).join(",")}]`);
+    }
+
     results.push({
       component: resolveType,
       props,
