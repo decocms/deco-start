@@ -175,7 +175,20 @@ export const loadCmsHomePage = createServerFn({ method: "GET" }).handler(async (
   };
   const page = await resolveDecoPage("/", matcherCtx);
   if (!page) return null;
+
+  for (const s of page.resolvedSections) {
+    if (s.component?.includes("eader")) {
+      console.log(`[HOME-ROUTE] BEFORE loaders: "${s.component}" propKeys=[${Object.keys(s.props || {}).join(",")}] propsSize=${JSON.stringify(s.props || {}).length}`);
+    }
+  }
+
   const enrichedSections = await runSectionLoaders(page.resolvedSections, request);
+
+  for (const s of enrichedSections) {
+    if (s.component?.includes("eader")) {
+      console.log(`[HOME-ROUTE] AFTER loaders: "${s.component}" propKeys=[${Object.keys(s.props || {}).join(",")}]`);
+    }
+  }
 
   const eagerKeys = enrichedSections.map((s) => s.component);
   await preloadSectionComponents(eagerKeys);
