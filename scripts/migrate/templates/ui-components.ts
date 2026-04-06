@@ -16,7 +16,8 @@ export function generateUiComponents(_ctx: MigrationContext): Record<string, str
 } from "@decocms/apps/commerce/components/Image";
 `;
 
-  files["src/components/ui/Picture.tsx"] = `import {
+  files["src/components/ui/Picture.tsx"] = `import type { ReactNode } from "react";
+import {
   Image,
   getSrcSet,
   type FitOptions,
@@ -36,6 +37,19 @@ export interface PictureProps extends Omit<ImageProps, "sizes"> {
   sources: PictureSourceProps[];
 }
 
+export function Source(props: PictureSourceProps & { fit?: FitOptions }) {
+  const srcSet = getSrcSet(props.src, props.width, props.height, props.fit ?? "cover");
+  return (
+    <source
+      srcSet={srcSet}
+      media={props.media}
+      width={props.width}
+      height={props.height}
+      sizes={props.sizes ?? \`\${props.width}px\`}
+    />
+  );
+}
+
 export function Picture({
   sources,
   src,
@@ -43,24 +57,15 @@ export function Picture({
   height,
   fit = "cover",
   preload,
+  children,
   ...rest
-}: PictureProps) {
+}: PictureProps & { children?: ReactNode }) {
   return (
     <picture>
-      {sources.map((source, i) => {
-        const srcSet = getSrcSet(source.src, source.width, source.height, source.fit ?? fit);
-        return (
-          <source
-            key={i}
-            srcSet={srcSet}
-            media={source.media}
-            width={source.width}
-            height={source.height}
-            sizes={source.sizes ?? \`\${source.width}px\`}
-          />
-        );
-      })}
-      <Image src={src} width={width} height={height} fit={fit} preload={preload} {...rest} />
+      {children ?? sources?.map((source, i) => (
+        <Source key={i} {...source} fit={source.fit ?? fit} />
+      ))}
+      {src && <Image src={src} width={width} height={height} fit={fit} preload={preload} {...rest} />}
     </picture>
   );
 }
@@ -105,6 +110,32 @@ export default function Video({
       className={className}
       poster={poster}
     />
+  );
+}
+`;
+
+  files["src/components/ui/Seo.tsx"] = `export interface Props {
+  title?: string;
+  description?: string;
+  canonical?: string;
+  image?: string;
+  noIndexing?: boolean;
+  jsonLDs?: unknown[];
+}
+
+export default function Seo({ jsonLDs }: Props) {
+  if (!jsonLDs?.length) return null;
+
+  return (
+    <>
+      {jsonLDs.map((jsonLD, i) => (
+        <script
+          key={i}
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLD) }}
+        />
+      ))}
+    </>
   );
 }
 `;

@@ -1,5 +1,108 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { MigrationContext } from "../types.ts";
 import type { ExtractedTheme } from "../analyzers/theme-extractor.ts";
+
+/**
+ * Find the original site's custom CSS file.
+ * Deco sites typically have their custom CSS in:
+ * - tailwind.css (root level, combined directives + custom)
+ * - static/tailwind.css (compiled output — skip this)
+ * - static-{brand}/tailwind.css (compiled output — skip this)
+ * - styles/*.css
+ */
+function findOriginalCss(ctx: MigrationContext): string | null {
+  // Prefer root tailwind.css (has custom CSS + directives)
+  const rootCss = path.join(ctx.sourceDir, "tailwind.css");
+  if (fs.existsSync(rootCss)) {
+    return fs.readFileSync(rootCss, "utf-8");
+  }
+
+  // Check for styles/ directory
+  const stylesDir = path.join(ctx.sourceDir, "styles");
+  if (fs.existsSync(stylesDir)) {
+    for (const file of fs.readdirSync(stylesDir)) {
+      if (file.endsWith(".css") && file !== "tailwind.css") {
+        return fs.readFileSync(path.join(stylesDir, file), "utf-8");
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Extract custom CSS from the original site's CSS file.
+ * Strips TW3 directives (@tailwind base/components/utilities) and
+ * returns only the custom CSS (component overrides, @layer, @font-face, etc.)
+ */
+function extractCustomCss(rawCss: string): string {
+  return rawCss
+    // Remove Tailwind v3 directives (replaced by @import "tailwindcss")
+    .replace(/^@tailwind\s+(?:base|components|utilities)\s*;\s*$/gm, "")
+    // Remove empty lines left over
+    .replace(/^\s*\n/gm, "")
+    .trim();
+}
+
+/**
+ * Transform @apply directives for TW3→TW4 compatibility.
+ * The tailwind.ts transform handles className= attributes in JSX,
+ * but @apply inside CSS also needs class renames.
+ *
+ * Also converts @apply with custom brand/theme colors to native CSS
+ * properties when the utility class might not be registered in TW4.
+ */
+function transformApplyDirectives(css: string): string {
+  return css
+    .replace(/@apply\s+([^;]+);/g, (_match, classes: string) => {
+      let fixed = classes;
+      // flex-grow-0 → grow-0
+      fixed = fixed.replace(/\bflex-grow-0\b/g, "grow-0");
+      fixed = fixed.replace(/\bflex-grow\b/g, "grow");
+      fixed = fixed.replace(/\bflex-shrink-0\b/g, "shrink-0");
+      fixed = fixed.replace(/\bflex-shrink\b/g, "shrink");
+      // transform → removed (auto in v4)
+      fixed = fixed.replace(/\btransform\b(?!-none)/g, "");
+      fixed = fixed.replace(/\bfilter\b/g, "");
+      // ring → ring-3
+      fixed = fixed.replace(/\bring\b(?!-)/g, "ring-3");
+      // Clean up multiple spaces
+      fixed = fixed.replace(/\s{2,}/g, " ").trim();
+      return `@apply ${fixed};`;
+    });
+}
+
+/**
+ * Test if a value looks like oklch coordinates (space-separated numbers,
+ * possibly with `/` for alpha). Examples: "0.5 0.2 30", "0.8 0.15 120 / 0.5"
+ * This distinguishes oklch coordinate values from hex colors.
+ */
+function isOklchCoordinates(val: string): boolean {
+  const trimmed = val.trim();
+  // oklch coordinates: 2-3 space-separated numbers, possibly with / alpha
+  // e.g. "0.5 0.2 30" or "0.85 0.15 120 / 0.5"
+  return /^[\d.]+\s+[\d.]+\s+[\d.]+(\s*\/\s*[\d.]+)?$/.test(trimmed);
+}
+
+/**
+ * Extract the primary font family from @font-face declarations in CSS.
+ * Returns the first font-family name found, or null.
+ */
+function extractPrimaryFontFromCss(css: string): string | null {
+  const fontFaceRe = /@font-face\s*\{[^}]*font-family:\s*["']?([^"';]+)["']?\s*;/g;
+  const families = new Set<string>();
+  let match;
+  while ((match = fontFaceRe.exec(css)) !== null) {
+    families.add(match[1].trim());
+  }
+  if (families.size === 0) return null;
+  // Prefer non-icon fonts
+  const nonIcon = [...families].filter(
+    (f) => !/icon|awesome|material/i.test(f),
+  );
+  return nonIcon[0] || [...families][0];
+}
 
 export function generateAppCss(ctx: MigrationContext, theme?: ExtractedTheme): string {
   const sections: string[] = [];
@@ -36,7 +139,15 @@ ${colorLines}
 }`);
 
   // ── @theme block: Tailwind v3->v4 color migration ─────────────────
-  const fontFamily = theme?.fontFamily || ctx.fontFamily;
+  // Determine font family from theme, context, or original CSS @font-face
+  let fontFamily = theme?.fontFamily || ctx.fontFamily;
+  if (!fontFamily) {
+    const originalCssForFont = findOriginalCss(ctx);
+    if (originalCssForFont) {
+      const extracted = extractPrimaryFontFromCss(originalCssForFont);
+      if (extracted) fontFamily = extracted;
+    }
+  }
   let fontLine = "";
   if (fontFamily) {
     const firstFont = fontFamily.split(",")[0].trim().replace(/['"]/g, "");
@@ -55,6 +166,10 @@ ${colorLines}
   --color-inherit: inherit;${fontLine}`;
 
   // Add extracted theme variables to @theme
+  // Theme variables come from the CMS Theme section (.deco/blocks/Theme-*.json).
+  // The CMS sets CSS custom properties on :root at runtime, so @theme entries
+  // should reference var(--x) instead of hardcoding values. For oklch-formatted
+  // values (space-separated numbers like "0.5 0.2 30"), wrap with oklch().
   const vars = theme?.variables ?? {};
   if (Object.keys(vars).length > 0) {
     themeBlock += `\n`;
@@ -68,7 +183,22 @@ ${colorLines}
     for (const [prefix, entries] of Object.entries(grouped)) {
       themeBlock += `\n  /* ${prefix} */`;
       for (const [k, v] of entries) {
-        themeBlock += `\n  ${k}: ${v};`;
+        if (!k.startsWith("--color-") && !k.startsWith("--font-") && !k.startsWith("--breakpoint-")) {
+          const val = v.trim();
+          const isColor = /^#[0-9a-fA-F]{3,8}$/.test(val) ||
+            /^(rgb|hsl|oklch|oklab)\(/.test(val) ||
+            /^(transparent|currentColor|inherit)$/.test(val) ||
+            isOklchCoordinates(val);
+          if (isColor) {
+            const varName = k.replace(/^--/, "");
+            const colorKey = `--color-${varName}`;
+            if (isOklchCoordinates(val)) {
+              themeBlock += `\n  ${colorKey}: oklch(var(${k}));`;
+            } else {
+              themeBlock += `\n  ${colorKey}: var(${k});`;
+            }
+          }
+        }
       }
     }
   }
@@ -199,6 +329,23 @@ section[data-deferred="true"] {
 .scrollbar-none::-webkit-scrollbar {
   display: none;
 }`);
+
+  // ── Incorporate original site's custom CSS ────────────────────
+  // Instead of throwing away the site's CSS, we extract and append
+  // all custom rules (component overrides, @layer base, @font-face,
+  // typography utilities, feature-specific CSS, etc.)
+  const originalCss = findOriginalCss(ctx);
+  if (originalCss) {
+    const customCss = extractCustomCss(originalCss);
+    if (customCss) {
+      const transformed = transformApplyDirectives(customCss);
+      sections.push(`/* ═══════════════════════════════════════════════════════════════
+   Original site CSS (migrated from tailwind.css)
+   ═══════════════════════════════════════════════════════════════ */
+
+${transformed}`);
+    }
+  }
 
   return sections.join("\n\n") + "\n";
 }
