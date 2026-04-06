@@ -3,20 +3,29 @@ import type { MigrationContext } from "../types.ts";
 export function generateViteConfig(ctx: MigrationContext): string {
   const isVtex = ctx.platform === "vtex";
 
+  const vtexAccount = ctx.vtexAccount || ctx.siteName.replace(/-migrated$/, "").replace(/-storefront$/, "");
+
   const vtexProxy = isVtex ? `
     // VTEX API proxy for local development
     proxy: {
       "/api/": {
-        target: "https://\${process.env.VTEX_ACCOUNT || "${ctx.siteName}"}.vtexcommercestable.com.br",
+        target: VTEX_ORIGIN,
         changeOrigin: true,
-        secure: true,
+        cookieDomainRewrite: { "*": "" },
       },
-      "/checkout/": {
-        target: "https://\${process.env.VTEX_ACCOUNT || "${ctx.siteName}"}.vtexcommercestable.com.br",
+      "/checkout": {
+        target: VTEX_ORIGIN,
         changeOrigin: true,
-        secure: true,
+        cookieDomainRewrite: { "*": "" },
       },
     },` : "";
+
+  const vtexConstants = isVtex ? `
+const VTEX_ACCOUNT = "${vtexAccount}";
+const VTEX_ENVIRONMENT = "vtexcommercestable";
+const VTEX_DOMAIN = "com.br";
+const VTEX_ORIGIN = \`https://\${VTEX_ACCOUNT}.\${VTEX_ENVIRONMENT}.\${VTEX_DOMAIN}\`;
+` : "";
 
   return `import { cloudflare } from "@cloudflare/vite-plugin";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
@@ -27,7 +36,7 @@ import { defineConfig } from "vite";
 import path from "path";
 
 const srcDir = path.resolve(__dirname, "src");
-
+${vtexConstants}
 export default defineConfig({
   server: {
     allowedHosts: [".decocdn.com"],${vtexProxy}
@@ -106,6 +115,8 @@ export default defineConfig({
   },
   resolve: {
     dedupe: [
+      "@decocms/start",
+      "@decocms/apps",
       "@tanstack/react-start",
       "@tanstack/react-router",
       "@tanstack/react-start-server",

@@ -4,6 +4,7 @@ import type { MigrationContext, IslandClassification } from "../types.ts";
 import { log } from "../types.ts";
 
 const REEXPORT_RE = /^export\s+\{\s*default\s*\}\s+from\s+["']([^"']+)["']/m;
+const NAMED_REEXPORT_RE = /^export\s+\{[^}]+\}\s+from\s+["']([^"']+)["']/m;
 const THIN_WRAPPER_RE = /^import\s+(\w+)\s+from\s+["']([^"']+)["']/m;
 const RETURN_COMPONENT_RE = /return\s+<\s*\w+\s+\{\.\.\.props\}/;
 
@@ -40,6 +41,28 @@ export function classifyIslands(ctx: MigrationContext): void {
         lineCount,
       });
       continue;
+    }
+
+    // Check for named re-export only file: export { A, B } from "..."
+    // (entire file is just re-exports, no other logic)
+    if (lineCount <= 10) {
+      const namedReExportMatch = content.match(NAMED_REEXPORT_RE);
+      if (namedReExportMatch) {
+        const trimmedLines = nonEmptyLines.map((l) => l.trim());
+        const hasOtherCode = trimmedLines.some(
+          (l) => !l.startsWith("export") && !l.startsWith("//") && !l.startsWith("/*") && !l.startsWith("*") && !l.startsWith("}") && !l.startsWith(",") && !/^\w+,?$/.test(l)
+        );
+        if (!hasOtherCode) {
+          ctx.islandClassifications.push({
+            path: file.path,
+            type: "wrapper",
+            wrapsComponent: namedReExportMatch[1],
+            suggestedTarget: `src/${file.path.replace("islands/", "components/")}`,
+            lineCount,
+          });
+          continue;
+        }
+      }
     }
 
     // Check for thin wrapper pattern: import X from "...", return <X {...props} />

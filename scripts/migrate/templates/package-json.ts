@@ -24,35 +24,43 @@ function getLatestVersion(pkg: string, fallback: string): string {
  */
 function extractNpmDeps(importMap: Record<string, string>): Record<string, string> {
   const deps: Record<string, string> = {};
+  const SKIP_KEYS = new Set([
+    "daisyui", "preact-render-to-string", "simple-git", "fast-json-patch",
+    "postcss", "cssnano", "partytown",
+  ]);
   for (const [key, value] of Object.entries(importMap)) {
-    if (!value.startsWith("npm:")) continue;
     // Skip framework deps we handle ourselves
     if (key.startsWith("preact") || key.startsWith("@preact/")) continue;
     if (key.startsWith("@deco/")) continue;
-    if (key === "daisyui") continue;
-    if (key === "preact-render-to-string") continue;
-    if (key === "simple-git") continue;
-    if (key === "fast-json-patch") continue;
-    if (key === "postcss") continue;
-    if (key === "cssnano") continue;
     if (key.startsWith("@biomejs/")) continue;
-    if (key === "partytown") continue;
-    // Consolidate firebase/* split imports into single "firebase" package
     if (key.startsWith("firebase/")) continue;
+    if (SKIP_KEYS.has(key)) continue;
 
-    const raw = value.slice(4); // remove "npm:"
-    const atIdx = raw.lastIndexOf("@");
-    if (atIdx <= 0) {
-      deps[raw] = "*";
-    } else {
-      const name = raw.slice(0, atIdx);
-      let version = raw.slice(atIdx + 1);
-      // Don't double-prefix with ^ if version already has a range prefix
-      if (/^[~^>=<]/.test(version)) {
-        deps[name] = version;
+    // npm: protocol — direct npm import
+    if (value.startsWith("npm:")) {
+      const raw = value.slice(4);
+      const atIdx = raw.lastIndexOf("@");
+      if (atIdx <= 0) {
+        deps[raw] = "*";
       } else {
-        deps[name] = `^${version}`;
+        const name = raw.slice(0, atIdx);
+        let version = raw.slice(atIdx + 1);
+        if (/^[~^>=<]/.test(version)) {
+          deps[name] = version;
+        } else {
+          deps[name] = `^${version}`;
+        }
       }
+      continue;
+    }
+
+    // esm.sh URLs — extract package name and version
+    const esmMatch = value.match(/esm\.sh\/(@?[^@?]+)@([^?/]+)/);
+    if (esmMatch) {
+      const [, name, version] = esmMatch;
+      if (name.startsWith("preact") || name.startsWith("@preact/")) continue;
+      deps[name] = `^${version}`;
+      continue;
     }
   }
   return deps;
@@ -97,9 +105,9 @@ export function generatePackageJson(ctx: MigrationContext): string {
         "tsx node_modules/@decocms/start/scripts/generate-invoke.ts",
       "generate:sections":
         "tsx node_modules/@decocms/start/scripts/generate-sections.ts",
-      "generate:loaders": `tsx node_modules/@decocms/start/scripts/generate-loaders.ts --exclude vtex/loaders,vtex/actions`,
+      "generate:loaders": `tsx node_modules/@decocms/start/scripts/generate-loaders.ts --exclude vtex/loaders,vtex/actions,loaders/vtex-auth-loader,loaders/reviews/productReviews,loaders/product/buyTogether,loaders/search/productListPageCollection,loaders/search/intelligenseSearch,loaders/Layouts/ProductCard`,
       build:
-        "npm run generate:blocks && npm run generate:schema && npm run generate:sections && npm run generate:loaders && tsr generate && vite build",
+        "npm run generate:blocks && npm run generate:sections && npm run generate:loaders && npm run generate:schema && npm run generate:invoke && tsr generate && vite build",
       preview: "vite preview",
       deploy: "npm run build && wrangler deploy",
       types: "wrangler types",

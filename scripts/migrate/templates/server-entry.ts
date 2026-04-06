@@ -7,13 +7,16 @@ function capitalize(s: string): string {
 export function generateServerEntry(
   ctx: MigrationContext,
 ): Record<string, string> {
-  return {
+  const files: Record<string, string> = {
     "src/server.ts": generateServer(),
     "src/worker-entry.ts": generateWorkerEntry(ctx),
     "src/router.tsx": generateRouter(),
     "src/runtime.ts": generateRuntime(),
     "src/context.ts": generateContext(ctx),
+    "src/server/invoke.ts": generateInvoke(ctx),
+    "src/server/invoke.gen.ts": generateInvokeGen(ctx),
   };
+  return files;
 }
 
 function generateServer(): string {
@@ -70,18 +73,11 @@ export default createDecoWorkerEntry(serverEntry, {
 }
 
 function generateVtexWorkerEntry(ctx: MigrationContext): string {
-  return `/**
- * Cloudflare Worker entry point — VTEX storefront.
- *
- * Handles admin protocol, VTEX checkout proxy, CSP,
- * segment building, and edge caching.
- *
- * MANUAL REVIEW: Add site-specific CSP domains (analytics, CDN, tag managers).
- */
-import "./setup";
+  const vtexAccount = ctx.vtexAccount || ctx.siteName;
+
+  return `import "./setup";
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { createDecoWorkerEntry } from "@decocms/start/sdk/workerEntry";
-import { detectDevice } from "@decocms/start/sdk/useDevice";
 import {
   handleMeta,
   handleDecofileRead,
@@ -89,35 +85,57 @@ import {
   handleRender,
   corsHeaders,
 } from "@decocms/start/admin";
+import { shouldProxyToVtex, createVtexCheckoutProxy } from "@decocms/apps/vtex/utils/proxy";
 import { extractVtexContext } from "@decocms/apps/vtex/middleware";
-import {
-  shouldProxyToVtex,
-  createVtexCheckoutProxy,
-} from "@decocms/apps/vtex/utils/proxy";
-import { getVtexConfig } from "@decocms/apps/vtex";
+import { loadRedirects, matchRedirect } from "@decocms/start/sdk/redirects";
+import { withABTesting } from "@decocms/start/sdk/abTesting";
+import { loadBlocks } from "@decocms/start/cms";
+
+// ---------------------------------------------------------------------------
+// VTEX checkout proxy — configured via @decocms/apps factory
+// ---------------------------------------------------------------------------
+
+const proxyCheckout = createVtexCheckoutProxy({
+  account: "${vtexAccount}",
+  checkoutOrigin: "${vtexAccount}.vtexcommercestable.com.br",
+  // TODO: Set secure checkout origin if different (e.g. "secure.yourdomain.com.br")
+});
+
+// Site-specific CSP directives — third-party script domains vary per site.
+// MANUAL REVIEW: Add analytics, CDN, and tag manager domains.
+const CSP_DIRECTIVES = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com https://connect.facebook.net https://analytics.tiktok.com https://script.hotjar.com https://static.hotjar.com https://scripts.clarity.ms https://www.clarity.ms https://sp.vtex.com https://bat.bing.com https://s.lilstts.com https://storage.googleapis.com",
+  "img-src 'self' data: https: blob:",
+  "style-src 'self' 'unsafe-inline' https:",
+  "font-src 'self' data: https:",
+  "connect-src 'self' https: wss:",
+  "frame-src 'self' https://www.googletagmanager.com https://*.firebaseapp.com",
+  "media-src 'self' https:",
+  "object-src 'none'",
+  "base-uri 'self'",
+];
 
 const serverEntry = createServerEntry({ fetch: handler.fetch });
 
-const CSP_DIRECTIVES = [
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval' *.vtex.com.br *.vteximg.com.br *.vtexassets.com",
-  "img-src 'self' data: blob: *.vteximg.com.br *.vtexassets.com *.vtexcommercestable.com.br",
-  "connect-src 'self' *.vtex.com.br *.vtexcommercestable.com.br *.vtexassets.com",
-  "frame-src 'self' *.vtex.com.br",
-  "style-src 'self' 'unsafe-inline' fonts.googleapis.com",
-  "font-src 'self' fonts.gstatic.com data:",
-  // TODO: Add site-specific domains (analytics, CDN, tag managers)
-];
+// ---------------------------------------------------------------------------
+// CMS Redirects — loaded once at module level from .deco/blocks/
+// ---------------------------------------------------------------------------
+const cmsRedirects = loadRedirects(loadBlocks());
 
-const { account } = getVtexConfig();
-
-const vtexProxy = createVtexCheckoutProxy({
-  account,
-  checkoutOrigin: \`\${account}.vtexcommercestable.com.br\`,
-  // TODO: Set your secure checkout origin if different from default
-  // checkoutOrigin: "secure.yourdomain.com.br",
-});
+const MOBILE_RE = /mobile|android|iphone/i;
 
 const decoWorker = createDecoWorkerEntry(serverEntry, {
+  csp: CSP_DIRECTIVES,
+  buildSegment: (request) => {
+    const vtx = extractVtexContext(request);
+    return {
+      device: MOBILE_RE.test(request.headers.get("user-agent") ?? "") ? "mobile" : "desktop",
+      loggedIn: vtx.isLoggedIn,
+      salesChannel: vtx.salesChannel,
+      regionId: (vtx as any).regionId ?? undefined,
+    };
+  },
   admin: {
     handleMeta,
     handleDecofileRead,
@@ -125,60 +143,46 @@ const decoWorker = createDecoWorkerEntry(serverEntry, {
     handleRender,
     corsHeaders,
   },
-
-  csp: CSP_DIRECTIVES,
-
-  buildSegment: (request) => {
-    const vtx = extractVtexContext(request);
-    const device = detectDevice(request.headers.get("user-agent") ?? "");
-
-    return {
-      device,
-      ...(vtx.isLoggedIn ? { loggedIn: true } : {}),
-      ...(vtx.salesChannel !== "1" ? { salesChannel: vtx.salesChannel } : {}),
-      ...(vtx.regionId ? { regionId: vtx.regionId } : {}),
-    };
-  },
-
   proxyHandler: async (request, url) => {
-    const { pathname } = url;
+    if (url.pathname === "/login" || url.pathname === "/login/" ||
+        url.pathname === "/logout" || url.pathname === "/logout/") return null;
+    if (!shouldProxyToVtex(url.pathname)) return null;
 
-    // CMS-managed routes — don't proxy
-    if (pathname === "/login" || pathname === "/logout") return null;
-
-    // VTEX checkout and API proxy
-    if (shouldProxyToVtex(pathname)) {
-      return vtexProxy(request, url);
+    try {
+      return await proxyCheckout(request, url);
+    } catch (err) {
+      console.error("[PROXY] Failed to proxy", url.pathname, err);
+      return new Response(\`Proxy error for \${url.pathname}: \${err}\`, {
+        status: 502,
+        headers: { "content-type": "text/plain" },
+      });
     }
-
-    return null;
   },
 });
 
-export default decoWorker;
+// ---------------------------------------------------------------------------
+// A/B wrapper — KV-driven traffic split between TanStack and legacy origin
+// ---------------------------------------------------------------------------
 
-// ─── A/B Testing + Redirects (uncomment when ready) ─────────────────
-// import { withABTesting } from "@decocms/start/sdk/abTesting";
-// import { loadBlocks } from "@decocms/start/cms";
-// import { loadRedirects, matchRedirect } from "@decocms/start/sdk/redirects";
-//
-// const cmsRedirects = loadRedirects(loadBlocks());
-//
-// export default withABTesting(decoWorker, {
-//   kvBinding: "AB_TESTING",
-//   preHandler: (request) => {
-//     const url = new URL(request.url);
-//     const redirect = matchRedirect(url.pathname, cmsRedirects);
-//     if (redirect) {
-//       return new Response(null, {
-//         status: redirect.type === "temporary" ? 307 : 301,
-//         headers: { Location: redirect.to },
-//       });
-//     }
-//     return null;
-//   },
-//   shouldBypassAB: (_request, url) => shouldProxyToVtex(url.pathname),
-// });
+export default withABTesting(decoWorker, {
+  kvBinding: "SITES_KV",
+  preHandler: (request, url) => {
+    const redirect = matchRedirect(url.pathname, cmsRedirects);
+    if (redirect) {
+      const target = url.search ? \`\${redirect.to}\${url.search}\` : redirect.to;
+      return new Response(null, {
+        status: redirect.status,
+        headers: { Location: target },
+      });
+    }
+    return null;
+  },
+  shouldBypassAB: (_request, url) => {
+    if (url.pathname === "/login" || url.pathname === "/login/" ||
+        url.pathname === "/logout" || url.pathname === "/logout/") return false;
+    return shouldProxyToVtex(url.pathname);
+  },
+});
 `;
 }
 
@@ -273,3 +277,269 @@ const Account = createContext<AccountContextValue>({
 export default Account;
 `;
 }
+
+function generateInvoke(ctx: MigrationContext): string {
+  if (ctx.platform !== "vtex") {
+    return `/**
+ * Site invoke — server functions placeholder.
+ * TODO: Add platform-specific invoke actions here.
+ */
+export const invoke = {} as const;
+`;
+  }
+
+  const hasVtexAuthLoader = ctx.loaderInventory.some((l) =>
+    l.path.includes("vtex-auth-loader")
+  );
+
+  return `/**
+ * Site invoke — extends generated VTEX actions with site-specific server functions.
+ *
+ * Standard VTEX actions (cart, session, masterdata, newsletter, misc) are
+ * auto-generated in invoke.gen.ts. Run \`npm run generate:invoke\` to update.
+ */
+import { createServerFn } from "@tanstack/react-start";
+import {
+  getRequestHeader,
+  getResponseHeaders,
+  setResponseHeader,
+} from "@tanstack/react-start/server";
+import { vtexActions } from "./invoke.gen";
+${hasVtexAuthLoader ? `import vtexAuthLoader from "../loaders/vtex-auth-loader";\n` : ""}import {
+  extractVtexCookiesFromHeader,
+  stripCookieDomain,
+  performVtexLogout,
+  parseVtexAuthJwt,
+} from "@decocms/apps/vtex/utils/authHelpers";
+
+export type { OrderForm } from "./invoke.gen";
+
+function mergeSetCookies(newCookies: string[]): void {
+  if (newCookies.length === 0) return;
+  const existing: string[] =
+    typeof getResponseHeaders().getSetCookie === "function"
+      ? getResponseHeaders().getSetCookie()
+      : [];
+  setResponseHeader("set-cookie", [...existing, ...newCookies]);
+}
+
+function getVtexCookies(): string {
+  return extractVtexCookiesFromHeader(getRequestHeader("cookie") ?? "");
+}
+
+${hasVtexAuthLoader ? `const _vtexAuth = createServerFn({ method: "POST" })
+  .inputValidator((data: { action: string; params: Record<string, any> }) => data)
+  .handler(async ({ data }): Promise<any> => {
+    const result = await vtexAuthLoader({
+      ...data,
+      _cookies: getVtexCookies(),
+    } as any);
+    if (result instanceof Response) {
+      const setCookies = result.headers.getSetCookie?.() ?? [];
+      mergeSetCookies(stripCookieDomain(setCookies));
+      return result.json();
+    }
+    return result;
+  });
+` : ""}const _logout = createServerFn({ method: "POST" }).handler(
+  async (): Promise<{ success: boolean }> => {
+    const { setCookies } = await performVtexLogout(getVtexCookies());
+    mergeSetCookies(setCookies);
+    return { success: true };
+  },
+);
+
+const _getUserFromJwt = createServerFn({ method: "POST" }).handler(
+  async (): Promise<{ email: string; userId: string } | null> => {
+    return parseVtexAuthJwt(getRequestHeader("cookie") ?? "");
+  },
+);
+
+export const invoke = {
+  vtex: {
+    actions: vtexActions,
+  },
+  site: {
+    loaders: {
+${hasVtexAuthLoader ? "      vtexAuth: _vtexAuth,\n" : ""}      getUserFromJwt: _getUserFromJwt,
+    },
+    actions: {
+      logout: _logout,
+    },
+  },
+} as const;
+`;
+}
+
+function generateInvokeGen(ctx: MigrationContext): string {
+  if (ctx.platform !== "vtex") {
+    return `// invoke.gen.ts — no platform-specific actions to generate
+export const vtexActions = {} as const;
+`;
+  }
+
+  return `// Auto-generated VTEX invoke actions
+// Each server function is a top-level const so TanStack Start's compiler
+// can transform createServerFn().handler() into RPC stubs on the client.
+import { createServerFn } from "@tanstack/react-start";
+import { getOrCreateCart, addItemsToCart, updateCartItems, addCouponToCart, simulateCart, getSellersByRegion, setShippingPostalCode, updateOrderFormAttachment } from "@decocms/apps/vtex/actions/checkout";
+import { createSession, editSession } from "@decocms/apps/vtex/actions/session";
+import { createDocument, getDocument, patchDocument, searchDocuments, uploadAttachment } from "@decocms/apps/vtex/actions/masterData";
+import { subscribe } from "@decocms/apps/vtex/actions/newsletter";
+import { notifyMe } from "@decocms/apps/vtex/actions/misc";
+import type { OrderForm } from "@decocms/apps/vtex/types";
+import type { SimulationItem, RegionResult } from "@decocms/apps/vtex/actions/checkout";
+import type { SessionData } from "@decocms/apps/vtex/actions/session";
+import type { CreateDocumentResult, UploadAttachmentOpts } from "@decocms/apps/vtex/actions/masterData";
+import type { SubscribeProps } from "@decocms/apps/vtex/actions/newsletter";
+import type { NotifyMeProps } from "@decocms/apps/vtex/actions/misc";
+
+function unwrapResult<T>(result: unknown): T {
+  if (result && typeof result === "object" && "data" in result) {
+    return (result as { data: T }).data;
+  }
+  return result as T;
+}
+
+const $getOrCreateCart = createServerFn({ method: "POST" })
+  .inputValidator((data: { orderFormId?: string }) => data)
+  .handler(async ({ data }): Promise<any> => {
+    const result = await getOrCreateCart(data);
+    return unwrapResult(result);
+  });
+
+const $addItemsToCart = createServerFn({ method: "POST" })
+  .inputValidator((data: {
+    orderFormId: string;
+    orderItems: Array<{ id: string; seller: string; quantity: number }>;
+  }) => data)
+  .handler(async ({ data }): Promise<any> => {
+    const result = await addItemsToCart(data);
+    return unwrapResult(result);
+  });
+
+const $updateCartItems = createServerFn({ method: "POST" })
+  .inputValidator((data: { orderFormId: string; orderItems: Array<{ index: number; quantity: number }> }) => data)
+  .handler(async ({ data }): Promise<any> => {
+    const result = await updateCartItems(data);
+    return unwrapResult(result);
+  });
+
+const $addCouponToCart = createServerFn({ method: "POST" })
+  .inputValidator((data: { orderFormId: string; text: string }) => data)
+  .handler(async ({ data }): Promise<any> => {
+    const result = await addCouponToCart(data);
+    return unwrapResult(result);
+  });
+
+const $simulateCart = createServerFn({ method: "POST" })
+  .inputValidator((data: { items: SimulationItem[]; postalCode: string; country?: string }) => data)
+  .handler(async ({ data }): Promise<any> => {
+    return simulateCart(data);
+  });
+
+const $getSellersByRegion = createServerFn({ method: "POST" })
+  .inputValidator((data: { postalCode: string; salesChannel?: string }) => data)
+  .handler(async ({ data }): Promise<any> => {
+    return getSellersByRegion(data);
+  });
+
+const $setShippingPostalCode = createServerFn({ method: "POST" })
+  .inputValidator((data: { orderFormId: string; postalCode: string; country?: string }) => data)
+  .handler(async ({ data }): Promise<any> => {
+    return setShippingPostalCode(data);
+  });
+
+const $updateOrderFormAttachment = createServerFn({ method: "POST" })
+  .inputValidator((data: { orderFormId: string; attachment: string; body: Record<string, unknown> }) => data)
+  .handler(async ({ data }): Promise<any> => {
+    const result = await updateOrderFormAttachment(data);
+    return unwrapResult(result);
+  });
+
+const $createSession = createServerFn({ method: "POST" })
+  .inputValidator((data: Record<string, any>) => data)
+  .handler(async ({ data }): Promise<any> => {
+    const result = await createSession(data);
+    return unwrapResult(result);
+  });
+
+const $editSession = createServerFn({ method: "POST" })
+  .inputValidator((data: { public: Record<string, { value: string }> }) => data)
+  .handler(async ({ data }): Promise<any> => {
+    const result = await editSession(data);
+    return unwrapResult(result);
+  });
+
+const $createDocument = createServerFn({ method: "POST" })
+  .inputValidator((data: { entity: string; data: Record<string, any> }) => data)
+  .handler(async ({ data }): Promise<any> => {
+    return createDocument(data);
+  });
+
+const $getDocument = createServerFn({ method: "POST" })
+  .inputValidator((data: { entity: string; documentId: string }) => data)
+  .handler(async ({ data }): Promise<any> => {
+    return getDocument(data);
+  });
+
+const $patchDocument = createServerFn({ method: "POST" })
+  .inputValidator((data: { entity: string; documentId: string; data: Record<string, any> }) => data)
+  .handler(async ({ data }): Promise<any> => {
+    return patchDocument(data);
+  });
+
+const $searchDocuments = createServerFn({ method: "POST" })
+  .inputValidator((data: { entity: string; filter: string }) => data)
+  .handler(async ({ data }): Promise<any> => {
+    return searchDocuments(data);
+  });
+
+const $uploadAttachment = createServerFn({ method: "POST" })
+  .inputValidator((data: UploadAttachmentOpts) => data)
+  .handler(async ({ data }): Promise<any> => {
+    return uploadAttachment(data);
+  });
+
+const $subscribe = createServerFn({ method: "POST" })
+  .inputValidator((data: SubscribeProps) => data)
+  .handler(async ({ data }): Promise<any> => {
+    return subscribe(data);
+  });
+
+const $notifyMe = createServerFn({ method: "POST" })
+  .inputValidator((data: NotifyMeProps) => data)
+  .handler(async ({ data }): Promise<any> => {
+    return notifyMe(data);
+  });
+
+export const vtexActions = {
+  getOrCreateCart: $getOrCreateCart as unknown as (ctx: { data: { orderFormId?: string } }) => Promise<OrderForm>,
+  addItemsToCart: $addItemsToCart as unknown as (ctx: { data: { orderFormId: string; orderItems: Array<{ id: string; seller: string; quantity: number }> } }) => Promise<OrderForm>,
+  updateCartItems: $updateCartItems as unknown as (ctx: { data: { orderFormId: string; orderItems: Array<{ index: number; quantity: number }> } }) => Promise<OrderForm>,
+  addCouponToCart: $addCouponToCart as unknown as (ctx: { data: { orderFormId: string; text: string } }) => Promise<OrderForm>,
+  simulateCart: $simulateCart,
+  getSellersByRegion: $getSellersByRegion as unknown as (ctx: { data: { postalCode: string; salesChannel?: string } }) => Promise<RegionResult | null>,
+  setShippingPostalCode: $setShippingPostalCode as unknown as (ctx: { data: { orderFormId: string; postalCode: string; country?: string } }) => Promise<boolean>,
+  updateOrderFormAttachment: $updateOrderFormAttachment as unknown as (ctx: { data: { orderFormId: string; attachment: string; body: Record<string, unknown> } }) => Promise<OrderForm>,
+  createSession: $createSession,
+  editSession: $editSession as unknown as (ctx: { data: { public: Record<string, { value: string }> } }) => Promise<SessionData>,
+  createDocument: $createDocument as unknown as (ctx: { data: { entity: string; data: Record<string, any> } }) => Promise<CreateDocumentResult>,
+  getDocument: $getDocument,
+  patchDocument: $patchDocument as unknown as (ctx: { data: { entity: string; documentId: string; data: Record<string, any> } }) => Promise<void>,
+  searchDocuments: $searchDocuments,
+  uploadAttachment: $uploadAttachment as unknown as (ctx: { data: UploadAttachmentOpts }) => Promise<{ ok: true }>,
+  subscribe: $subscribe as unknown as (ctx: { data: SubscribeProps }) => Promise<void>,
+  notifyMe: $notifyMe as unknown as (ctx: { data: NotifyMeProps }) => Promise<void>,
+} as const;
+
+export type { OrderForm } from "@decocms/apps/vtex/types";
+
+export const invoke = {
+  vtex: {
+    actions: vtexActions,
+  },
+} as const;
+`;
+}
+

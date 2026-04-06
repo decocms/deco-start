@@ -62,14 +62,17 @@ if (!fs.existsSync(blocksDir)) {
 
 const files = fs.readdirSync(blocksDir).filter((f) => f.endsWith(".json"));
 
-// Deduplicate: prefer the non-URL-encoded filename when both exist
+// Deduplicate: when multiple files decode to the same key, prefer the one
+// with actual content (largest file size wins over empty {} stubs).
 const blockFiles: Record<string, string> = {};
 for (const file of files) {
   const name = decodeBlockName(file);
-  const isEncoded = file !== `${name}.json`;
-  if (blockFiles[name] && !isEncoded) {
-    // Plain filename wins over URL-encoded variant
-  } else if (blockFiles[name] && isEncoded) {
+  if (blockFiles[name]) {
+    const existingSize = fs.statSync(path.join(blocksDir, blockFiles[name])).size;
+    const newSize = fs.statSync(path.join(blocksDir, file)).size;
+    if (newSize > existingSize) {
+      blockFiles[name] = file;
+    }
     continue;
   }
   blockFiles[name] = file;

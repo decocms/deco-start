@@ -1,6 +1,18 @@
 import type { TransformResult } from "../types.ts";
 
 /**
+ * Convert JSX attribute syntax to object literal entries.
+ * e.g. `page={page}` → `page`, `foo={bar.baz}` → `foo: bar.baz`, `label="hi"` → `label: "hi"`
+ */
+function jsxAttrsToObjectEntries(jsxAttrs: string): string {
+  return jsxAttrs
+    .replace(/(\w+)=\{(\1)\}/g, "$1") // shorthand: name={name} → name
+    .replace(/(\w+)=\{([^}]+)\}/g, "$1: $2") // name={expr} → name: expr
+    .replace(/(\w+)="([^"]*)"/g, '$1: "$2"') // name="str" → name: "str"
+    .replace(/(\w+)='([^']*)'/g, "$1: '$2'"); // name='str' → name: 'str'
+}
+
+/**
  * Transforms Preact JSX patterns to React JSX patterns.
  *
  * - class= → className= (in JSX context)
@@ -32,11 +44,23 @@ export function transformJsx(content: string): TransformResult {
     changed = true;
   }
 
-  // onInput= → onChange=
+  // onInput= → onChange= (React onChange fires on every keystroke, like Preact onInput)
   if (result.includes("onInput=")) {
-    result = result.replace(/onInput=/g, "onChange=");
-    changed = true;
-    notes.push("Replaced onInput= with onChange=");
+    if (result.includes("onChange=") && result.includes("onInput=")) {
+      // Both exist — remove onInput blocks to avoid duplicate JSX attributes.
+      // onInput is redundant in React since onChange already fires on every keystroke.
+      // Match onInput={...handler...} including multi-line arrow functions
+      result = result.replace(
+        /\s*onInput=\{[^{}]*(?:\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}[^{}]*)*\}/g,
+        ""
+      );
+      changed = true;
+      notes.push("Removed onInput= (redundant with existing onChange= in React)");
+    } else {
+      result = result.replace(/onInput=/g, "onChange=");
+      changed = true;
+      notes.push("Replaced onInput= with onChange=");
+    }
   }
 
   // for= → htmlFor= in JSX (label elements)
@@ -227,6 +251,57 @@ export function transformJsx(content: string): TransformResult {
     result = result.replace(/\s*data-fresh-disable-lock/g, "");
     changed = true;
     notes.push("Removed data-fresh-disable-lock attribute (Fresh-specific)");
+  }
+
+  // Replace <x.Component {...x.props} /> with <SectionRenderer section={x} />
+  // In TanStack Start, nested sections have Component as a string key, not a function.
+  // SectionRenderer from @decocms/start/hooks handles the lazy registry lookup.
+  //
+  // Gate on ANY variant of the .Component/.props pattern (simple, extra props, or multi-line).
+  const sectionPatternGate = /\.\s*Component[\s\n]+\{\.\.\.(\w+)\.props\}/;
+  if (sectionPatternGate.test(result)) {
+    // 1. Simple: <x.Component {...x.props} />
+    result = result.replace(
+      /<(\w+)\.Component\s+\{\.\.\.(\w+)\.props\}\s*\/>/g,
+      (_, v1) => `<SectionRenderer section={${v1}} />`,
+    );
+
+    // 2. Extra props: <x.Component {...x.props} page={page} />
+    //    Convert JSX attrs to object entries: name={expr} → name: expr
+    result = result.replace(
+      /<(\w+)\.Component\s+\{\.\.\.(\w+)\.props\}\s+([^/]+?)\s*\/>/g,
+      (_, varName, _v2, extraJsx) => {
+        const objEntries = jsxAttrsToObjectEntries(extraJsx.trim());
+        return `<SectionRenderer section={{ ...${varName}, props: { ...${varName}.props, ${objEntries} } }} />`;
+      },
+    );
+
+    // 3. Multi-line: <x.Component\n  {...x.props}\n/>
+    result = result.replace(
+      /<(\w+)\.Component\s*\n\s*\{\.\.\.(\w+)\.props\}\s*\n\s*\/>/g,
+      (_, v1) => `<SectionRenderer section={${v1}} />`,
+    );
+
+    // 4. Multi-line with extra props: <x.Component\n {...x.props}\n extra={val}\n/>
+    result = result.replace(
+      /<(\w+)\.Component\s*\n\s*\{\.\.\.(\w+)\.props\}\s*\n\s*([^/]+?)\s*\n\s*\/>/g,
+      (_, varName, _v2, extraJsx) => {
+        const objEntries = jsxAttrsToObjectEntries(extraJsx.trim());
+        return `<SectionRenderer section={{ ...${varName}, props: { ...${varName}.props, ${objEntries} } }} />`;
+      },
+    );
+
+    if (!result.match(/^import\s.*SectionRenderer/m)) {
+      const hooksImportRe = /^import\s+\{([^}]*)\}\s+from\s+["']@decocms\/start\/hooks["'];?$/m;
+      const hooksMatch = result.match(hooksImportRe);
+      if (hooksMatch) {
+        result = result.replace(hooksImportRe, `import { ${hooksMatch[1].trim()}, SectionRenderer } from "@decocms/start/hooks";`);
+      } else {
+        result = `import { SectionRenderer } from "@decocms/start/hooks";\n${result}`;
+      }
+    }
+    changed = true;
+    notes.push("Replaced .Component/.props section pattern with SectionRenderer");
   }
 
   // Ensure React import exists if we introduced React.* references
