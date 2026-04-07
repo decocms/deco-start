@@ -388,6 +388,15 @@ const IMMUTABLE_HEADERS: Record<string, string> = {
   Vary: "Accept-Encoding",
 };
 
+/** SHA-256 hex hash of a string — used for POST body cache keys. */
+async function hashText(text: string): Promise<string> {
+  const data = new TextEncoder().encode(text);
+  const buf = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
@@ -835,6 +844,152 @@ export function createDecoWorkerEntry(
         return origin;
       }
 
+      // -----------------------------------------------------------------
+      // POST _serverFn — edge-cacheable using body-hash as cache key.
+      // These carry public CMS section data (shelves, deferred sections)
+      // that benefits from edge caching despite being POST requests.
+      // -----------------------------------------------------------------
+      if (
+        request.method === "POST" &&
+        (url.pathname.startsWith("/_serverFn/") || url.pathname.startsWith("/_server/"))
+      ) {
+        const serverFnCache =
+          typeof caches !== "undefined"
+            ? ((caches as unknown as { default?: Cache }).default ?? null)
+            : null;
+
+        // Build segment once — used for logged-in check and cache key
+        const sfnSegment = buildSegment ? buildSegment(request) : undefined;
+
+        // Logged-in users always bypass — personalized content must not leak
+        if (sfnSegment?.loggedIn) {
+          const body = await request.text();
+          const originReq = new Request(request, { body, method: "POST" });
+          const origin = await serverEntry.fetch(originReq, env, ctx);
+          const resp = new Response(origin.body, origin);
+          resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
+          resp.headers.set("X-Cache", "BYPASS");
+          resp.headers.set("X-Cache-Reason", "logged-in");
+          return resp;
+        }
+
+        // Read body once and create a cloned request for origin fetch
+        const body = await request.text();
+        const bodyHash = await hashText(body);
+
+        // Build a synthetic GET cache key from the URL + body hash + segment
+        // Includes device, salesChannel, regionId, flags — so users in
+        // different regions or channels get separate cache entries.
+        const cacheKeyUrl = new URL(request.url);
+        cacheKeyUrl.searchParams.set("__body", bodyHash);
+        if (cacheVersionEnv !== false) {
+          const version = (env[cacheVersionEnv] as string) || "";
+          if (version) cacheKeyUrl.searchParams.set("__v", version);
+        }
+        if (sfnSegment) {
+          cacheKeyUrl.searchParams.set("__seg", hashSegment(sfnSegment));
+        } else if (deviceSpecificKeys) {
+          const device = isMobileUA(request.headers.get("user-agent") ?? "") ? "mobile" : "desktop";
+          cacheKeyUrl.searchParams.set("__cf_device", device);
+        }
+        // Include CF geo data so location-based content doesn't leak across geos
+        const cf = (request as unknown as { cf?: Record<string, string> }).cf;
+        if (cf) {
+          const geoParts: string[] = [];
+          if (cf.country) geoParts.push(cf.country);
+          if (cf.region) geoParts.push(cf.region);
+          if (cf.city) geoParts.push(cf.city);
+          if (geoParts.length) cacheKeyUrl.searchParams.set("__cf_geo", geoParts.join("|"));
+        }
+        const sfnCacheKey = new Request(cacheKeyUrl.toString(), { method: "GET" });
+
+        // Use "listing" profile for server function responses
+        const sfnProfile: CacheProfileName = "listing";
+        const sfnEdge = edgeCacheConfig(sfnProfile);
+
+        // Check edge cache
+        let sfnCached: Response | undefined;
+        if (serverFnCache) {
+          try {
+            sfnCached = await serverFnCache.match(sfnCacheKey) ?? undefined;
+          } catch { /* Cache API unavailable */ }
+        }
+
+        if (sfnCached && sfnEdge.fresh > 0) {
+          const storedAt = Number(sfnCached.headers.get("X-Deco-Stored-At") || "0");
+          const ageSec = storedAt > 0 ? (Date.now() - storedAt) / 1000 : Infinity;
+
+          if (ageSec < sfnEdge.fresh) {
+            const out = new Response(sfnCached.body, sfnCached);
+            const hdrs = cacheHeaders(sfnProfile);
+            for (const [k, v] of Object.entries(hdrs)) out.headers.set(k, v);
+            out.headers.set("X-Cache", "HIT");
+            out.headers.set("X-Cache-Profile", sfnProfile);
+            return out;
+          }
+
+          if (ageSec < sfnEdge.fresh + sfnEdge.swr) {
+            // Stale-while-revalidate: serve stale, refresh in background
+            ctx.waitUntil(
+              (async () => {
+                try {
+                  const bgReq = new Request(request, { body, method: "POST" });
+                  const bgOrigin = await serverEntry.fetch(bgReq, env, ctx);
+                  if (bgOrigin.status === 200 && !bgOrigin.headers.has("set-cookie") && serverFnCache) {
+                    const ttl = sfnEdge.fresh + Math.max(sfnEdge.swr, sfnEdge.sie);
+                    const toStore = bgOrigin.clone();
+                    toStore.headers.set("Cache-Control", `public, max-age=${ttl}`);
+                    toStore.headers.set("X-Deco-Stored-At", String(Date.now()));
+                    toStore.headers.delete("CDN-Cache-Control");
+                    await serverFnCache.put(sfnCacheKey, toStore);
+                  }
+                } catch { /* background revalidation failed */ }
+              })(),
+            );
+            const out = new Response(sfnCached.body, sfnCached);
+            const hdrs = cacheHeaders(sfnProfile);
+            for (const [k, v] of Object.entries(hdrs)) out.headers.set(k, v);
+            out.headers.set("X-Cache", "STALE-HIT");
+            out.headers.set("X-Cache-Profile", sfnProfile);
+            out.headers.set("X-Cache-Age", String(Math.round(ageSec)));
+            return out;
+          }
+        }
+
+        // Cache MISS — fetch origin with the body we already read
+        const originReq = new Request(request, { body, method: "POST" });
+        const origin = await serverEntry.fetch(originReq, env, ctx);
+
+        // Never cache responses with Set-Cookie (cart/auth)
+        if (origin.headers.has("set-cookie")) {
+          const resp = new Response(origin.body, origin);
+          resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
+          resp.headers.delete("CDN-Cache-Control");
+          resp.headers.set("X-Cache", "BYPASS");
+          resp.headers.set("X-Cache-Reason", "set-cookie");
+          return resp;
+        }
+
+        // Store in edge cache
+        if (origin.status === 200 && serverFnCache) {
+          try {
+            const ttl = sfnEdge.fresh + Math.max(sfnEdge.swr, sfnEdge.sie);
+            const toStore = origin.clone();
+            toStore.headers.set("Cache-Control", `public, max-age=${ttl}`);
+            toStore.headers.set("X-Deco-Stored-At", String(Date.now()));
+            toStore.headers.delete("CDN-Cache-Control");
+            ctx.waitUntil(serverFnCache.put(sfnCacheKey, toStore));
+          } catch { /* Cache API unavailable */ }
+        }
+
+        const resp = new Response(origin.body, origin);
+        const hdrs = cacheHeaders(sfnProfile);
+        for (const [k, v] of Object.entries(hdrs)) resp.headers.set(k, v);
+        resp.headers.set("X-Cache", "MISS");
+        resp.headers.set("X-Cache-Profile", sfnProfile);
+        return resp;
+      }
+
       // Non-cacheable requests — pass through but protect against accidental caching
       if (!isCacheable(request, url)) {
         const origin = await serverEntry.fetch(request, env, ctx);
@@ -861,10 +1016,16 @@ export function createDecoWorkerEntry(
           return resp;
         }
 
+        // Set cache headers from the detected profile so the response
+        // is explicit about cacheability (avoids ambiguous empty header).
+        const hdrsNc = cacheHeaders(profile);
+        for (const [k, v] of Object.entries(hdrsNc)) resp.headers.set(k, v);
+
         const reason = request.method !== "GET"
           ? `method:${request.method}`
           : "bypass-path";
         resp.headers.set("X-Cache", "BYPASS");
+        resp.headers.set("X-Cache-Profile", profile);
         resp.headers.set("X-Cache-Reason", reason);
         return resp;
       }
