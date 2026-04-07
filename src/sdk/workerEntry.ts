@@ -858,19 +858,19 @@ export function createDecoWorkerEntry(
             ? ((caches as unknown as { default?: Cache }).default ?? null)
             : null;
 
+        // Build segment once — used for logged-in check and cache key
+        const sfnSegment = buildSegment ? buildSegment(request) : undefined;
+
         // Logged-in users always bypass — personalized content must not leak
-        if (buildSegment) {
-          const seg = buildSegment(request);
-          if (seg.loggedIn) {
-            const body = await request.text();
-            const originReq = new Request(request, { body, method: "POST" });
-            const origin = await serverEntry.fetch(originReq, env, ctx);
-            const resp = new Response(origin.body, origin);
-            resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
-            resp.headers.set("X-Cache", "BYPASS");
-            resp.headers.set("X-Cache-Reason", "logged-in");
-            return resp;
-          }
+        if (sfnSegment?.loggedIn) {
+          const body = await request.text();
+          const originReq = new Request(request, { body, method: "POST" });
+          const origin = await serverEntry.fetch(originReq, env, ctx);
+          const resp = new Response(origin.body, origin);
+          resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
+          resp.headers.set("X-Cache", "BYPASS");
+          resp.headers.set("X-Cache-Reason", "logged-in");
+          return resp;
         }
 
         // Read body once and create a cloned request for origin fetch
@@ -886,9 +886,8 @@ export function createDecoWorkerEntry(
           const version = (env[cacheVersionEnv] as string) || "";
           if (version) cacheKeyUrl.searchParams.set("__v", version);
         }
-        if (buildSegment) {
-          const seg = buildSegment(request);
-          cacheKeyUrl.searchParams.set("__seg", hashSegment(seg));
+        if (sfnSegment) {
+          cacheKeyUrl.searchParams.set("__seg", hashSegment(sfnSegment));
         } else if (deviceSpecificKeys) {
           const device = isMobileUA(request.headers.get("user-agent") ?? "") ? "mobile" : "desktop";
           cacheKeyUrl.searchParams.set("__cf_device", device);
