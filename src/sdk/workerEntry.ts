@@ -861,10 +861,16 @@ export function createDecoWorkerEntry(
           return resp;
         }
 
+        // Set cache headers from the detected profile so the response
+        // is explicit about cacheability (avoids ambiguous empty header).
+        const hdrs = cacheHeaders(profile);
+        for (const [k, v] of Object.entries(hdrs)) resp.headers.set(k, v);
+
         const reason = request.method !== "GET"
           ? `method:${request.method}`
           : "bypass-path";
         resp.headers.set("X-Cache", "BYPASS");
+        resp.headers.set("X-Cache-Profile", profile);
         resp.headers.set("X-Cache-Reason", reason);
         return resp;
       }
