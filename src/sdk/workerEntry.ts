@@ -858,20 +858,49 @@ export function createDecoWorkerEntry(
             ? ((caches as unknown as { default?: Cache }).default ?? null)
             : null;
 
+        // Logged-in users always bypass — personalized content must not leak
+        if (buildSegment) {
+          const seg = buildSegment(request);
+          if (seg.loggedIn) {
+            const body = await request.text();
+            const originReq = new Request(request, { body, method: "POST" });
+            const origin = await serverEntry.fetch(originReq, env, ctx);
+            const resp = new Response(origin.body, origin);
+            resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
+            resp.headers.set("X-Cache", "BYPASS");
+            resp.headers.set("X-Cache-Reason", "logged-in");
+            return resp;
+          }
+        }
+
         // Read body once and create a cloned request for origin fetch
         const body = await request.text();
         const bodyHash = await hashText(body);
 
-        // Build a synthetic GET cache key from the URL + body hash + device
+        // Build a synthetic GET cache key from the URL + body hash + segment
+        // Includes device, salesChannel, regionId, flags — so users in
+        // different regions or channels get separate cache entries.
         const cacheKeyUrl = new URL(request.url);
         cacheKeyUrl.searchParams.set("__body", bodyHash);
         if (cacheVersionEnv !== false) {
           const version = (env[cacheVersionEnv] as string) || "";
           if (version) cacheKeyUrl.searchParams.set("__v", version);
         }
-        if (deviceSpecificKeys) {
+        if (buildSegment) {
+          const seg = buildSegment(request);
+          cacheKeyUrl.searchParams.set("__seg", hashSegment(seg));
+        } else if (deviceSpecificKeys) {
           const device = isMobileUA(request.headers.get("user-agent") ?? "") ? "mobile" : "desktop";
           cacheKeyUrl.searchParams.set("__cf_device", device);
+        }
+        // Include CF geo data so location-based content doesn't leak across geos
+        const cf = (request as unknown as { cf?: Record<string, string> }).cf;
+        if (cf) {
+          const geoParts: string[] = [];
+          if (cf.country) geoParts.push(cf.country);
+          if (cf.region) geoParts.push(cf.region);
+          if (cf.city) geoParts.push(cf.city);
+          if (geoParts.length) cacheKeyUrl.searchParams.set("__cf_geo", geoParts.join("|"));
         }
         const sfnCacheKey = new Request(cacheKeyUrl.toString(), { method: "GET" });
 
