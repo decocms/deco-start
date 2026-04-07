@@ -179,7 +179,7 @@ export interface DecoWorkerEntryOptions {
   /**
    * Paths that should always bypass the edge cache, even if the
    * profile detector would otherwise cache them.
-   * Defaults include `/_server`, `/_build`, `/assets`, `/deco/`.
+   * Defaults include `/_build`, `/deco/`, `/live/`, `/.decofile`.
    */
   bypassPaths?: string[];
 
@@ -379,7 +379,7 @@ export const DEFAULT_SECURITY_HEADERS: Record<string, string> = {
   "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
 };
 
-const DEFAULT_BYPASS_PATHS = ["/_server", "/_build", "/deco/", "/live/", "/.decofile"];
+const DEFAULT_BYPASS_PATHS = ["/_build", "/deco/", "/live/", "/.decofile"];
 
 const FINGERPRINTED_ASSET_RE = /(?:\/_build)?\/assets\/.*-[a-zA-Z0-9_-]{8,}\.\w+$/;
 
@@ -850,6 +850,17 @@ export function createDecoWorkerEntry(
         }
 
         const resp = new Response(origin.body, origin);
+
+        // Responses with Set-Cookie carry per-user tokens — never expose
+        // them with public cache headers regardless of profile.
+        if (origin.headers.has("set-cookie")) {
+          resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
+          resp.headers.delete("CDN-Cache-Control");
+          resp.headers.set("X-Cache", "BYPASS");
+          resp.headers.set("X-Cache-Reason", "set-cookie");
+          return resp;
+        }
+
         const reason = request.method !== "GET"
           ? `method:${request.method}`
           : "bypass-path";
