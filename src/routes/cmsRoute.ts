@@ -188,12 +188,11 @@ export const loadCmsHomePage = createServerFn({ method: "GET" }).handler(async (
 // ---------------------------------------------------------------------------
 
 /**
- * Loads a single deferred CMS section on demand (IntersectionObserver lazy loading).
- * Uses GET so responses benefit from standard HTTP caching at the edge/browser.
- * Payload is serialized into the URL by TanStack Start (~3-4KB typical, well within
- * Cloudflare Workers' 16KB URL limit).
+ * @deprecated Prefer TanStack native streaming via `deferredPromises` in the
+ * route loader. This POST server function is kept for backward compatibility
+ * and as a fallback for SPA navigations.
  */
-export const loadDeferredSection = createServerFn({ method: "GET" })
+export const loadDeferredSection = createServerFn({ method: "POST" })
   .inputValidator(
     (data: unknown) =>
       data as {

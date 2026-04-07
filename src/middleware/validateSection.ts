@@ -10,7 +10,7 @@
  * import { validateDeferredSectionInput } from "@decocms/start/middleware/validateSection";
  *
  * // In your storefront's middleware chain:
- * export const loadSection = createServerFn({ method: "GET" })
+ * export const loadSection = createServerFn({ method: "POST" })
  *   .inputValidator(validateDeferredSectionInput)
  *   .handler(async (ctx) => { ... });
  * ```
