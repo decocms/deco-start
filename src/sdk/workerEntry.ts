@@ -941,6 +941,7 @@ export function createDecoWorkerEntry(
                     const toStore = bgOrigin.clone();
                     toStore.headers.set("Cache-Control", `public, max-age=${ttl}`);
                     toStore.headers.set("X-Deco-Stored-At", String(Date.now()));
+                    toStore.headers.delete("CDN-Cache-Control");
                     await serverFnCache.put(sfnCacheKey, toStore);
                   }
                 } catch { /* background revalidation failed */ }
