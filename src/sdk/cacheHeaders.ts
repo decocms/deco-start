@@ -267,7 +267,6 @@ const builtinPatterns: CachePattern[] = [
     test: (p) =>
       p.startsWith("/api/") ||
       p.startsWith("/deco/") ||
-      p.startsWith("/_server") ||
       p.startsWith("/_build"),
     profile: "none",
   },
