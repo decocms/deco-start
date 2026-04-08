@@ -1551,7 +1551,7 @@ export async function resolveDeferredSectionFull(
  * rawProps for the section at the given index. Expensive but ensures correctness
  * when the in-memory cache has been evicted (different isolate, TTL expired).
  */
-async function reExtractRawProps(
+export async function reExtractRawProps(
   pagePath: string,
   component: string,
   sectionIndex: number,
