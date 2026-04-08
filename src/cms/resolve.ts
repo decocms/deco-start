@@ -2,12 +2,14 @@ import { findPageByPath, loadBlocks } from "./loader";
 import { getOnBeforeResolveProps, getSection, registerOnBeforeResolveProps } from "./registry";
 import { isLayoutSection, runSingleSectionLoader } from "./sectionLoaders";
 import { normalizeUrlsInObject } from "../sdk/normalizeUrls";
+import { djb2Hex } from "../sdk/djb2";
 
 // globalThis-backed: share state across Vite server function split modules
 const G = globalThis as any;
 if (!G.__deco) G.__deco = {};
 if (!G.__deco.commerceLoaders) G.__deco.commerceLoaders = {};
 if (!G.__deco.customMatchers) G.__deco.customMatchers = {};
+if (!G.__deco.eagerSectionKeys) G.__deco.eagerSectionKeys = new Set<string>();
 
 // ---------------------------------------------------------------------------
 // onBeforeResolveProps helper — eagerly loads the section module if needed
@@ -69,9 +71,19 @@ export interface DeferredSection {
   key: string;
   /** Position in the original page section list. */
   index: number;
-  /** CMS-resolved props without section-loader enrichment. */
+  /**
+   * Short hash of rawProps for client-side cache busting.
+   * Keeps the serialized payload small — full rawProps are resolved
+   * server-side from the deferred props cache or page re-resolution.
+   */
+  propsHash: string;
+  /**
+   * CMS-resolved props without section-loader enrichment.
+   * @deprecated Stripped before serialization to reduce HTML payload.
+   * Only present server-side in the rawProps cache.
+   */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  rawProps: Record<string, any>;
+  rawProps?: Record<string, any>;
 }
 
 // ---------------------------------------------------------------------------
@@ -120,16 +132,79 @@ export function setAsyncRenderingConfig(config?: {
   alwaysEager?: string[];
   respectCmsLazy?: boolean;
 }): void {
+  const existing = getAsyncConfig();
+  const merged = new Set([
+    ...(existing?.alwaysEager ?? []),
+    ...(config?.alwaysEager ?? []),
+  ]);
   G.__deco.asyncConfig = {
-    respectCmsLazy: config?.respectCmsLazy ?? true,
-    foldThreshold: config?.foldThreshold ?? Infinity,
-    alwaysEager: new Set(config?.alwaysEager ?? []),
+    respectCmsLazy: config?.respectCmsLazy ?? existing?.respectCmsLazy ?? true,
+    foldThreshold: config?.foldThreshold ?? existing?.foldThreshold ?? Infinity,
+    alwaysEager: merged,
   };
 }
 
 /** Read-only access to the current config (null when disabled). */
 export function getAsyncRenderingConfig(): AsyncRenderingConfig | null {
   return getAsyncConfig();
+}
+
+// ---------------------------------------------------------------------------
+// Permanent eager section registry — survives setAsyncRenderingConfig() calls
+// ---------------------------------------------------------------------------
+
+/**
+ * Register sections that declared `export const eager = true`.
+ * This is a permanent registry that cannot be overwritten by
+ * subsequent calls to `setAsyncRenderingConfig()`.
+ */
+export function registerEagerSections(keys: string[]): void {
+  const set: Set<string> = G.__deco.eagerSectionKeys;
+  for (const k of keys) set.add(k);
+}
+
+function isEagerSection(key: string): boolean {
+  return (G.__deco.eagerSectionKeys as Set<string>).has(key);
+}
+
+// ---------------------------------------------------------------------------
+// Deferred rawProps cache — keeps rawProps server-side to trim HTML payload
+// ---------------------------------------------------------------------------
+
+const DEFERRED_PROPS_TTL = 120_000; // 2 minutes
+const deferredRawPropsCache = new Map<string, { rawProps: Record<string, unknown>; ts: number }>();
+
+function deferredPropsCacheKey(pagePath: string, component: string, index: number): string {
+  return `${pagePath}::${component}::${index}`;
+}
+
+export function cacheDeferredRawProps(
+  pagePath: string,
+  component: string,
+  index: number,
+  rawProps: Record<string, unknown>,
+): void {
+  const key = deferredPropsCacheKey(pagePath, component, index);
+  deferredRawPropsCache.set(key, { rawProps, ts: Date.now() });
+
+  // Lazy eviction: remove expired entries when cache grows
+  if (deferredRawPropsCache.size > 500) {
+    const now = Date.now();
+    for (const [k, v] of deferredRawPropsCache) {
+      if (now - v.ts > DEFERRED_PROPS_TTL) deferredRawPropsCache.delete(k);
+    }
+  }
+}
+
+export function getDeferredRawProps(
+  pagePath: string,
+  component: string,
+  index: number,
+): Record<string, unknown> | null {
+  const key = deferredPropsCacheKey(pagePath, component, index);
+  const entry = deferredRawPropsCache.get(key);
+  if (!entry || Date.now() - entry.ts > DEFERRED_PROPS_TTL) return null;
+  return entry.rawProps;
 }
 
 // ---------------------------------------------------------------------------
@@ -932,6 +1007,8 @@ function shouldDeferSection(
   const finalKey = resolveFinalSectionKey(section, matcherCtx);
   if (!finalKey) return false;
 
+  // Permanent registry — `export const eager = true` cannot be clobbered
+  if (isEagerSection(finalKey)) return false;
   if (cfg.alwaysEager.has(finalKey)) return false;
   if (isLayoutSection(finalKey)) return false;
 
@@ -1024,6 +1101,7 @@ function resolveSectionShallow(
         component: rt,
         key: rt,
         index: -1,
+        propsHash: djb2Hex(JSON.stringify(rawProps)),
         rawProps: rawProps as Record<string, unknown>,
       };
     }
@@ -1241,6 +1319,14 @@ export async function resolveDecoPage(
         const deferred = resolveSectionShallow(section, ctx);
         if (deferred) {
           deferred.index = currentFlatIndex;
+
+          // Cache rawProps server-side and strip from the deferred object
+          // so they are NOT serialized into the HTML payload.
+          if (deferred.rawProps) {
+            cacheDeferredRawProps(targetPath, deferred.component, currentFlatIndex, deferred.rawProps);
+            delete deferred.rawProps;
+          }
+
           deferredSections.push(deferred);
           deferredOk = true;
         }
@@ -1441,9 +1527,16 @@ export async function resolveDeferredSectionFull(
   request: Request,
   matcherCtx?: MatcherContext,
 ): Promise<ResolvedSection | null> {
+  // rawProps may be stripped from the client payload — resolve from cache or page
+  const rawProps = ds.rawProps
+    ?? getDeferredRawProps(pagePath, ds.component, ds.index)
+    ?? await reExtractRawProps(pagePath, ds.component, ds.index, matcherCtx);
+
+  if (!rawProps) return null;
+
   const section = await resolveDeferredSection(
     ds.component,
-    ds.rawProps,
+    rawProps,
     pagePath,
     matcherCtx,
   );
@@ -1451,4 +1544,45 @@ export async function resolveDeferredSectionFull(
   section.index = ds.index;
   const enriched = await runSingleSectionLoader(section, request);
   return normalizeUrlsInObject(enriched);
+}
+
+/**
+ * Fallback for deferred rawProps cache miss: re-resolve the page and extract
+ * rawProps for the section at the given index. Expensive but ensures correctness
+ * when the in-memory cache has been evicted (different isolate, TTL expired).
+ */
+async function reExtractRawProps(
+  pagePath: string,
+  component: string,
+  sectionIndex: number,
+  matcherCtx?: MatcherContext,
+): Promise<Record<string, unknown> | null> {
+  ensureInitialized();
+
+  const match = findPageByPath(pagePath);
+  if (!match) return null;
+
+  const { page } = match;
+  const ctx: MatcherContext = { ...matcherCtx, path: pagePath };
+
+  let rawSections: unknown[];
+  if (Array.isArray(page.sections)) {
+    rawSections = page.sections;
+  } else {
+    const rctx: ResolveContext = { matcherCtx: ctx, memo: new Map(), depth: 0 };
+    rawSections = await resolveSectionsList(page.sections, rctx);
+  }
+
+  if (sectionIndex < 0 || sectionIndex >= rawSections.length) return null;
+
+  const section = rawSections[sectionIndex];
+  const shallow = resolveSectionShallow(section, ctx);
+  if (!shallow || shallow.component !== component) return null;
+
+  // Cache for subsequent requests
+  if (shallow.rawProps) {
+    cacheDeferredRawProps(pagePath, component, sectionIndex, shallow.rawProps);
+  }
+
+  return shallow.rawProps ?? null;
 }
