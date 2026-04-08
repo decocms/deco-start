@@ -1106,12 +1106,18 @@ export function createDecoWorkerEntry(
                 try {
                   const bgReq = new Request(request, { body, method: "POST" });
                   const bgOrigin = await serverEntry.fetch(bgReq, env, ctx);
-                  if (bgOrigin.status === 200 && !bgOrigin.headers.has("set-cookie") && serverFnCache) {
+                  if (
+                    bgOrigin.status === 200 &&
+                    bgOrigin.headers.get("X-Deco-Cacheable") === "true" &&
+                    !bgOrigin.headers.has("set-cookie") &&
+                    serverFnCache
+                  ) {
                     const ttl = sfnEdge.fresh + Math.max(sfnEdge.swr, sfnEdge.sie);
                     const toStore = bgOrigin.clone();
                     toStore.headers.set("Cache-Control", `public, max-age=${ttl}`);
                     toStore.headers.set("X-Deco-Stored-At", String(Date.now()));
                     toStore.headers.delete("CDN-Cache-Control");
+                    toStore.headers.delete("X-Deco-Cacheable");
                     await serverFnCache.put(sfnCacheKey, toStore);
                   }
                 } catch { /* background revalidation failed */ }
@@ -1131,29 +1137,39 @@ export function createDecoWorkerEntry(
         const originReq = new Request(request, { body, method: "POST" });
         const origin = await serverEntry.fetch(originReq, env, ctx);
 
-        // Never cache responses with Set-Cookie (cart/auth)
-        if (origin.headers.has("set-cookie")) {
+        // Only cache responses explicitly marked as cacheable by the handler
+        // (loadDeferredSection sets X-Deco-Cacheable: true). Checkout actions,
+        // invoke mutations, and other server functions are passed through.
+        const isCacheableResponse =
+          origin.headers.get("X-Deco-Cacheable") === "true" &&
+          !origin.headers.has("set-cookie") &&
+          origin.status === 200;
+
+        if (!isCacheableResponse) {
           const resp = new Response(origin.body, origin);
-          resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
-          resp.headers.delete("CDN-Cache-Control");
+          resp.headers.delete("X-Deco-Cacheable");
           resp.headers.set("X-Cache", "BYPASS");
-          resp.headers.set("X-Cache-Reason", "set-cookie");
+          resp.headers.set("X-Cache-Reason", origin.headers.has("set-cookie")
+            ? "set-cookie"
+            : "not-cacheable");
           return resp;
         }
 
         // Store in edge cache
-        if (origin.status === 200 && serverFnCache) {
+        if (serverFnCache) {
           try {
             const ttl = sfnEdge.fresh + Math.max(sfnEdge.swr, sfnEdge.sie);
             const toStore = origin.clone();
             toStore.headers.set("Cache-Control", `public, max-age=${ttl}`);
             toStore.headers.set("X-Deco-Stored-At", String(Date.now()));
             toStore.headers.delete("CDN-Cache-Control");
+            toStore.headers.delete("X-Deco-Cacheable");
             ctx.waitUntil(serverFnCache.put(sfnCacheKey, toStore));
           } catch { /* Cache API unavailable */ }
         }
 
         const resp = new Response(origin.body, origin);
+        resp.headers.delete("X-Deco-Cacheable");
         const hdrs = cacheHeaders(sfnProfile);
         for (const [k, v] of Object.entries(hdrs)) resp.headers.set(k, v);
         resp.headers.set("X-Cache", "MISS");
