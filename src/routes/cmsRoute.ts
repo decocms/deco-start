@@ -27,6 +27,7 @@ import {
   getRequest,
   getRequestHeader,
   getRequestUrl,
+  setResponseHeader,
 } from "@tanstack/react-start/server";
 import { createElement } from "react";
 import { preloadSectionComponents } from "../cms/registry";
@@ -227,6 +228,12 @@ export const loadDeferredSection = createServerFn({ method: "POST" })
       headers: originRequest.headers,
     });
     const enriched = await runSingleSectionLoader(section, request);
+
+    // Signal to the worker entry that this response is safe to edge-cache.
+    // Without this header, POST _serverFn responses are passed through
+    // without caching (checkout actions, invoke mutations, etc.).
+    setResponseHeader("X-Deco-Cacheable", "true");
+
     return normalizeUrlsInObject(enriched);
   });
 
