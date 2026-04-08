@@ -1034,9 +1034,7 @@ export function createDecoWorkerEntry(
 
         // Logged-in users always bypass — personalized content must not leak
         if (sfnSegment?.loggedIn) {
-          const body = await request.text();
-          const originReq = new Request(request, { body, method: "POST" });
-          const origin = await serverEntry.fetch(originReq, env, ctx);
+          const origin = await serverEntry.fetch(request, env, ctx);
           const resp = new Response(origin.body, origin);
           resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
           resp.headers.set("X-Cache", "BYPASS");
@@ -1044,7 +1042,10 @@ export function createDecoWorkerEntry(
           return resp;
         }
 
-        // Read body once and create a cloned request for origin fetch
+        // Clone request before consuming body — the clone goes to origin
+        // untouched so TanStack Start internals (cookie passthrough, etc.)
+        // work correctly. We only read the body for the cache key hash.
+        const originClone = request.clone();
         const body = await request.text();
         const bodyHash = await hashText(body);
 
@@ -1134,8 +1135,7 @@ export function createDecoWorkerEntry(
         }
 
         // Cache MISS — fetch origin with the body we already read
-        const originReq = new Request(request, { body, method: "POST" });
-        const origin = await serverEntry.fetch(originReq, env, ctx);
+        const origin = await serverEntry.fetch(originClone, env, ctx);
 
         // Only cache responses explicitly marked as cacheable by the handler
         // (loadDeferredSection sets X-Deco-Cacheable: true). Checkout actions,
