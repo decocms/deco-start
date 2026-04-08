@@ -36,6 +36,7 @@ import {
   extractSeoFromProps,
   extractSeoFromSections,
   getDeferredRawProps,
+  reExtractRawProps,
   resolveDecoPage,
   resolveDeferredSection,
   resolveDeferredSectionFull,
@@ -220,9 +221,14 @@ export const loadDeferredSection = createServerFn({ method: "POST" })
       request: originRequest,
     };
 
-    // Resolve rawProps: prefer client-provided (backward compat), then server cache
+    // Resolve rawProps: prefer client-provided (backward compat), then server cache,
+    // then re-extract from the page as a last resort (handles cross-isolate cache miss
+    // on Cloudflare Workers and TTL expiry for slow-scrolling users).
     const rawProps = clientRawProps
-      ?? (index !== undefined ? getDeferredRawProps(pagePath, component, index) : null);
+      ?? (index !== undefined ? getDeferredRawProps(pagePath, component, index) : null)
+      ?? (index !== undefined
+        ? await reExtractRawProps(pagePath, component, index, matcherCtx)
+        : null);
 
     if (!rawProps) {
       console.warn(`[CMS] Deferred section cache miss: ${component} at index ${index} on ${pagePath}`);
