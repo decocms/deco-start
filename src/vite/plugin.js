@@ -131,12 +131,40 @@ export function decoVitePlugin() {
                 ) {
                   return "vendor-react";
                 }
+
+                // TanStack Router — client-side router (always needed)
                 if (
                   id.includes("@tanstack/react-router") ||
-                  id.includes("@tanstack/start")
+                  id.includes("@tanstack/router-core")
                 ) {
                   return "vendor-router";
                 }
+
+                // TanStack Start — specific checks before broad catch-all
+                // (react-start-client includes "react-start" so must come first)
+                if (
+                  id.includes("@tanstack/react-start-client") ||
+                  id.includes("@tanstack/start-client-core")
+                ) {
+                  return "vendor-router";
+                }
+                // Server-only TanStack packages — let Rollup tree-shake
+                if (
+                  id.includes("@tanstack/react-start-server") ||
+                  id.includes("@tanstack/start-server-core")
+                ) {
+                  return undefined;
+                }
+                // Remaining @tanstack/start (storage-context, plugin-core, etc.)
+                if (id.includes("@tanstack/start")) {
+                  return "vendor-router";
+                }
+
+                // isbot — server-only (bot detection in resolve.ts)
+                if (id.includes("node_modules/isbot")) {
+                  return undefined;
+                }
+
                 if (id.includes("@tanstack/react-query")) {
                   return "vendor-query";
                 }

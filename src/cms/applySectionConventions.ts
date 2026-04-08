@@ -15,6 +15,7 @@ import {
   registerLayoutSections,
 } from "./sectionLoaders";
 import {
+  registerEagerSections,
   registerSeoSections,
   setAsyncRenderingConfig,
   getAsyncRenderingConfig,
@@ -77,6 +78,9 @@ export function applySectionConventions(input: ApplySectionConventionsInput): vo
   }
 
   if (eagerSections.length > 0) {
+    // Permanent registry — survives subsequent setAsyncRenderingConfig() calls
+    registerEagerSections(eagerSections);
+    // Also add to alwaysEager for backward compat with code that reads the config
     const existing = getAsyncRenderingConfig() ?? {};
     setAsyncRenderingConfig({
       ...existing,

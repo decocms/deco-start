@@ -35,6 +35,7 @@ import type { DeferredSection, MatcherContext, PageSeo, ResolvedSection } from "
 import {
   extractSeoFromProps,
   extractSeoFromSections,
+  getDeferredRawProps,
   resolveDecoPage,
   resolveDeferredSection,
   resolveDeferredSectionFull,
@@ -198,7 +199,8 @@ export const loadDeferredSection = createServerFn({ method: "POST" })
     (data: unknown) =>
       data as {
         component: string;
-        rawProps: Record<string, any>;
+        /** @deprecated rawProps are now resolved server-side from the deferred props cache. */
+        rawProps?: Record<string, any>;
         pagePath: string;
         pageUrl?: string;
         /** Original position in the page section list — preserved for correct SPA ordering. */
@@ -206,7 +208,7 @@ export const loadDeferredSection = createServerFn({ method: "POST" })
       },
   )
   .handler(async (ctx) => {
-    const { component, rawProps, pagePath, pageUrl, index } = ctx.data;
+    const { component, rawProps: clientRawProps, pagePath, pageUrl, index } = ctx.data;
 
     const originRequest = getRequest();
     const serverUrl = getRequestUrl().toString();
@@ -217,6 +219,15 @@ export const loadDeferredSection = createServerFn({ method: "POST" })
       cookies: getCookies(),
       request: originRequest,
     };
+
+    // Resolve rawProps: prefer client-provided (backward compat), then server cache
+    const rawProps = clientRawProps
+      ?? (index !== undefined ? getDeferredRawProps(pagePath, component, index) : null);
+
+    if (!rawProps) {
+      console.warn(`[CMS] Deferred section cache miss: ${component} at index ${index} on ${pagePath}`);
+      return null;
+    }
 
     const section = await resolveDeferredSection(component, rawProps, pagePath, matcherCtx);
     if (!section) return null;
@@ -253,14 +264,16 @@ export const deferredSectionLoader = async ({
   rawProps,
   pagePath,
   pageUrl,
+  index,
 }: {
   component: string;
-  rawProps: Record<string, unknown>;
+  rawProps?: Record<string, unknown>;
   pagePath: string;
   pageUrl?: string;
+  index?: number;
 }): Promise<ResolvedSection | null> => {
   return loadDeferredSection({
-    data: { component, rawProps, pagePath, pageUrl },
+    data: { component, rawProps, pagePath, pageUrl, index },
   });
 };
 

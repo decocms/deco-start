@@ -19,7 +19,7 @@ import {
   setResolvedComponent,
 } from "../cms/registry";
 import type { DeferredSection, ResolvedSection } from "../cms/resolve";
-import { djb2Hex } from "../sdk/djb2";
+
 import { SectionErrorBoundary } from "./SectionErrorFallback";
 
 type LazyComponent = ReturnType<typeof lazy>;
@@ -235,9 +235,10 @@ interface DeferredSectionWrapperProps {
   errorFallback?: ReactNode;
   loadFn: (data: {
     component: string;
-    rawProps: Record<string, unknown>;
+    rawProps?: Record<string, unknown>;
     pagePath: string;
     pageUrl?: string;
+    index?: number;
   }) => Promise<ResolvedSection | null>;
 }
 
@@ -249,8 +250,7 @@ function DeferredSectionWrapper({
   errorFallback,
   loadFn,
 }: DeferredSectionWrapperProps) {
-  const propsHash = djb2Hex(JSON.stringify(deferred.rawProps));
-  const stableKey = `${pagePath}::${deferred.component}::${deferred.index}::${propsHash}`;
+  const stableKey = `${pagePath}::${deferred.component}::${deferred.index}::${deferred.propsHash ?? ""}`;
   const [section, setSection] = useState<ResolvedSection | null>(() =>
     typeof document === "undefined" ? null : getCachedDeferredSection(stableKey),
   );
@@ -308,9 +308,9 @@ function DeferredSectionWrapper({
       const key0 = stableKey;
       loadFn({
         component: deferred.component,
-        rawProps: deferred.rawProps,
         pagePath,
         pageUrl,
+        index: deferred.index,
       })
         .then((result) => {
           if (result) deferredSectionCache.set(key0, { section: result, ts: Date.now() });
@@ -328,9 +328,9 @@ function DeferredSectionWrapper({
           const key1 = stableKey;
           loadFn({
             component: deferred.component,
-            rawProps: deferred.rawProps,
             pagePath,
             pageUrl,
+            index: deferred.index,
           })
             .then((result) => {
               if (result) deferredSectionCache.set(key1, { section: result, ts: Date.now() });
@@ -344,7 +344,7 @@ function DeferredSectionWrapper({
 
     observer.observe(el);
     return () => observer.disconnect();
-  }, [deferred.component, deferred.rawProps, pagePath, pageUrl, section, loadFn]);
+  }, [deferred.component, deferred.index, deferred.propsHash, pagePath, pageUrl, section, loadFn]);
 
   if (error) {
     const errFallback = loadedOptions?.errorFallback
@@ -402,7 +402,9 @@ function DeferredSectionSkeleton({
 }) {
   const options = getSectionOptions(deferred.component);
   if (options?.loadingFallback) {
-    return createElement(options.loadingFallback, deferred.rawProps);
+    // rawProps are no longer serialized to the client — pass empty object.
+    // LoadingFallback components should be pure layout skeletons.
+    return createElement(options.loadingFallback, deferred.rawProps ?? {});
   }
   if (fallback) return <>{fallback}</>;
   if (isDev) return <DevMissingFallbackWarning component={deferred.component} />;
@@ -466,9 +468,10 @@ interface Props {
   /** @deprecated Use deferredPromises instead (TanStack native streaming). */
   loadDeferredSectionFn?: (data: {
     component: string;
-    rawProps: Record<string, unknown>;
+    rawProps?: Record<string, unknown>;
     pagePath: string;
     pageUrl?: string;
+    index?: number;
   }) => Promise<ResolvedSection | null>;
 }
 

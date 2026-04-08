@@ -30,6 +30,7 @@ describe("resolveDeferredSectionFull", () => {
       component: "site/sections/ProductShelf.tsx",
       key: "site/sections/ProductShelf.tsx",
       index: 5,
+      propsHash: "test",
       rawProps: { title: "Best Sellers" },
     };
 
