@@ -34,17 +34,25 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
   [/^"apps\/website\/components\/Picture\.tsx"$/, `"~/components/ui/Picture"`],
   [/^"apps\/website\/components\/Video\.tsx"$/, `"~/components/ui/Video"`],
   [/^"apps\/website\/components\/Theme\.tsx"$/, `"~/components/ui/Theme"`],
+  [/^"apps\/website\/components\/_seo\/[^"]+?"$/, null], // SEO preview — framework-only, remove
   [/^"apps\/website\/components\/([^"]+?)(?:\.tsx?)?"$/, `"~/components/ui/$1"`],
   [/^"apps\/commerce\/types\.ts"$/, `"@decocms/apps/commerce/types"`],
   [/^"apps\/commerce\/mod\.ts"$/, `"~/types/commerce-app"`],
   [/^"apps\/commerce\/types"$/, `"@decocms/apps/commerce/types"`],
 
-  // Apps — VTEX (hooks, utils, actions, loaders, types)
+  // Apps — VTEX hooks: useUser/useCart/useWishlist → local hooks (react-query based @decocms/apps hooks crash Workers SSR)
+  [/^"apps\/vtex\/hooks\/useUser(?:\.ts)?"$/, `"~/hooks/useUser"`],
+  [/^"apps\/vtex\/hooks\/useCart(?:\.ts)?"$/, `"~/hooks/useCart"`],
+  [/^"apps\/vtex\/hooks\/useWishlist(?:\.ts)?"$/, `"~/hooks/useWishlist"`],
   [/^"apps\/vtex\/hooks\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/vtex/hooks/$1"`],
+  // Specific VTEX utils that moved to different paths in @decocms/apps
+  [/^"apps\/vtex\/utils\/fetchVTEX(?:\.ts)?"$/, `"@decocms/apps/vtex/client"`],
+  [/^"apps\/vtex\/utils\/client(?:\.ts)?"$/, `"@decocms/apps/vtex/client"`],
   [/^"apps\/vtex\/utils\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/vtex/utils/$1"`],
   [/^"apps\/vtex\/actions\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/vtex/actions/$1"`],
   [/^"apps\/vtex\/loaders\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/vtex/loaders/$1"`],
   [/^"apps\/vtex\/types(?:\.ts)?"$/, `"@decocms/apps/vtex/types"`],
+  [/^"apps\/vtex\/mod(?:\.ts)?"$/, `"~/types/vtex-app"`],
   // Apps — Shopify (hooks, utils, actions, loaders)
   [/^"apps\/shopify\/hooks\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/shopify/hooks/$1"`],
   [/^"apps\/shopify\/utils\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/shopify/utils/$1"`],
@@ -54,11 +62,22 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
   [/^"apps\/commerce\/sdk\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/commerce/sdk/$1"`],
   [/^"apps\/commerce\/utils\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/commerce/utils/$1"`],
 
+  // Apps — shared utils (STALE, fetchSafe, createHttpClient, etc.)
+  [/^"apps\/utils\/fetch(?:\.ts)?"$/, `"~/lib/fetch-utils"`],
+  [/^"apps\/utils\/http(?:\.ts)?"$/, `"~/lib/http-utils"`],
+  [/^"apps\/utils\/graphql(?:\.ts)?"$/, `"~/lib/graphql-utils"`],
+
   // Apps — catch-all (things like apps/website/mod.ts, apps/analytics/mod.ts, etc.)
   [/^"apps\/([^"]+)"$/, null], // Remove — site.ts is rewritten
 
   // Deco old CDN imports
   [/^"deco\/([^"]+)"$/, null],
+
+  // Remote URL imports (esm.sh, cdn.esm.sh, skypack, etc.) — remove
+  [/^"https?:\/\/esm\.sh\/[^"]*"$/, null],
+  [/^"https?:\/\/cdn\.esm\.sh\/[^"]*"$/, null],
+  [/^"https?:\/\/cdn\.skypack\.dev\/[^"]*"$/, null],
+  [/^"https?:\/\/deno\.land\/[^"]*"$/, null],
 
   // Std lib — redirect useful utils, remove the rest
   [/^"std\/async\/debounce(?:\.ts)?"$/, `"~/sdk/debounce"`],
@@ -66,36 +85,49 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
   [/^"@std\/crypto"$/, null], // Use globalThis.crypto instead
 
   // site/sdk/* → framework equivalents (before the catch-all site/ → ~/ rule)
-  [/^"site\/sdk\/clx(?:\.tsx?)?.*"$/, `"~/sdk/clx"`],
+  [/^"site\/sdk\/clx(?:\.tsx?)?.*"$/, `"@decocms/start/sdk/clx"`],
   [/^"site\/sdk\/useId(?:\.tsx?)?.*"$/, `"react"`],
-  [/^"site\/sdk\/useOffer(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useOffer"`],
-  [/^"site\/sdk\/useVariantPossiblities(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useVariantPossibilities"`],
+  // useOffer and useVariantPossiblities kept as site files (~/sdk/)
   [/^"site\/sdk\/usePlatform(?:\.tsx?)?.*"$/, null],
 
-  // $store/account.json → ~/account.json (JSON import with assertion)
-  [/^"\$store\/account\.json"$/, `"~/account.json"`],
-  [/^"site\/account\.json"$/, `"~/account.json"`],
+  // account.json → constants/account (JSON file replaced with TS module in cleanup)
+  [/^"\$store\/account\.json"$/, `"~/constants/account"`],
+  [/^"site\/account\.json"$/, `"~/constants/account"`],
+  [/^"~\/account\.json"$/, `"~/constants/account"`],
 
   // $store/ → ~/ (common Deno import map alias for project root)
-  [/^"\$store\/sdk\/clx(?:\.tsx?)?.*"$/, `"~/sdk/clx"`],
+  [/^"\$store\/sdk\/clx(?:\.tsx?)?.*"$/, `"@decocms/start/sdk/clx"`],
   [/^"\$store\/sdk\/useId(?:\.tsx?)?.*"$/, `"react"`],
-  [/^"\$store\/sdk\/useOffer(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useOffer"`],
+  // useOffer and useVariantPossiblities kept as site files (~/sdk/)
   [/^"\$store\/sdk\/format(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/formatPrice"`],
-  [/^"\$store\/sdk\/useVariantPossiblities(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useVariantPossibilities"`],
   [/^"\$store\/sdk\/usePlatform(?:\.tsx?)?.*"$/, null],
+  // islands → components (must be before $store catch-all)
+  [/^"\$store\/islands\/ui\/([^"]+?)(?:\.tsx?)?"$/, `"~/components/ui/$1"`],
+  [/^"\$store\/islands\/([^"]+?)(?:\.tsx?)?"$/, `"~/components/$1"`],
   [/^"\$store\/(.+)"$/, `"~/$1"`],
 
   // $home/ → ~/ (another common alias)
   [/^"\$home\/(.+)"$/, `"~/$1"`],
 
   // site/ → ~/
-  [/^"site\/sdk\/clx(?:\.tsx?)?.*"$/, `"~/sdk/clx"`],
+  [/^"site\/sdk\/clx(?:\.tsx?)?.*"$/, `"@decocms/start/sdk/clx"`],
   [/^"site\/sdk\/useId(?:\.tsx?)?.*"$/, `"react"`],
-  [/^"site\/sdk\/useOffer(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useOffer"`],
+  // useOffer and useVariantPossiblities kept as site files (~/sdk/)
   [/^"site\/sdk\/format(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/formatPrice"`],
-  [/^"site\/sdk\/useVariantPossiblities(?:\.tsx?)?.*"$/, `"@decocms/apps/commerce/sdk/useVariantPossibilities"`],
   [/^"site\/sdk\/usePlatform(?:\.tsx?)?.*"$/, null],
+  // islands → components (must be before site/ catch-all)
+  [/^"site\/islands\/ui\/([^"]+?)(?:\.tsx?)?"$/, `"~/components/ui/$1"`],
+  [/^"site\/islands\/([^"]+?)(?:\.tsx?)?"$/, `"~/components/$1"`],
   [/^"site\/(.+)"$/, `"~/$1"`],
+
+  // ~/islands/* → ~/components/* (catch any that slipped through)
+  [/^"~\/islands\/ui\/([^"]+?)(?:\.tsx?)?"$/, `"~/components/ui/$1"`],
+  [/^"~\/islands\/([^"]+?)(?:\.tsx?)?"$/, `"~/components/$1"`],
+
+  // @decocms/apps hooks → local hooks (react-query hooks crash Workers SSR at module eval)
+  [/^"@decocms\/apps\/vtex\/hooks\/useUser"$/, `"~/hooks/useUser"`],
+  [/^"@decocms\/apps\/vtex\/hooks\/useCart"$/, `"~/hooks/useCart"`],
+  [/^"@decocms\/apps\/vtex\/hooks\/useWishlist"$/, `"~/hooks/useWishlist"`],
 ];
 
 /**
@@ -104,20 +136,21 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
  * The key is the ending of the import path, the value is the replacement specifier.
  */
 const RELATIVE_SDK_REWRITES: Array<[RegExp, string]> = [
-  // sdk/clx → ~/sdk/clx (scaffolded locally with default export)
-  [/(?:\.\.\/)*sdk\/clx(?:\.tsx?)?$/, "~/sdk/clx"],
+  // sdk/clx → @decocms/start/sdk/clx (framework utility)
+  [/(?:\.\.\/)*sdk\/clx(?:\.tsx?)?$/, "@decocms/start/sdk/clx"],
   // sdk/useId → react (useId is built-in in React 19)
   [/(?:\.\.\/)*sdk\/useId(?:\.tsx?)?$/, "react"],
-  // sdk/useOffer → @decocms/apps/commerce/sdk/useOffer
-  [/(?:\.\.\/)*sdk\/useOffer(?:\.tsx?)?$/, "@decocms/apps/commerce/sdk/useOffer"],
+  // sdk/useOffer — kept as-is (sites customize offer logic)
+  // sdk/useVariantPossiblities — kept as-is (sites customize variant logic)
   // sdk/format → @decocms/apps/commerce/sdk/formatPrice
   [/(?:\.\.\/)*sdk\/format(?:\.tsx?)?$/, "@decocms/apps/commerce/sdk/formatPrice"],
-  // sdk/useVariantPossiblities → @decocms/apps/commerce/sdk/useVariantPossibilities
-  [/(?:\.\.\/)*sdk\/useVariantPossiblities(?:\.tsx?)?$/, "@decocms/apps/commerce/sdk/useVariantPossibilities"],
   // sdk/usePlatform → remove entirely
   [/(?:\.\.\/)*sdk\/usePlatform(?:\.tsx?)?$/, ""],
   // static/adminIcons → deleted (icon loaders need rewriting)
   [/(?:\.\.\/)*static\/adminIcons(?:\.ts)?$/, ""],
+  // islands/ui/* → components/ui/* (islands are merged into components)
+  [/(?:\.\.\/)*islands\/ui\/([^"]+?)(?:\.tsx?)?$/, "~/components/ui/$1"],
+  [/(?:\.\.\/)*islands\/([^"]+?)(?:\.tsx?)?$/, "~/components/$1"],
 ];
 
 /**
@@ -132,9 +165,26 @@ const RELATIVE_SDK_REWRITES: Array<[RegExp, string]> = [
  *
  * When a rule maps to null, the entire import line is removed.
  */
-export function transformImports(content: string): TransformResult {
+export function transformImports(
+  content: string,
+  islandWrapperTargets?: Map<string, string>,
+): TransformResult {
   const notes: string[] = [];
   let changed = false;
+
+  // Build dynamic rules from island wrapper targets (wrapper island → actual component)
+  const dynamicRules: Array<[RegExp, string]> = [];
+  if (islandWrapperTargets) {
+    for (const [islandPath, targetImport] of islandWrapperTargets) {
+      const componentPath = islandPath.replace("islands/", "components/").replace(/\.tsx?$/, "");
+      // Match ~/components/X and rewrite to the wrapper's actual target
+      const escaped = componentPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      dynamicRules.push([
+        new RegExp(`^"~/${escaped}"$`),
+        `"${targetImport}"`,
+      ]);
+    }
+  }
 
   // Strip BOM that prevents ^ matching on the first line
   if (content.charCodeAt(0) === 0xfeff) {
@@ -180,6 +230,13 @@ export function transformImports(content: string): TransformResult {
     );
   }
 
+  function applyDynamicRules(result: string): string {
+    for (const [dynPattern, dynReplacement] of dynamicRules) {
+      if (dynPattern.test(result)) return dynReplacement;
+    }
+    return result;
+  }
+
   function rewriteSpecifier(specifier: string): string | null {
     // Remove quotes for matching
     const inner = specifier.slice(1, -1);
@@ -187,17 +244,16 @@ export function transformImports(content: string): TransformResult {
     for (const [pattern, replacement] of IMPORT_RULES) {
       if (pattern.test(`"${inner}"`)) {
         if (replacement === null) return null;
-        // Apply regex replacement
         let result = `"${inner}"`.replace(pattern, replacement);
-        // Strip .ts/.tsx extensions from the rewritten path if it's a relative/alias import
-        const resultInner = result.slice(1, -1);
+        let resultInner = result.slice(1, -1);
         if (
           (resultInner.startsWith("~/") || resultInner.startsWith("./") || resultInner.startsWith("../")) &&
           (resultInner.endsWith(".ts") || resultInner.endsWith(".tsx"))
         ) {
-          result = `"${resultInner.replace(/\.tsx?$/, "")}"`;
+          resultInner = resultInner.replace(/\.tsx?$/, "");
+          result = `"${resultInner}"`;
         }
-        return result;
+        return applyDynamicRules(result);
       }
     }
 
@@ -205,8 +261,9 @@ export function transformImports(content: string): TransformResult {
     if (inner.startsWith("./") || inner.startsWith("../")) {
       for (const [pattern, replacement] of RELATIVE_SDK_REWRITES) {
         if (pattern.test(inner)) {
-          if (replacement === "") return null; // remove the import
-          return `"${replacement}"`;
+          if (replacement === "") return null;
+          const resolved = inner.replace(pattern, replacement);
+          return applyDynamicRules(`"${resolved}"`);
         }
       }
     }
@@ -215,7 +272,7 @@ export function transformImports(content: string): TransformResult {
     if (inner.startsWith("npm:")) {
       const cleaned = inner
         .slice(4)
-        .replace(/@[\d^~>=<.*]+$/, ""); // strip version
+        .replace(/@[\d^~>=<.*]+$/, "");
       return `"${cleaned}"`;
     }
 
@@ -226,7 +283,7 @@ export function transformImports(content: string): TransformResult {
       (inner.endsWith(".ts") || inner.endsWith(".tsx"))
     ) {
       const stripped = inner.replace(/\.tsx?$/, "");
-      return `"${stripped}"`;
+      return applyDynamicRules(`"${stripped}"`);
     }
 
     return specifier;
@@ -247,7 +304,13 @@ export function transformImports(content: string): TransformResult {
     if (newSpec !== specifier) {
       changed = true;
       notes.push(`Rewrote: ${specifier} → ${newSpec}`);
-      return `${prefix}${newSpec}${suffix}`;
+      // Strip import assertions (with/assert { type: "json" }) when the
+      // specifier no longer points to a JSON file (e.g. account.json → constants/account)
+      let cleanSuffix = suffix;
+      if (specifier.includes(".json") && !newSpec.includes(".json")) {
+        cleanSuffix = cleanSuffix.replace(/\s*(?:with|assert)\s*\{[^}]*\}\s*/, "");
+      }
+      return `${prefix}${newSpec}${cleanSuffix}`;
     }
     return `${prefix}${specifier}${suffix}`;
   }

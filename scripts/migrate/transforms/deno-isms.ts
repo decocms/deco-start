@@ -45,6 +45,25 @@ export function transformDenoIsms(content: string): TransformResult {
     notes.push("Replaced @ts-ignore with @ts-expect-error");
   }
 
+  // Remove jsdom/dompurify — these don't work on Cloudflare Workers.
+  // CMS rich-text content is trusted, so sanitization is unnecessary.
+  if (/from\s+["']jsdom["']/.test(result) || /from\s+["']dompurify["']/.test(result)) {
+    result = result.replace(/^import\s+.*from\s+["']jsdom["'];?\s*\n?/gm, "");
+    result = result.replace(/^import\s+.*from\s+["']dompurify["'];?\s*\n?/gm, "");
+    // Replace JSDOM + DOMPurify sanitization pattern with pass-through
+    result = result.replace(
+      /const\s+window\s*=\s*new\s+JSDOM\([^)]*\)\.window;\s*\n\s*const\s+DOMPurifyServer\s*=\s*DOMPurify\(window\);\s*\n\s*const\s+(\w+)\s*=\s*DOMPurifyServer\.sanitize\([^)]+\);/g,
+      "const $1 = text;",
+    );
+    // Simpler pattern: const sanitized = DOMPurify.sanitize(text)
+    result = result.replace(
+      /const\s+(\w+)\s*=\s*DOMPurify(?:Server)?\.sanitize\([^)]+\);/g,
+      "const $1 = text;",
+    );
+    changed = true;
+    notes.push("Stripped jsdom/dompurify — CMS content is trusted on Workers");
+  }
+
   // Remove Deno.* API usages — flag for manual review
   if (result.includes("Deno.")) {
     notes.push("MANUAL: Deno.* API usage found — needs Node.js equivalent");

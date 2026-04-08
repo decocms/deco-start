@@ -71,7 +71,6 @@ const SKIP_FILES = new Set([
   "yarn.lock",
   "bun.lock",
   "bun.lockb",
-  "account.json",
 ]);
 
 /** Files that are generated and should be deleted */
@@ -85,8 +84,8 @@ const GENERATED_FILES = new Set([
 const SDK_DELETE = new Set([
   "sdk/clx.ts",
   "sdk/useId.ts",
-  "sdk/useOffer.ts",
-  "sdk/useVariantPossiblities.ts",
+  // sdk/useOffer.ts — kept: sites often customize offer logic
+  // sdk/useVariantPossiblities.ts — kept: sites often customize variant logic
   "sdk/usePlatform.tsx",
   "sdk/signal.ts",
   "sdk/format.ts",
@@ -141,10 +140,27 @@ function extractInlineNpmDeps(content: string): Record<string, string> {
   while ((match = regex.exec(content)) !== null) {
     const name = match[1];
     const version = match[2] || "*";
-    // Skip framework deps
     if (name.startsWith("preact") || name.startsWith("@preact/")) continue;
     deps[name] = `^${version}`;
   }
+
+  // Detect well-known third-party packages imported without npm: prefix
+  const KNOWN_THIRD_PARTY: Record<string, string> = {
+    "@sentry/react": "^10.43.0",
+    "dompurify": "^3.3.3",
+    "fuse.js": "^7.0.0",
+    "swiper": "^11.2.6",
+    "lottie-web": "^5.12.2",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+  };
+  for (const [pkg, version] of Object.entries(KNOWN_THIRD_PARTY)) {
+    const escaped = pkg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp(`from\\s+["']${escaped}`, "m").test(content)) {
+      deps[pkg] = version;
+    }
+  }
+
   return deps;
 }
 
@@ -218,6 +234,11 @@ function decideAction(
     return { action: "delete", notes: "Rewritten from scratch" };
   }
 
+  // All remaining apps/ files → delete (platform config is in setup.ts now)
+  if (relPath.startsWith("apps/")) {
+    return { action: "delete", notes: "Old app config — platform setup is in setup.ts" };
+  }
+
   // Loaders that depend on deleted admin tooling
   if (LOADER_DELETE.has(relPath)) {
     return {
@@ -247,6 +268,8 @@ function decideAction(
     return { action: "delete", notes: "Use @decocms/apps cart hooks" };
   }
 
+  // Non-platform cleanup is done in analyze() post-processing (needs ctx.platform)
+
   // Islands — classify and route to appropriate target
   if (category === "island") {
     const classification = (record as any).__islandClassification;
@@ -262,14 +285,19 @@ function decideAction(
     };
   }
 
-  // Sections that re-export from islands/ → delete (island takes their place)
-  // But sections that re-export from components/ or other dirs should be KEPT
+  // Sections that re-export from islands/ → TRANSFORM (rewrite to ~/components/)
+  // The CMS still references these section keys, so the file must exist.
+  // The island was moved to components/, so we rewrite the re-export target.
   if (category === "section" && isReExp) {
     const target = record.reExportTarget || "";
     const isIslandReExport = target.includes("islands/") ||
       target.includes("islands\\");
     if (isIslandReExport) {
-      return { action: "delete", notes: "Re-export wrapper for island, island merged" };
+      return {
+        action: "transform",
+        targetPath: `src/${relPath}`,
+        notes: "Section re-export — island target rewritten to ~/components/",
+      };
     }
     // Section re-exports from components/ — keep and transform
   }
@@ -298,12 +326,13 @@ function decideAction(
   // Non-code root files that shouldn't go into src/
   const ext = path.extname(relPath);
   const nonCodeExts = new Set([".md", ".csv", ".json", ".sh", ".lock", ".yml", ".yaml", ".xml", ".html", ".txt", ".log"]);
-  if (!relPath.includes("/") && nonCodeExts.has(ext)) {
+  const keepRootFiles = new Set(["account.json"]);
+  if (!relPath.includes("/") && nonCodeExts.has(ext) && !keepRootFiles.has(relPath)) {
     return { action: "delete", notes: "Root-level non-code file" };
   }
 
-  // Root-level loose TS/TSX files that are tooling, not app code
-  const rootToolingFiles = new Set(["islands.ts", "order-status.ts", "sync.sh"]);
+  // Root-level tooling files — not app code
+  const rootToolingFiles = new Set(["islands.ts", "sync.sh"]);
   if (!relPath.includes("/") && rootToolingFiles.has(relPath)) {
     return { action: "delete", notes: "Root-level tooling file" };
   }
@@ -372,6 +401,47 @@ function extractGtmId(sourceDir: string): string | null {
   const content = fs.readFileSync(appPath, "utf-8");
   const match = content.match(/GTM-[A-Z0-9]+/);
   return match ? match[0] : null;
+}
+
+function extractVtexAccount(sourceDir: string): string | null {
+  // Strategy 1: utils/sitename.ts — DICT_VTEX_AN mapping
+  for (const candidate of ["utils/sitename.ts", "sdk/sitename.ts"]) {
+    const fp = path.join(sourceDir, candidate);
+    if (!fs.existsSync(fp)) continue;
+    const content = fs.readFileSync(fp, "utf-8");
+    // Match patterns like: casaevideo: "casaevideonewio"
+    const match = content.match(/vtexAn|VTEX_AN/i);
+    if (match) {
+      const dictMatch = content.match(/["'](\w+)["']\s*:\s*["'](\w+myvtex|\w+newio|\w+)["']/);
+      if (dictMatch) return dictMatch[2];
+    }
+  }
+
+  // Strategy 2: .myvtex.com references in loaders/routes
+  const candidates = [
+    "routes/_app.tsx",
+    "loaders/reviews/productReviews.ts",
+    "apps/vtex.ts",
+  ];
+  for (const candidate of candidates) {
+    const fp = path.join(sourceDir, candidate);
+    if (!fs.existsSync(fp)) continue;
+    const content = fs.readFileSync(fp, "utf-8");
+    const match = content.match(/["'](\w+)\.myvtex\.com/);
+    if (match) return match[1];
+    const match2 = content.match(/account\s*[:=]\s*["'](\w+)["']/);
+    if (match2) return match2[1];
+  }
+
+  // Strategy 3: deno.json import map or apps/ config
+  const appsVtexPath = path.join(sourceDir, "apps", "vtex.ts");
+  if (fs.existsSync(appsVtexPath)) {
+    const content = fs.readFileSync(appsVtexPath, "utf-8");
+    const match = content.match(/account\s*:\s*["'](\w+)["']/);
+    if (match) return match[1];
+  }
+
+  return null;
 }
 
 function extractPlatform(sourceDir: string): Platform {
@@ -518,6 +588,7 @@ export function analyze(ctx: MigrationContext): void {
   // Extract metadata
   ctx.siteName = extractSiteName(ctx.sourceDir);
   ctx.platform = extractPlatform(ctx.sourceDir);
+  ctx.vtexAccount = ctx.platform === "vtex" ? extractVtexAccount(ctx.sourceDir) : null;
   ctx.gtmId = extractGtmId(ctx.sourceDir);
 
   // Extract theme colors and font from CMS
@@ -526,7 +597,7 @@ export function analyze(ctx: MigrationContext): void {
   ctx.fontFamily = theme.fontFamily;
 
   console.log(`  Site: ${ctx.siteName}`);
-  console.log(`  Platform: ${ctx.platform}`);
+  console.log(`  Platform: ${ctx.platform}${ctx.vtexAccount ? ` (account: ${ctx.vtexAccount})` : ""}`);
   console.log(`  GTM ID: ${ctx.gtmId || "none"}`);
   if (Object.keys(ctx.themeColors).length > 0) {
     console.log(`  Theme: ${Object.keys(ctx.themeColors).length} colors from CMS`);
@@ -581,10 +652,64 @@ export function analyze(ctx: MigrationContext): void {
     if (classification.type === "wrapper") {
       f.action = "delete";
       f.notes = "Island wrapper — imports repointed to component";
+      // Build redirect map: island path → wrapped component's migrated import path
+      if (classification.wrapsComponent) {
+        let wrappedImport = classification.wrapsComponent;
+        if (wrappedImport.startsWith("./") || wrappedImport.startsWith("../")) {
+          // Resolve relative to the island's directory
+          const islandDir = path.dirname(f.path);
+          wrappedImport = path.posix.normalize(path.posix.join(islandDir, wrappedImport));
+          wrappedImport = "~/" + wrappedImport;
+        } else {
+          wrappedImport = wrappedImport.replace(/^(\$store|site)\//, "~/");
+        }
+        wrappedImport = wrappedImport.replace(/\.tsx?$/, "");
+        ctx.islandWrapperTargets.set(f.path, wrappedImport);
+      }
     } else {
       f.action = "transform";
       f.targetPath = classification.suggestedTarget;
       f.notes = "Standalone island moved to components";
+    }
+  }
+
+  // Fix section re-exports from wrapper islands — rewrite to the wrapper's target component
+  if (ctx.islandWrapperTargets.size > 0) {
+    for (const f of ctx.files) {
+      if (f.category !== "section" || !f.isReExport || !f.reExportTarget) continue;
+      let target = f.reExportTarget;
+      // Resolve relative paths (../../islands/X) against section's directory
+      if (target.startsWith("./") || target.startsWith("../")) {
+        target = path.posix.normalize(path.posix.join(path.dirname(f.path), target));
+      }
+      target = target.replace(/^(\$store|site)\//, "").replace(/\.tsx?$/, "");
+      if (!target.startsWith("islands/")) continue;
+      const wrappedImport = ctx.islandWrapperTargets.get(target + ".tsx") ||
+        ctx.islandWrapperTargets.get(target);
+      if (wrappedImport) {
+        (f as any).__resolvedReExportTarget = wrappedImport;
+        f.notes = `Section re-export — island wrapper resolved to ${wrappedImport}`;
+      }
+    }
+  }
+
+  // Delete non-platform files (e.g. shopify/linx/vnda/wake/nuvemshop on VTEX sites)
+  const NON_PLATFORM_PATTERNS: Record<string, RegExp> = {
+    vtex: /\/(shopify|linx|vnda|wake|nuvemshop)\b/i,
+    shopify: /\/(vtex|linx|vnda|wake|nuvemshop)\b/i,
+    vnda: /\/(vtex|shopify|linx|wake|nuvemshop)\b/i,
+    wake: /\/(vtex|shopify|linx|vnda|nuvemshop)\b/i,
+    linx: /\/(vtex|shopify|vnda|wake|nuvemshop)\b/i,
+    nuvemshop: /\/(vtex|shopify|linx|vnda|wake)\b/i,
+  };
+  const nonPlatformRe = NON_PLATFORM_PATTERNS[ctx.platform];
+  if (nonPlatformRe) {
+    for (const f of ctx.files) {
+      if (f.action === "delete") continue;
+      if (nonPlatformRe.test("/" + f.path)) {
+        f.action = "delete";
+        f.notes = `Non-${ctx.platform} platform file`;
+      }
     }
   }
 }
