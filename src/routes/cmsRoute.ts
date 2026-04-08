@@ -227,7 +227,6 @@ export const loadDeferredSection = createServerFn({ method: "POST" })
       headers: originRequest.headers,
     });
     const enriched = await runSingleSectionLoader(section, request);
-
     return normalizeUrlsInObject(enriched);
   });
 

@@ -179,7 +179,7 @@ export interface DecoWorkerEntryOptions {
   /**
    * Paths that should always bypass the edge cache, even if the
    * profile detector would otherwise cache them.
-   * Defaults include `/_build`, `/deco/`, `/live/`, `/.decofile`.
+   * Defaults include `/_server`, `/_build`, `/assets`, `/deco/`.
    */
   bypassPaths?: string[];
 
@@ -295,63 +295,6 @@ export interface DecoWorkerEntryOptions {
    * @default true
    */
   autoInjectGeoCookies?: boolean;
-
-  /**
-   * Cookie names considered "safe" for caching — these are public/anonymous
-   * cookies that do not carry per-user session or auth data.
-   *
-   * When a response contains ONLY safe cookies, it is still eligible for
-   * Cache API storage. The safe cookies are stripped from the cached copy
-   * but kept on the response served to the current user.
-   *
-   * If the response contains ANY cookie NOT in this list, the response
-   * bypasses caching entirely (existing behavior).
-   *
-   * @default DEFAULT_SAFE_COOKIES (vtex_is_session, vtex_is_anonymous, vtex_segment, _deco_bucket)
-   *
-   * @example
-   * ```ts
-   * createDecoWorkerEntry(serverEntry, {
-   *   safeCookies: [
-   *     ...DEFAULT_SAFE_COOKIES,
-   *     "my_custom_analytics_cookie",
-   *   ],
-   * });
-   * ```
-   */
-  safeCookies?: string[];
-
-  /**
-   * Additional static paths (beyond fingerprinted assets) that should
-   * receive long-lived immutable cache headers.
-   *
-   * Useful for non-fingerprinted resources like fonts that live at
-   * stable URLs (e.g., `/fonts/Lato-Regular.woff2`).
-   *
-   * @default ["/fonts/"]
-   *
-   * @example
-   * ```ts
-   * createDecoWorkerEntry(serverEntry, {
-   *   staticPaths: ["/fonts/", "/static/", "/images/icons/"],
-   * });
-   * ```
-   */
-  staticPaths?: string[];
-
-  /**
-   * CDN-Cache-Control header strategy.
-   *
-   * - `"no-store"` (default): CDN never caches; every request invokes the Worker.
-   *   Correct when segment-based cache keys differ from the original URL.
-   * - `"match-profile"`: Set CDN-Cache-Control to a short TTL matching the
-   *   profile's edge.fresh value. Only safe when you are NOT using segment-based
-   *   cache keys (i.e., no `buildSegment` and `deviceSpecificKeys: false`).
-   * - A function: Return a CDN-Cache-Control value per profile, or `null` for no-store.
-   *
-   * @default "no-store"
-   */
-  cdnCacheControl?: "no-store" | "match-profile" | ((profile: CacheProfileName) => string | null);
 }
 
 // ---------------------------------------------------------------------------
@@ -436,110 +379,7 @@ export const DEFAULT_SECURITY_HEADERS: Record<string, string> = {
   "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
 };
 
-const DEFAULT_BYPASS_PATHS = ["/_build", "/deco/", "/live/", "/.decofile", "/_server"];
-
-/**
- * Cookie names that are safe for caching — they carry anonymous/public
- * segment data, not per-user auth tokens.
- *
- * VTEX Intelligent Search sets `vtex_is_session` and `vtex_is_anonymous`
- * on every response. `vtex_segment` encodes the sales channel.
- * `_deco_bucket` is the A/B test cohort cookie.
- */
-export const DEFAULT_SAFE_COOKIES: string[] = [
-  "vtex_is_session",
-  "vtex_is_anonymous",
-  "vtex_segment",
-  "_deco_bucket",
-];
-
-const DEFAULT_STATIC_PATHS = ["/fonts/"];
-
-/**
- * Parse Set-Cookie header values and return cookie names.
- */
-function parseCookieNames(response: Response): string[] {
-  const names: string[] = [];
-  // getSetCookie() returns individual Set-Cookie values (available in Workers runtime)
-  const setCookies = (response.headers as any).getSetCookie?.() as string[] | undefined;
-  if (setCookies) {
-    for (const sc of setCookies) {
-      const eqIdx = sc.indexOf("=");
-      if (eqIdx > 0) names.push(sc.slice(0, eqIdx).trim());
-    }
-  } else {
-    // Fallback: parse from combined header (less reliable but covers edge cases)
-    const combined = response.headers.get("set-cookie") ?? "";
-    for (const part of combined.split(",")) {
-      const eqIdx = part.indexOf("=");
-      if (eqIdx > 0) {
-        const name = part.slice(0, eqIdx).trim();
-        // Skip attributes like "Expires=..." that appear after semicolons
-        if (!name.includes(";") && name.length > 0) names.push(name);
-      }
-    }
-  }
-  return names;
-}
-
-/**
- * Check if ALL cookies in a response are in the safe list.
- * Returns true if the response has no cookies or only safe cookies.
- */
-function hasOnlySafeCookies(response: Response, safeCookieSet: Set<string>): boolean {
-  if (!response.headers.has("set-cookie")) return true;
-  const names = parseCookieNames(response);
-  if (names.length === 0) return true;
-  return names.every((name) => safeCookieSet.has(name));
-}
-
-/**
- * Clone a response, stripping Set-Cookie headers that match the safe list.
- * Uses response.clone() to preserve the original body for the served response.
- * The returned copy is intended for cache storage only.
- */
-function stripSafeCookiesForCache(response: Response, safeCookieSet: Set<string>): Response {
-  const clone = response.clone();
-  const setCookies = (response.headers as any).getSetCookie?.() as string[] | undefined;
-  if (!setCookies || setCookies.length === 0) return clone;
-
-  // Remove all Set-Cookie headers, then re-add only unsafe ones
-  clone.headers.delete("set-cookie");
-  for (const sc of setCookies) {
-    const eqIdx = sc.indexOf("=");
-    const name = eqIdx > 0 ? sc.slice(0, eqIdx).trim() : "";
-    if (name && !safeCookieSet.has(name)) {
-      clone.headers.append("set-cookie", sc);
-    }
-  }
-  return clone;
-}
-
-/**
- * Deduplicate Set-Cookie headers — keep only the LAST occurrence of
- * each cookie name. Multiple layers (VTEX middleware, invoke handlers,
- * etc.) may independently append the same cookie.
- */
-function deduplicateSetCookies(response: Response): void {
-  const setCookies = (response.headers as any).getSetCookie?.() as string[] | undefined;
-  if (!setCookies || setCookies.length <= 1) return;
-
-  // Build map: cookie name → last Set-Cookie value
-  const seen = new Map<string, string>();
-  for (const sc of setCookies) {
-    const eqIdx = sc.indexOf("=");
-    const name = eqIdx > 0 ? sc.slice(0, eqIdx).trim() : sc;
-    seen.set(name, sc);
-  }
-
-  // If no duplicates, nothing to do
-  if (seen.size === setCookies.length) return;
-
-  response.headers.delete("set-cookie");
-  for (const sc of seen.values()) {
-    response.headers.append("set-cookie", sc);
-  }
-}
+const DEFAULT_BYPASS_PATHS = ["/_server", "/_build", "/deco/", "/live/", "/.decofile"];
 
 const FINGERPRINTED_ASSET_RE = /(?:\/_build)?\/assets\/.*-[a-zA-Z0-9_-]{8,}\.\w+$/;
 
@@ -547,7 +387,6 @@ const IMMUTABLE_HEADERS: Record<string, string> = {
   "Cache-Control": `public, max-age=${ONE_YEAR}, immutable`,
   Vary: "Accept-Encoding",
 };
-
 
 // ---------------------------------------------------------------------------
 // Factory
@@ -582,12 +421,7 @@ export function createDecoWorkerEntry(
     securityHeaders: securityHeadersOpt,
     csp: cspOpt,
     autoInjectGeoCookies: geoOpt = true,
-    safeCookies: safeCookiesOpt = DEFAULT_SAFE_COOKIES,
-    staticPaths: staticPathsOpt = DEFAULT_STATIC_PATHS,
-    cdnCacheControl: cdnCacheControlOpt = "no-store",
   } = options;
-
-  const safeCookieSet = new Set(safeCookiesOpt);
 
   // Build the final security headers map (merged defaults + custom + CSP)
   const secHeaders: Record<string, string> | null = (() => {
@@ -622,9 +456,7 @@ export function createDecoWorkerEntry(
   }
 
   function isStaticAsset(pathname: string): boolean {
-    if (fingerprintedAssetPattern.test(pathname)) return true;
-    // Non-fingerprinted static paths (e.g., /fonts/)
-    return staticPathsOpt.some((sp) => pathname.startsWith(sp));
+    return fingerprintedAssetPattern.test(pathname);
   }
 
   function isCacheable(request: Request, url: URL): boolean {
@@ -924,10 +756,6 @@ export function createDecoWorkerEntry(
       return handleRequest(request, env, ctx);
       });
 
-      // Deduplicate Set-Cookie headers — multiple layers (VTEX middleware,
-      // invoke handlers, etc.) may independently append the same cookie.
-      deduplicateSetCookies(response);
-
       return applySecurityHeaders(response);
     },
   };
@@ -1022,28 +850,10 @@ export function createDecoWorkerEntry(
         }
 
         const resp = new Response(origin.body, origin);
-
-        // Responses with private Set-Cookie headers carry per-user tokens —
-        // never expose them with public cache headers.
-        // Safe/public cookies (e.g., vtex_is_session) are allowed through.
-        if (origin.headers.has("set-cookie") && !hasOnlySafeCookies(origin, safeCookieSet)) {
-          resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
-          resp.headers.delete("CDN-Cache-Control");
-          resp.headers.set("X-Cache", "BYPASS");
-          resp.headers.set("X-Cache-Reason", "private-set-cookie");
-          return resp;
-        }
-
-        // Set cache headers from the detected profile so the response
-        // is explicit about cacheability (avoids ambiguous empty header).
-        const hdrsNc = cacheHeaders(profile);
-        for (const [k, v] of Object.entries(hdrsNc)) resp.headers.set(k, v);
-
         const reason = request.method !== "GET"
           ? `method:${request.method}`
           : "bypass-path";
         resp.headers.set("X-Cache", "BYPASS");
-        resp.headers.set("X-Cache-Profile", profile);
         resp.headers.set("X-Cache-Reason", reason);
         return resp;
       }
@@ -1075,22 +885,7 @@ export function createDecoWorkerEntry(
         const out = new Response(resp.body, resp);
         const hdrs = cacheHeaders(profile);
         for (const [k, v] of Object.entries(hdrs)) out.headers.set(k, v);
-
-        // CDN-Cache-Control: controls Cloudflare's automatic CDN layer
-        // (separate from Cache API which the worker manages directly).
-        if (cdnCacheControlOpt === "no-store") {
-          out.headers.set("CDN-Cache-Control", "no-store");
-        } else if (cdnCacheControlOpt === "match-profile") {
-          if (edgeConfig.isPublic && edgeConfig.fresh > 0) {
-            out.headers.set("CDN-Cache-Control", `public, max-age=${edgeConfig.fresh}`);
-          } else {
-            out.headers.set("CDN-Cache-Control", "no-store");
-          }
-        } else if (typeof cdnCacheControlOpt === "function") {
-          const val = cdnCacheControlOpt(profile);
-          out.headers.set("CDN-Cache-Control", val ?? "no-store");
-        }
-
+        out.headers.set("CDN-Cache-Control", "no-store");
         out.headers.set("X-Cache", xCache);
         out.headers.set("X-Cache-Profile", profile);
         if (segment) out.headers.set("X-Cache-Segment", hashSegment(segment));
@@ -1122,15 +917,8 @@ export function createDecoWorkerEntry(
       function revalidateInBackground() {
         ctx.waitUntil(
           Promise.resolve(serverEntry.fetch(request, env, ctx)).then((origin) => {
-            if (origin.status === 200) {
-              // Only cache if response has no cookies or only safe cookies.
-              // Strip safe cookies from the cached copy.
-              if (hasOnlySafeCookies(origin, safeCookieSet)) {
-                const cleanOrigin = origin.headers.has("set-cookie")
-                  ? stripSafeCookiesForCache(origin, safeCookieSet)
-                  : origin;
-                storeInCache(cleanOrigin);
-              }
+            if (origin.status === 200 && !origin.headers.has("set-cookie")) {
+              storeInCache(origin);
             }
           }).catch(() => {
             // Background revalidation failed — stale entry stays until SIE expires
@@ -1210,16 +998,14 @@ export function createDecoWorkerEntry(
         return resp;
       }
 
-      // Responses with private Set-Cookie headers must never be cached —
-      // they carry per-user session/auth tokens that would leak to other users.
-      // Safe/public cookies (IS session, segment, etc.) are stripped from the
-      // cached copy but kept on the response served to the current user.
-      if (origin.headers.has("set-cookie") && !hasOnlySafeCookies(origin, safeCookieSet)) {
+      // Responses with Set-Cookie must never be cached — they carry
+      // per-user session/auth tokens that would leak to other users.
+      if (origin.headers.has("set-cookie")) {
         const resp = new Response(origin.body, origin);
         resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
         resp.headers.delete("CDN-Cache-Control");
         resp.headers.set("X-Cache", "BYPASS");
-        resp.headers.set("X-Cache-Reason", "private-set-cookie");
+        resp.headers.set("X-Cache-Reason", "set-cookie");
         appendResourceHints(resp);
         return resp;
       }
@@ -1239,12 +1025,7 @@ export function createDecoWorkerEntry(
       // dressResponse() calls new Response(resp.body, resp) which locks
       // the ReadableStream. Calling clone() on a locked body corrupts
       // the stream in Workers runtime, causing Error 1101.
-      // Strip safe cookies from the cached copy so they don't leak
-      // to other users, but the current user still gets them.
-      const cacheOrigin = origin.headers.has("set-cookie")
-        ? stripSafeCookiesForCache(origin, safeCookieSet)
-        : origin;
-      storeInCache(cacheOrigin);
+      storeInCache(origin);
       return dressResponse(origin, "MISS");
   }
 }
