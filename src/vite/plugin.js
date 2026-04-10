@@ -115,6 +115,33 @@ export function decoVitePlugin() {
           }
         }
       });
+
+      // Tunnel + daemon: connect local dev to admin.deco.cx
+      // Activated when DECO_SITE_NAME is set (e.g. DECO_SITE_NAME=mysite vite dev)
+      const siteName = process.env.DECO_SITE_NAME;
+      if (siteName) {
+        const envName = process.env.DECO_ENV_NAME || "dev";
+
+        // Add daemon middleware (x-daemon-api interception + auth + volumes + SSE)
+        import("../daemon/middleware.js").then(({ createDaemonMiddleware }) => {
+          server.middlewares.use(createDaemonMiddleware({ site: siteName, server }));
+        }).catch((err) => {
+          console.warn("[deco] Failed to load daemon middleware:", err.message);
+        });
+
+        // Start tunnel after HTTP server is listening (so we know the real port)
+        server.httpServer?.once("listening", async () => {
+          const addr = server.httpServer?.address();
+          const port = typeof addr === "object" && addr ? addr.port : 5173;
+          try {
+            const { startTunnel } = await import("../daemon/tunnel.js");
+            const tunnel = await startTunnel({ site: siteName, env: envName, port });
+            server.httpServer?.on("close", () => tunnel.close());
+          } catch (err) {
+            console.warn("[deco] Failed to start tunnel:", err.message);
+          }
+        });
+      }
     },
 
     config(_cfg, { command }) {
