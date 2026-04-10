@@ -43,6 +43,7 @@ export async function startTunnel(
     "c309424a-2dc4-46fe-bfc7-a7c10df59477";
 
   let closed = false;
+  let activeConn: Awaited<ReturnType<typeof connect>> | null = null;
 
   async function doConnect(): Promise<void> {
     if (closed) return;
@@ -50,6 +51,7 @@ export async function startTunnel(
     let r: Awaited<ReturnType<typeof connect>>;
     try {
       r = await connect({ domain, localAddr, server, apiKey });
+      activeConn = r;
     } catch (err) {
       if (closed) return;
       console.log(
@@ -116,6 +118,11 @@ export async function startTunnel(
   return {
     close() {
       closed = true;
+      activeConn?.closed?.catch(() => {});
+      // warp-node's connect() returns a Connected object; closing the
+      // underlying WebSocket is handled internally when the process exits.
+      // Setting closed=true prevents reconnection attempts.
+      activeConn = null;
     },
     domain,
   };

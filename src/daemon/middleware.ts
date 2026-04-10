@@ -87,16 +87,21 @@ export function createDaemonMiddleware(opts: DaemonOptions) {
 
     // Auth → then route
     auth(req, res, () => {
-      const url = req.url ?? "";
+      let pathname: string;
+      try {
+        pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      } catch {
+        pathname = req.url ?? "/";
+      }
 
       // Volumes API: /volumes/:id/files/*
-      if (url.includes("/volumes/") && url.includes("/files") && volumes) {
+      if (pathname.includes("/volumes/") && pathname.includes("/files") && volumes) {
         volumes(req, res, next);
         return;
       }
 
       // SSE watch: /watch or root /
-      if (url.includes("/watch") || url === "/" || url === "/?") {
+      if (pathname === "/watch" || pathname === "/") {
         watch(req, res, next);
         return;
       }

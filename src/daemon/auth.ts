@@ -121,6 +121,7 @@ function matchParts(urn: string[], resource: string[]): boolean {
 function matches(urnParts: string[]) {
   return (resourceUrn: string) => {
     const resourceParts = resourceUrn.split(":");
+    if (resourceParts.length > urnParts.length) return false;
     const lastIdx = resourceParts.length - 1;
     return resourceParts.every((part, idx) => {
       if (part === "*") return true;

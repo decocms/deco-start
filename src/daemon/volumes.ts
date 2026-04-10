@@ -5,7 +5,7 @@
  * Ported from: deco-cx/deco daemon/realtime/app.ts (without CRDT)
  */
 import { readdir, readFile, writeFile, mkdir, rm, stat } from "node:fs/promises";
-import { join, sep, posix } from "node:path";
+import { join, resolve, sep, posix } from "node:path";
 import type { IncomingMessage, ServerResponse, Server as HttpServer } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import fjp from "fast-json-patch";
@@ -59,6 +59,12 @@ function isTextFileSet(patch: FilePatch): patch is TextFileSet {
 // ---------------------------------------------------------------------------
 
 const toPosix = (p: string) => p.replaceAll(sep, "/");
+
+function safePath(base: string, untrusted: string): string | null {
+  const resolved = resolve(base, untrusted);
+  if (!resolved.startsWith(base + sep) && resolved !== base) return null;
+  return resolved;
+}
 
 async function readTextFileSafe(path: string): Promise<string | null> {
   try {
@@ -149,7 +155,12 @@ async function handleGetFiles(
   const filePath = segments.join("/files") || "/";
   const withContent = url.searchParams.get("content") === "true";
 
-  const root = join(cwd, filePath);
+  const root = safePath(cwd, filePath);
+  if (!root) {
+    res.writeHead(403);
+    res.end("Path traversal denied");
+    return;
+  }
   const fs: Record<string, { content: string | null }> = {};
 
   const files = await walkFiles(root);
@@ -189,10 +200,17 @@ async function handlePatchFiles(
   const results: FilePatchResult[] = [];
 
   for (const patch of request.patches) {
+    // Validate path traversal for every patch
+    const resolvedPath = safePath(cwd, patch.path);
+    if (!resolvedPath) {
+      results.push({ accepted: false, path: patch.path });
+      continue;
+    }
+
     if (isJSONFilePatch(patch)) {
       const { path: filePath, patches: operations } = patch;
       const content =
-        (await readTextFileSafe(join(cwd, filePath))) ?? "{}";
+        (await readTextFileSafe(resolvedPath)) ?? "{}";
       try {
         const newContent = JSON.stringify(
           operations.reduce(fjp.applyReducer, JSON.parse(content)),
@@ -209,23 +227,12 @@ async function handlePatchFiles(
       }
     } else if (isTextFileSet(patch)) {
       const { path: filePath, content } = patch;
-      try {
-        const p = join(cwd, filePath);
-        await ensureFile(p);
-        await writeFile(p, content ?? "", "utf-8");
-        results.push({
-          accepted: true,
-          path: filePath,
-          content: content ?? "",
-          deleted: content === null,
-        });
-      } catch {
-        results.push({
-          accepted: false,
-          path: filePath,
-          content: content ?? "",
-        });
-      }
+      results.push({
+        accepted: true,
+        path: filePath,
+        content: content ?? "",
+        deleted: content === null,
+      });
     }
   }
 

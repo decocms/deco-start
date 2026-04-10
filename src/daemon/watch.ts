@@ -48,7 +48,7 @@ function shouldIgnore(path: string): boolean {
 
 async function inferMetadata(
   filepath: string,
-): Promise<{ kind: string } | null> {
+): Promise<{ kind: string }> {
   try {
     const raw = await readFile(filepath, "utf-8");
     const parsed = JSON.parse(raw);
@@ -57,7 +57,7 @@ async function inferMetadata(
     }
     return { kind: "file" };
   } catch {
-    return null;
+    return { kind: "file" };
   }
 }
 
@@ -91,8 +91,6 @@ async function* scanFiles(
       if (mtime < since) continue;
 
       const metadata = await inferMetadata(fullPath);
-      if (!metadata) continue;
-
       const filepath = toPosix(fullPath.replace(cwd, ""));
       yield {
         type: "fs-sync",
