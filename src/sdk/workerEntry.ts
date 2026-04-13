@@ -38,9 +38,10 @@ import { isMobileUA } from "./useDevice";
 import { getRenderShellConfig } from "../admin/setup";
 import { RequestContext } from "./requestContext";
 import { getAppMiddleware } from "./setupApps";
-import type { MatcherContext } from "../cms/resolve";
-import { resolveDecoPage } from "../cms/resolve";
-import { runSectionLoaders } from "../cms/sectionLoaders";
+import type { MatcherContext, ResolvedSection } from "../cms/resolve";
+import { resolveDecoPage, extractSeoFromProps, extractSeoFromSections } from "../cms/resolve";
+import { runSectionLoaders, runSingleSectionLoader } from "../cms/sectionLoaders";
+import { getSiteSeo } from "../cms/loader";
 
 /**
  * Append Link preload headers for CSS and fonts so the browser starts
@@ -979,10 +980,17 @@ export function createDecoWorkerEntry(
         }
         const enrichedSections = await runSectionLoaders(page.resolvedSections, request);
 
+        // Build SEO props — same logic as buildPageSeo in cmsRoute.ts:
+        // 1. Run section loader on seoSection (e.g. SEOPDP)
+        // 2. Extract SEO fields from resolved props
+        // 3. Merge with site-wide SEO defaults from the "Site" app block
+        // 4. Extract section-contributed SEO from enriched sections
+        const seoProps = await buildAsJsonSeo(page.seoSection, enrichedSections, request);
+        const seoComponent = page.seoSection?.component ?? "website/sections/Seo/SeoV2.tsx";
+
         // Build legacy deco-cx/deco (Fresh) compatible response shape.
         // The old framework returns { props: { name, path, seo, sections, ... }, metadata }.
         // Mobile apps and other consumers rely on this exact structure.
-        const seoSection = page.seoSection;
         const sections = enrichedSections.map((s) => ({
           props: s.props,
           metadata: {
@@ -995,15 +1003,13 @@ export function createDecoWorkerEntry(
           props: {
             name: page.name,
             path: page.path,
-            ...(seoSection ? {
-              seo: {
-                props: seoSection.props,
-                metadata: {
-                  resolveChain: [],
-                  component: seoSection.component,
-                },
+            seo: {
+              props: seoProps,
+              metadata: {
+                resolveChain: [],
+                component: seoComponent,
               },
-            } : {}),
+            },
             sections,
             devMode: false,
             unindexedDomain: false,
@@ -1447,4 +1453,53 @@ export function createDecoWorkerEntry(
       storeInCache(cacheOrigin);
       return dressResponse(origin, "MISS");
   }
+}
+
+// ---------------------------------------------------------------------------
+// ?asJson SEO builder — mirrors buildPageSeo() from cmsRoute.ts
+// ---------------------------------------------------------------------------
+
+/**
+ * Build SEO props for the ?asJson response, matching the legacy deco-cx/deco
+ * format. Runs the SEO section loader, merges with site-wide SEO defaults,
+ * and extracts section-contributed SEO.
+ */
+async function buildAsJsonSeo(
+  seoSection: ResolvedSection | null | undefined,
+  enrichedSections: ResolvedSection[],
+  request: Request,
+): Promise<Record<string, unknown>> {
+  const siteSeo = getSiteSeo();
+  const sectionSeo = extractSeoFromSections(enrichedSections);
+
+  if (!seoSection) {
+    const merged: Record<string, unknown> = { ...sectionSeo };
+    if (siteSeo.title && !merged.title) merged.title = siteSeo.title;
+    if (siteSeo.description && !merged.description) merged.description = siteSeo.description;
+    if (siteSeo.image && !merged.image) merged.image = siteSeo.image;
+    if (siteSeo.favicon) merged.favicon = siteSeo.favicon;
+    if (!merged.jsonLDs) merged.jsonLDs = [];
+    return merged;
+  }
+
+  // Run the section loader if registered (e.g. SEOPDP)
+  let enrichedProps = seoSection.props;
+  try {
+    const enriched = await runSingleSectionLoader(seoSection, request);
+    if (enriched) enrichedProps = enriched.props;
+  } catch {
+    // Section loader failed — use raw resolved props
+  }
+
+  const pageSeo = extractSeoFromProps(enrichedProps);
+
+  // Merge site-wide SEO defaults (same as cmsRoute.ts buildPageSeo)
+  if (!pageSeo.title && siteSeo.title) pageSeo.title = siteSeo.title;
+  if (!pageSeo.description && siteSeo.description) pageSeo.description = siteSeo.description;
+  if (!pageSeo.image && siteSeo.image) pageSeo.image = siteSeo.image;
+
+  const merged = { ...sectionSeo, ...pageSeo } as Record<string, unknown>;
+  if (siteSeo.favicon) merged.favicon = siteSeo.favicon;
+  if (!merged.jsonLDs) merged.jsonLDs = [];
+  return merged;
 }
