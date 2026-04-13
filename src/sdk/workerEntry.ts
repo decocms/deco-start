@@ -41,7 +41,7 @@ import { getAppMiddleware } from "./setupApps";
 import type { MatcherContext, ResolvedSection } from "../cms/resolve";
 import { resolveDecoPage, extractSeoFromProps, extractSeoFromSections } from "../cms/resolve";
 import { runSectionLoaders, runSingleSectionLoader } from "../cms/sectionLoaders";
-import { getSiteSeo } from "../cms/loader";
+import { getSiteSeo, loadBlocks } from "../cms/loader";
 
 /**
  * Append Link preload headers for CSS and fonts so the browser starts
@@ -1472,12 +1472,15 @@ async function buildAsJsonSeo(
   const siteSeo = getSiteSeo();
   const sectionSeo = extractSeoFromSections(enrichedSections);
 
+  // getSiteSeo() returns a typed subset, but the actual Site.seo block
+  // may contain additional fields (type, canonical, noIndexing, etc.)
+  // that the legacy ?asJson response needs. Read the full object.
+  const blocks = loadBlocks();
+  const site = blocks["Site"] as Record<string, unknown> | undefined;
+  const fullSiteSeo = (site?.seo as Record<string, unknown>) ?? {};
+
   if (!seoSection) {
-    const merged: Record<string, unknown> = { ...sectionSeo };
-    if (siteSeo.title && !merged.title) merged.title = siteSeo.title;
-    if (siteSeo.description && !merged.description) merged.description = siteSeo.description;
-    if (siteSeo.image && !merged.image) merged.image = siteSeo.image;
-    if (siteSeo.favicon) merged.favicon = siteSeo.favicon;
+    const merged: Record<string, unknown> = { ...fullSiteSeo, ...sectionSeo };
     if (!merged.jsonLDs) merged.jsonLDs = [];
     return merged;
   }
@@ -1493,13 +1496,13 @@ async function buildAsJsonSeo(
 
   const pageSeo = extractSeoFromProps(enrichedProps);
 
-  // Merge site-wide SEO defaults (same as cmsRoute.ts buildPageSeo)
+  // Merge: site-wide SEO as base, then section-contributed, then page-level on top.
+  // pageSeo fields override siteSeo only when truthy (same as cmsRoute.ts buildPageSeo).
   if (!pageSeo.title && siteSeo.title) pageSeo.title = siteSeo.title;
   if (!pageSeo.description && siteSeo.description) pageSeo.description = siteSeo.description;
   if (!pageSeo.image && siteSeo.image) pageSeo.image = siteSeo.image;
 
   // Apply title/description templates (mirrors buildPageSeo in cmsRoute.ts).
-  // Priority: page-level template → site-level template → no-op.
   const rawProps = seoSection.props;
   const titleTemplate =
     effectiveTemplate(rawProps.titleTemplate as string | undefined) ??
@@ -1515,8 +1518,8 @@ async function buildAsJsonSeo(
     pageSeo.description = descTemplate.replace("%s", pageSeo.description);
   }
 
-  const merged = { ...sectionSeo, ...pageSeo } as Record<string, unknown>;
-  if (siteSeo.favicon) merged.favicon = siteSeo.favicon;
+  // fullSiteSeo as base ensures type, canonical, noIndexing, favicon are included
+  const merged = { ...fullSiteSeo, ...sectionSeo, ...pageSeo } as Record<string, unknown>;
   if (!merged.jsonLDs) merged.jsonLDs = [];
   return merged;
 }
