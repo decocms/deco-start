@@ -1498,8 +1498,31 @@ async function buildAsJsonSeo(
   if (!pageSeo.description && siteSeo.description) pageSeo.description = siteSeo.description;
   if (!pageSeo.image && siteSeo.image) pageSeo.image = siteSeo.image;
 
+  // Apply title/description templates (mirrors buildPageSeo in cmsRoute.ts).
+  // Priority: page-level template → site-level template → no-op.
+  const rawProps = seoSection.props;
+  const titleTemplate =
+    effectiveTemplate(rawProps.titleTemplate as string | undefined) ??
+    effectiveTemplate(siteSeo.titleTemplate);
+  const descTemplate =
+    effectiveTemplate(rawProps.descriptionTemplate as string | undefined) ??
+    effectiveTemplate(siteSeo.descriptionTemplate);
+
+  if (titleTemplate && pageSeo.title) {
+    pageSeo.title = titleTemplate.replace("%s", pageSeo.title);
+  }
+  if (descTemplate && pageSeo.description) {
+    pageSeo.description = descTemplate.replace("%s", pageSeo.description);
+  }
+
   const merged = { ...sectionSeo, ...pageSeo } as Record<string, unknown>;
   if (siteSeo.favicon) merged.favicon = siteSeo.favicon;
   if (!merged.jsonLDs) merged.jsonLDs = [];
   return merged;
+}
+
+/** Returns a non-trivial template string, or undefined for "%s" / empty / blank. */
+function effectiveTemplate(tmpl: string | undefined): string | undefined {
+  if (!tmpl || tmpl.trim() === "" || tmpl.trim() === "%s") return undefined;
+  return tmpl;
 }
