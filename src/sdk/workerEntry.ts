@@ -978,10 +978,40 @@ export function createDecoWorkerEntry(
           return Response.json(null, { status: 404, headers: { "Access-Control-Allow-Origin": "*" } });
         }
         const enrichedSections = await runSectionLoaders(page.resolvedSections, request);
-        const { seoSection: _seo, ...pageData } = page;
+
+        // Build legacy deco-cx/deco (Fresh) compatible response shape.
+        // The old framework returns { props: { name, path, seo, sections, ... }, metadata }.
+        // Mobile apps and other consumers rely on this exact structure.
+        const seoSection = page.seoSection;
+        const sections = enrichedSections.map((s) => ({
+          props: s.props,
+          metadata: {
+            resolveChain: [],
+            component: s.component,
+          },
+        }));
+
         const result = {
-          ...pageData,
-          resolvedSections: enrichedSections,
+          props: {
+            name: page.name,
+            path: page.path,
+            ...(seoSection ? {
+              seo: {
+                props: seoSection.props,
+                metadata: {
+                  resolveChain: [],
+                  component: seoSection.component,
+                },
+              },
+            } : {}),
+            sections,
+            devMode: false,
+            unindexedDomain: false,
+          },
+          metadata: {
+            resolveChain: [],
+            component: "website/pages/Page.tsx",
+          },
         };
         return Response.json(result, {
           headers: {
