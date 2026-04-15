@@ -38,9 +38,10 @@ import { isMobileUA } from "./useDevice";
 import { getRenderShellConfig } from "../admin/setup";
 import { RequestContext } from "./requestContext";
 import { getAppMiddleware } from "./setupApps";
-import type { MatcherContext } from "../cms/resolve";
+import type { MatcherContext, ResolvedSection } from "../cms/resolve";
 import { resolveDecoPage } from "../cms/resolve";
-import { runSectionLoaders } from "../cms/sectionLoaders";
+import { runSectionLoaders, runSingleSectionLoader } from "../cms/sectionLoaders";
+import { loadBlocks } from "../cms/loader";
 
 /**
  * Append Link preload headers for CSS and fonts so the browser starts
@@ -978,10 +979,84 @@ export function createDecoWorkerEntry(
           return Response.json(null, { status: 404, headers: { "Access-Control-Allow-Origin": "*" } });
         }
         const enrichedSections = await runSectionLoaders(page.resolvedSections, request);
-        const { seoSection: _seo, ...pageData } = page;
+
+        // Run SEO section loader if registered
+        let seoResult = page.seoSection;
+        if (seoResult) {
+          try {
+            seoResult = await runSingleSectionLoader(seoResult, request);
+          } catch {
+            // use unloaded seoSection
+          }
+        }
+
+        // Merge site-wide SEO defaults into seo props
+        const blocks = loadBlocks();
+        const site = blocks["Site"] as Record<string, unknown> | undefined;
+        const fullSiteSeo = (site?.seo as Record<string, unknown>) ?? {};
+
+        // When SeoV2 loader ran, use its output as base (preserves key order)
+        // and only fill in missing fields from the site-wide SEO config.
+        const loaderProps = seoResult?.props ?? {};
+        const seoProps: Record<string, unknown> = { ...loaderProps };
+        for (const [k, v] of Object.entries(fullSiteSeo)) {
+          if (!(k in seoProps)) seoProps[k] = v;
+        }
+        // Strip internal template fields
+        delete seoProps.titleTemplate;
+        delete seoProps.descriptionTemplate;
+
+        // Build resolveChain statically to match legacy deco-cx/deco format.
+        type FieldResolver = { type: string; value: string | number };
+        const rawKey = page.blockKey ?? `pages-${page.name}`;
+        const encodedKey = rawKey.replace(
+          /^(pages-)(.+)$/,
+          (_m, prefix, rest) => prefix + encodeURIComponent(rest),
+        );
+        const pageChain: FieldResolver[] = [
+          { type: "resolver", value: "website/handlers/fresh.ts" },
+          { type: "prop", value: "page" },
+          { type: "resolver", value: "resolved" },
+          { type: "resolvable", value: encodedKey },
+          { type: "resolver", value: "website/pages/Page.tsx" },
+        ];
+
+        const seoChain: FieldResolver[] = [
+          ...pageChain,
+          { type: "prop", value: "seo" },
+          { type: "resolver", value: seoResult?.component ?? "website/sections/Seo/SeoV2.tsx" },
+        ];
+
         const result = {
-          ...pageData,
-          resolvedSections: enrichedSections,
+          props: {
+            name: page.name,
+            path: page.path,
+            seo: {
+              props: seoProps,
+              metadata: {
+                resolveChain: seoChain,
+                component: seoResult?.component ?? "website/sections/Seo/SeoV2.tsx",
+              },
+            },
+            sections: enrichedSections.map((s, i) => ({
+              props: s.props,
+              metadata: {
+                resolveChain: [
+                  ...pageChain,
+                  { type: "prop", value: "sections" },
+                  { type: "prop", value: String(i) },
+                  { type: "resolver", value: s.component },
+                ],
+                component: s.component,
+              },
+            })),
+            devMode: false,
+            unindexedDomain: false,
+          },
+          metadata: {
+            resolveChain: pageChain,
+            component: "website/pages/Page.tsx",
+          },
         };
         return Response.json(result, {
           headers: {
@@ -1418,3 +1493,4 @@ export function createDecoWorkerEntry(
       return dressResponse(origin, "MISS");
   }
 }
+

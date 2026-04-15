@@ -196,13 +196,13 @@ export function getSiteSeo(): {
 
 export function findPageByPath(
   targetPath: string,
-): { page: DecoPage; params: Record<string, string> } | null {
+): { page: DecoPage; params: Record<string, string>; blockKey: string } | null {
   const allPages = getAllPages();
 
-  for (const { page } of allPages) {
+  for (const { key, page } of allPages) {
     if (!page.path) continue;
     const params = matchPath(page.path, targetPath);
-    if (params !== null) return { page, params };
+    if (params !== null) return { page, params, blockKey: key };
   }
 
   return null;
