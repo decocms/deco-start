@@ -1,5 +1,5 @@
 import * as asyncHooks from "node:async_hooks";
-import { djb2Hex } from "../sdk/djb2";
+import { djb2Hex } from "../sdk/djb2.ts";
 
 export type Resolvable = {
   __resolveType?: string;

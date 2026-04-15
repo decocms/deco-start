@@ -1,8 +1,30 @@
-import { djb2Hex } from "../sdk/djb2";
-import { composeMeta, type MetaResponse } from "./schema";
+import { djb2Hex } from "../sdk/djb2.ts";
+import { composeMeta, type MetaResponse } from "./schema.ts";
 
-let metaData: MetaResponse | null = null;
-let cachedEtag: string | null = null;
+// Use globalThis to share meta state across module instances.
+// The daemon middleware imports this module via native import() (outside Vite SSR),
+// while setup.ts calls setMetaData() via Vite SSR — these are different module instances.
+// globalThis bridges them so both see the same metaData.
+const G = globalThis as unknown as {
+  __deco_meta_data?: MetaResponse | null;
+  __deco_meta_etag?: string | null;
+};
+
+function getMetaData(): MetaResponse | null {
+  return G.__deco_meta_data ?? null;
+}
+
+function setMetaDataInternal(data: MetaResponse | null) {
+  G.__deco_meta_data = data;
+}
+
+function getCachedEtag(): string | null {
+  return G.__deco_meta_etag ?? null;
+}
+
+function setCachedEtag(etag: string | null) {
+  G.__deco_meta_etag = etag;
+}
 
 /**
  * Invalidate the cached ETag so the admin re-fetches meta after a
@@ -12,7 +34,7 @@ let cachedEtag: string | null = null;
  * needed here, keeping this module safe for client-side bundles.
  */
 export function invalidateMetaCache() {
-  cachedEtag = null;
+  setCachedEtag(null);
 }
 
 /**
@@ -21,8 +43,8 @@ export function invalidateMetaCache() {
  * on top of the site-generated section schemas.
  */
 export function setMetaData(data: MetaResponse) {
-  metaData = composeMeta(data);
-  cachedEtag = null;
+  setMetaDataInternal(composeMeta(data));
+  setCachedEtag(null);
 }
 
 /**
@@ -31,14 +53,17 @@ export function setMetaData(data: MetaResponse) {
  * results in a different ETag, forcing admin to re-fetch.
  */
 function getEtag(): string {
-  if (!cachedEtag) {
-    const str = JSON.stringify(metaData || {});
-    cachedEtag = `"meta-${djb2Hex(str)}"`;
+  let etag = getCachedEtag();
+  if (!etag) {
+    const str = JSON.stringify(getMetaData() || {});
+    etag = `"meta-${djb2Hex(str)}"`;
+    setCachedEtag(etag);
   }
-  return cachedEtag;
+  return etag;
 }
 
 export function handleMeta(request: Request): Response {
+  const metaData = getMetaData();
   if (!metaData) {
     return new Response(JSON.stringify({ error: "Schema not initialized" }), {
       status: 503,

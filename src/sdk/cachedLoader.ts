@@ -11,7 +11,7 @@
  * (e.g. "product") which derives timing from the unified profile system.
  */
 
-import { loaderCacheOptions, type CacheProfileName } from "./cacheHeaders";
+import { loaderCacheOptions, type CacheProfileName } from "./cacheHeaders.ts";
 
 export type CachePolicy = "no-store" | "no-cache" | "stale-while-revalidate";
 

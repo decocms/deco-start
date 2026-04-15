@@ -3,6 +3,7 @@ import { getOnBeforeResolveProps, getSection, registerOnBeforeResolveProps } fro
 import { isLayoutSection, runSingleSectionLoader } from "./sectionLoaders";
 import { normalizeUrlsInObject } from "../sdk/normalizeUrls";
 import { djb2Hex } from "../sdk/djb2";
+import { registerLoaderSchemas, registerActionSchemas, type LoaderConfig, type ActionConfig } from "../admin/schema";
 
 // globalThis-backed: share state across Vite server function split modules
 const G = globalThis as any;
@@ -296,6 +297,37 @@ export function registerCommerceLoader(key: string, loader: CommerceLoader) {
 
 export function registerCommerceLoaders(loaders: Record<string, CommerceLoader>) {
   Object.assign(commerceLoaders, loaders);
+
+  // Auto-register loader + action schemas for the admin manifest.
+  // Separate actions (keys containing "/actions/") from loaders.
+  const loaderConfigs: LoaderConfig[] = [];
+  const actionConfigs: ActionConfig[] = [];
+
+  for (const key of Object.keys(loaders)) {
+    const namespace = key.startsWith("vtex/") ? "vtex" : "site";
+    const schema = { type: "object" as const, additionalProperties: true };
+
+    if (key.includes("/actions/")) {
+      actionConfigs.push({ key, title: key, namespace, propsSchema: schema });
+    } else {
+      loaderConfigs.push({ key, title: key, namespace, propsSchema: schema, tags: inferLoaderTags(key) });
+    }
+  }
+
+  registerLoaderSchemas(loaderConfigs);
+  registerActionSchemas(actionConfigs);
+}
+
+function inferLoaderTags(key: string): string[] {
+  if (
+    key.includes("productList") ||
+    key.includes("ProductList") ||
+    key.includes("ProductShelf") ||
+    key.includes("SearchResult")
+  ) {
+    return ["product-list"];
+  }
+  return [];
 }
 
 // ---------------------------------------------------------------------------

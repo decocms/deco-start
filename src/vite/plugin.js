@@ -122,8 +122,8 @@ export function decoVitePlugin() {
       if (siteName) {
         const envName = process.env.DECO_ENV_NAME || "dev";
 
-        // Add daemon middleware (x-daemon-api interception + auth + volumes + SSE)
-        import("../daemon/middleware.js").then(({ createDaemonMiddleware }) => {
+        // Add daemon middleware (x-daemon-api interception + auth + volumes + SSE + admin routes)
+        import("../daemon/middleware.ts").then(({ createDaemonMiddleware }) => {
           server.middlewares.use(createDaemonMiddleware({ site: siteName, server }));
         }).catch((err) => {
           console.warn("[deco] Failed to load daemon middleware:", err.message);
@@ -134,8 +134,13 @@ export function decoVitePlugin() {
           const addr = server.httpServer?.address();
           const port = typeof addr === "object" && addr ? addr.port : 5173;
           try {
-            const { startTunnel } = await import("../daemon/tunnel.js");
-            const tunnel = await startTunnel({ site: siteName, env: envName, port });
+            const { startTunnel } = await import("../daemon/tunnel.ts");
+            const tunnel = await startTunnel({
+              site: siteName,
+              env: envName,
+              port,
+              decoHost: process.env.DECO_HOST === "true",
+            });
             server.httpServer?.on("close", () => tunnel.close());
           } catch (err) {
             console.warn("[deco] Failed to start tunnel:", err.message);
@@ -145,9 +150,18 @@ export function decoVitePlugin() {
     },
 
     config(_cfg, { command }) {
+      /** @type {import("vite").UserConfig} */
+      const cfg = {};
+
+      // Allow tunnel domains through Vite's host check
+      if (process.env.DECO_SITE_NAME) {
+        cfg.server = { allowedHosts: [".deco.host", ".decocdn.com"] };
+      }
+
       // Only split chunks for production builds — dev uses unbundled ESM.
-      if (command !== "build") return;
+      if (command !== "build") return cfg;
       return {
+        ...cfg,
         build: {
           rollupOptions: {
             output: {

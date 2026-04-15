@@ -17,8 +17,11 @@ export {
 } from "./invoke";
 export { setMetaData } from "./meta";
 export {
+  type ActionConfig,
   type LoaderConfig,
   type MatcherConfig,
+  registerActionSchema,
+  registerActionSchemas,
   registerLoaderSchema,
   registerLoaderSchemas,
   registerMatcherSchema,

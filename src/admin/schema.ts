@@ -95,6 +95,64 @@ function getProductListLoaderKeys(): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// Action definitions — dynamic registry
+// ---------------------------------------------------------------------------
+
+export interface ActionConfig {
+  key: string;
+  title: string;
+  namespace: string;
+  propsSchema: Record<string, any>;
+}
+
+const actionRegistry: ActionConfig[] = [];
+
+/** Register a single action schema for the admin. */
+export function registerActionSchema(config: ActionConfig) {
+  const idx = actionRegistry.findIndex((a) => a.key === config.key);
+  if (idx >= 0) {
+    actionRegistry[idx] = config;
+  } else {
+    actionRegistry.push(config);
+  }
+}
+
+/** Register multiple action schemas at once. */
+export function registerActionSchemas(configs: ActionConfig[]) {
+  for (const config of configs) registerActionSchema(config);
+}
+
+function buildActionDefinitions() {
+  const definitions: Record<string, any> = {};
+  const manifestBlocks: Record<string, any> = {};
+
+  for (const action of actionRegistry) {
+    const defKey = toBase64(action.key);
+
+    definitions[defKey] = {
+      title: action.key,
+      type: "object",
+      required: ["__resolveType"],
+      properties: {
+        __resolveType: {
+          type: "string",
+          enum: [action.key],
+          default: action.key,
+        },
+        props: action.propsSchema,
+      },
+    };
+
+    manifestBlocks[action.key] = {
+      $ref: `#/definitions/${defKey}`,
+      namespace: action.namespace,
+    };
+  }
+
+  return { definitions, manifestBlocks };
+}
+
+// ---------------------------------------------------------------------------
 // Matcher definitions — dynamic registry
 // ---------------------------------------------------------------------------
 
@@ -774,6 +832,7 @@ export function composeMeta(siteMeta: MetaResponse): MetaResponse {
   const fullSectionAnyOf = [...siteAnyOf, ...fwSections.extraAnyOf];
   const page = buildPageSchema(fullSectionAnyOf);
   const loaders = buildLoaderDefinitions();
+  const actions = buildActionDefinitions();
   const matchers = buildMatcherDefinitions();
 
   const sectionRefDef = { title: "Section", anyOf: fullSectionAnyOf };
@@ -786,6 +845,7 @@ export function composeMeta(siteMeta: MetaResponse): MetaResponse {
     ...fwSections.definitions,
     ...page.definitions,
     ...loaders.definitions,
+    ...actions.definitions,
     ...matchers.definitions,
     [SECTION_REF_DEF_KEY]: sectionRefDef,
     [RESOLVABLE_LITERAL_KEY]: resolvableDef,
@@ -812,6 +872,10 @@ export function composeMeta(siteMeta: MetaResponse): MetaResponse {
         loaders: {
           ...(siteMeta.manifest?.blocks?.loaders || {}),
           ...loaders.manifestBlocks,
+        },
+        actions: {
+          ...(siteMeta.manifest?.blocks?.actions || {}),
+          ...actions.manifestBlocks,
         },
         matchers: {
           ...(siteMeta.manifest?.blocks?.matchers || {}),

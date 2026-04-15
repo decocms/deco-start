@@ -12,13 +12,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 // ---------------------------------------------------------------------------
 
 interface FSEvent {
-  type: "fs-sync" | "fs-snapshot";
-  detail: {
-    metadata?: { kind: string } | null;
-    filepath?: string;
-    timestamp: number;
-    status?: unknown;
-  };
+  type: "fs-sync" | "fs-snapshot" | "worker-status" | "meta-info";
+  detail: Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -46,16 +41,55 @@ function shouldIgnore(path: string): boolean {
   );
 }
 
-async function inferMetadata(
-  filepath: string,
-): Promise<{ kind: string }> {
+/**
+ * Infer block type from __resolveType string.
+ * Maps to manifest block categories (pages, sections, loaders, etc.).
+ */
+function inferBlockType(resolveType: string): string | null {
+  if (!resolveType) return null;
+  if (resolveType.includes("/pages/")) return "pages";
+  if (resolveType.includes("/sections/")) return "sections";
+  if (resolveType.includes("/loaders/")) return "loaders";
+  if (resolveType.includes("/actions/")) return "actions";
+  if (resolveType.includes("/matchers/")) return "matchers";
+  if (resolveType.includes("/flags/")) return "sections";
+  return null;
+}
+
+export interface Metadata {
+  kind: "block" | "file";
+  blockType?: string;
+  __resolveType?: string;
+  name?: string;
+  path?: string;
+}
+
+/**
+ * Read a JSON file and infer its metadata (block type, resolveType, etc.).
+ * Matches the Deno daemon's inferMetadata from daemon/fs/api.ts.
+ */
+export async function inferMetadata(filepath: string): Promise<Metadata | null> {
   try {
     const raw = await readFile(filepath, "utf-8");
     const parsed = JSON.parse(raw);
-    if (parsed.__resolveType) {
-      return { kind: "block" };
+    const { __resolveType, name, path: pagePath } = parsed;
+
+    if (!__resolveType) return { kind: "file" };
+
+    const blockType = inferBlockType(__resolveType);
+    if (!blockType) return { kind: "file" };
+
+    if (blockType === "pages") {
+      return {
+        kind: "block",
+        blockType,
+        __resolveType,
+        name: name ?? undefined,
+        path: pagePath ?? undefined,
+      };
     }
-    return { kind: "file" };
+
+    return { kind: "block", blockType, __resolveType };
   } catch {
     return { kind: "file" };
   }
@@ -111,8 +145,9 @@ async function* scanFiles(
 // SSE handler — Connect-style middleware
 // ---------------------------------------------------------------------------
 
-export function createWatchHandler() {
+export function createWatchHandler(opts?: { getPort?: () => number }) {
   const cwd = process.cwd();
+  const getPort = opts?.getPort ?? (() => 5173);
 
   return async (
     req: IncomingMessage,
@@ -169,6 +204,30 @@ export function createWatchHandler() {
     for await (const event of scanFiles(cwd, since)) {
       if (closed) break;
       sendEvent(event);
+    }
+
+    if (closed) return;
+
+    // Worker status — Vite dev server is always ready
+    sendEvent({
+      type: "worker-status",
+      detail: { state: "ready" },
+    });
+
+    // Meta info — schema + manifest so admin knows about sections/loaders/actions.
+    // Fetch via HTTP so the request goes through Vite SSR where the data lives
+    // (daemon's native imports create separate module instances).
+    try {
+      const metaResponse = await fetch(`http://localhost:${getPort()}/live/_meta`);
+      if (metaResponse.ok) {
+        const metaData = await metaResponse.json();
+        sendEvent({
+          type: "meta-info",
+          detail: { ...metaData, timestamp: Date.now() },
+        });
+      }
+    } catch {
+      // Schema may not be initialized yet — admin will retry via /live/_meta
     }
   };
 }
