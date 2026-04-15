@@ -19,15 +19,7 @@ import {
 	type AppDefinitionWithHandlers,
 } from "../sdk/setupApps";
 
-// ---------------------------------------------------------------------------
-// Known app block keys → dynamic import of their mod.ts
-// ---------------------------------------------------------------------------
-
-const APP_MODS: Record<string, () => Promise<any>> = {
-	"deco-vtex": () => import("@decocms/apps/vtex/mod" as string),
-	"deco-shopify": () => import("@decocms/apps/shopify/mod" as string),
-	"deco-resend": () => import("@decocms/apps/resend/mod" as string),
-};
+import { apps as APP_MODS } from "@decocms/apps/registry";
 
 // ---------------------------------------------------------------------------
 // Main
