@@ -121,11 +121,20 @@ export async function handleRender(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const resolveChain = url.searchParams.get("resolveChain");
   const propsParam = url.searchParams.get("props");
+  console.log("handleRender", request.url);
 
   const pathPrefix = "/live/previews/";
-  const pathComponent = url.pathname.startsWith(pathPrefix)
+  const rawPathComponent = url.pathname.startsWith(pathPrefix)
     ? url.pathname.slice(pathPrefix.length)
     : "";
+  // Admin sends double-encoded path segments (e.g. space → %20 → %2520).
+  // Decode until stable so the block key matches the decofile.
+  const pathComponent = (() => {
+    try {
+      const once = decodeURIComponent(rawPathComponent);
+      try { return decodeURIComponent(once); } catch { return once; }
+    } catch { return rawPathComponent; }
+  })();
   let component = resolveChain || pathComponent || "";
   let props: Record<string, unknown> = {};
   let decofileOverride: Record<string, unknown> | null = null;
