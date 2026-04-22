@@ -9,7 +9,10 @@ import type { ReactNode } from "react";
 const rootRoute = createRootRoute();
 
 const previewRouter = createRouter({
-  routeTree: rootRoute,
+  // TanStack Router's RootRoute/Route generic inference rejects bare rootRoute
+  // at the type level (works at runtime). `as any` avoids leaking the mismatch
+  // into consumer sites that typecheck framework source via npm link.
+  routeTree: rootRoute as any,
   history: createMemoryHistory({ initialEntries: ["/"] }),
 });
 
