@@ -15,6 +15,16 @@ import { getPreviewWrapper } from "./setup";
 
 export { setRenderShell, setPreviewWrapper } from "./setup";
 
+/** Escape user-controlled strings before interpolating into HTML. */
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 // Cache the dynamic import — avoids re-importing per section render
 let _renderToString: ((element: any) => string) | null = null;
 async function getRenderToString() {
@@ -36,7 +46,7 @@ function wrapInHtmlShell(sectionHtml: string): string {
 async function renderResolvedSection(section: ResolvedSection): Promise<string> {
   const sectionLoader = getSection(section.component);
   if (!sectionLoader) {
-    return `<div style="padding:8px;color:orange;font-size:12px;border:1px dashed orange;margin:4px 0;">Unsupported: ${section.component}</div>`;
+    return `<div style="padding:8px;color:orange;font-size:12px;border:1px dashed orange;margin:4px 0;">Unsupported: ${escapeHtml(section.component)}</div>`;
   }
 
   try {
@@ -47,7 +57,7 @@ async function renderResolvedSection(section: ResolvedSection): Promise<string> 
     const wrapped = Wrapper ? createElement(Wrapper, null, element) : element;
     return renderToString(wrapped);
   } catch (error) {
-    return `<div style="padding:8px;color:red;font-size:12px;">Error rendering ${section.component}: ${(error as Error).message}</div>`;
+    return `<div style="padding:8px;color:red;font-size:12px;">Error rendering ${escapeHtml(section.component)}: ${escapeHtml((error as Error).message)}</div>`;
   }
 }
 
@@ -62,7 +72,7 @@ async function renderOneSection(section: Record<string, unknown>): Promise<strin
 
   const sectionLoader = getSection(resolveType);
   if (!sectionLoader) {
-    return `<div style="padding:8px;color:orange;font-size:12px;border:1px dashed orange;margin:4px 0;">Unsupported: ${resolveType}</div>`;
+    return `<div style="padding:8px;color:orange;font-size:12px;border:1px dashed orange;margin:4px 0;">Unsupported: ${escapeHtml(resolveType)}</div>`;
   }
 
   try {
@@ -74,7 +84,7 @@ async function renderOneSection(section: Record<string, unknown>): Promise<strin
     const wrapped = Wrapper ? createElement(Wrapper, null, element) : element;
     return renderToString(wrapped);
   } catch (error) {
-    return `<div style="padding:8px;color:red;font-size:12px;">Error rendering ${resolveType}: ${(error as Error).message}</div>`;
+    return `<div style="padding:8px;color:red;font-size:12px;">Error rendering ${escapeHtml(resolveType)}: ${escapeHtml((error as Error).message)}</div>`;
   }
 }
 
@@ -234,7 +244,7 @@ export async function handleRender(request: Request): Promise<Response> {
     const sectionLoader = getSection(component);
     if (!sectionLoader) {
       const unknownHtml = wrapInHtmlShell(
-        `<div style="padding:20px;color:red;">Unknown section: ${component}</div>`,
+        `<div style="padding:20px;color:red;">Unknown section: ${escapeHtml(component)}</div>`,
       );
       return new Response(unknownHtml, {
         status: 200,
@@ -257,7 +267,7 @@ export async function handleRender(request: Request): Promise<Response> {
       });
     } catch (error) {
       const errorHtml = wrapInHtmlShell(
-        `<div style="padding:20px;color:red;">Render error: ${(error as Error).message}</div>`,
+        `<div style="padding:20px;color:red;">Render error: ${escapeHtml((error as Error).message)}</div>`,
       );
       return new Response(errorHtml, {
         status: 200,
