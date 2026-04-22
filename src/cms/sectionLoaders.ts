@@ -34,7 +34,7 @@ interface CacheableSectionConfig {
   maxAge: number;
 }
 
-type CacheableSectionInput = CacheableSectionConfig | import("../sdk/cacheHeaders").CacheProfileName;
+export type CacheableSectionInput = CacheableSectionConfig | import("../sdk/cacheHeaders").CacheProfileName;
 
 function resolveSectionCacheConfig(input: CacheableSectionInput): CacheableSectionConfig {
   if (typeof input === "string") {

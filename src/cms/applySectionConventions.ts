@@ -11,10 +11,12 @@ import {
   registerSectionsSync,
 } from "./registry";
 import {
+  type CacheableSectionInput,
   registerCacheableSections,
   registerLayoutSections,
 } from "./sectionLoaders";
 import {
+  type AsyncRenderingConfig,
   registerEagerSections,
   registerSeoSections,
   setAsyncRenderingConfig,
@@ -48,13 +50,13 @@ export function applySectionConventions(input: ApplySectionConventionsInput): vo
   const eagerSections: string[] = [];
   const layoutSections: string[] = [];
   const seoSections: string[] = [];
-  const cacheableSections: Record<string, string> = {};
+  const cacheableSections: Record<string, CacheableSectionInput> = {};
 
   for (const [key, entry] of Object.entries(meta)) {
     if (entry.eager) eagerSections.push(key);
     if (entry.layout) layoutSections.push(key);
     if (entry.seo) seoSections.push(key);
-    if (entry.cache) cacheableSections[key] = entry.cache;
+    if (entry.cache) cacheableSections[key] = entry.cache as CacheableSectionInput;
 
     if (entry.clientOnly && sectionGlob) {
       const globKey = sectionGlobKey(key, sectionGlob);
@@ -81,7 +83,8 @@ export function applySectionConventions(input: ApplySectionConventionsInput): vo
     // Permanent registry — survives subsequent setAsyncRenderingConfig() calls
     registerEagerSections(eagerSections);
     // Also add to alwaysEager for backward compat with code that reads the config
-    const existing = getAsyncRenderingConfig() ?? {};
+    const existing: Partial<AsyncRenderingConfig> =
+      getAsyncRenderingConfig() ?? {};
     setAsyncRenderingConfig({
       ...existing,
       alwaysEager: [...(existing.alwaysEager ?? []), ...eagerSections],
