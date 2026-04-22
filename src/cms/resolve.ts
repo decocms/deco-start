@@ -1506,7 +1506,11 @@ export async function resolveDeferredSection(
   ensureInitialized();
 
   const ctx: MatcherContext = { ...matcherCtx, path: pagePath };
+  // Recover routeParams from the page match so nested `requestToParam`
+  // resolvers (e.g. `:slug` on PDPs) return the right value.
+  const match = findPageByPath(pagePath);
   const rctx: ResolveContext = {
+    routeParams: match?.params,
     matcherCtx: ctx,
     memo: new Map(),
     depth: 0,
