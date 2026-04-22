@@ -70,23 +70,6 @@ export interface AppRegistryEntry {
 
 export type AppRegistry = readonly AppRegistryEntry[];
 
-/**
- * Attempt to load `@decocms/apps/registry` dynamically. Returns `[]` if the
- * module isn't installed or doesn't export `APP_REGISTRY`. Prefer passing
- * the registry explicitly — this fallback is convenience only.
- */
-async function loadDefaultRegistry(): Promise<AppRegistry> {
-  try {
-    // Cast to string bypasses Vite's static analysis, letting the import
-    // fail silently at runtime if @decocms/apps is not installed.
-    const mod = await import(/* @vite-ignore */ "@decocms/apps/registry" as string);
-    const registry = mod?.APP_REGISTRY ?? mod?.default;
-    return Array.isArray(registry) ? registry : [];
-  } catch {
-    return [];
-  }
-}
-
 async function configureAllApps(
   blocks: Record<string, unknown>,
   registry: AppRegistry,
@@ -126,19 +109,17 @@ async function configureAllApps(
  * Call once in setup.ts after setBlocks(). Re-runs on admin hot-reload.
  *
  * @param blocks   Decofile blocks (from blocks.gen or loadBlocks()).
- * @param registry List of installable apps. If omitted, attempts to load
- *                 `@decocms/apps/registry` as a convenience default.
+ * @param registry List of installable apps — typically
+ *                 `import { APP_REGISTRY } from "@decocms/apps/registry"`.
  */
 export async function autoconfigApps(
   blocks: Record<string, unknown>,
-  registry?: AppRegistry,
+  registry: AppRegistry,
 ): Promise<void> {
   if (typeof document !== "undefined") return; // server-only
+  if (!registry || registry.length === 0) return;
 
-  const effectiveRegistry = registry ?? (await loadDefaultRegistry());
-  if (effectiveRegistry.length === 0) return;
-
-  const apps = await configureAllApps(blocks, effectiveRegistry);
+  const apps = await configureAllApps(blocks, registry);
   if (apps.length > 0) {
     await setupApps(apps);
   }
@@ -146,7 +127,7 @@ export async function autoconfigApps(
   // Re-configure on admin hot-reload
   onChange(async (newBlocks) => {
     if (typeof document !== "undefined") return;
-    const updatedApps = await configureAllApps(newBlocks, effectiveRegistry);
+    const updatedApps = await configureAllApps(newBlocks, registry);
     if (updatedApps.length > 0) {
       await setupApps(updatedApps);
     }
