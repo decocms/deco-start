@@ -209,19 +209,28 @@ export async function setupApps(
       registerAppCommerceHandlers(appWithHandlers.handlers);
     }
 
-    // 2. Flatten manifest modules → individual invoke handlers
-    // manifest.actions["vtex/actions/checkout"] = { getOrCreateCart, addItemsToCart, ... }
-    // → register "vtex/actions/checkout/getOrCreateCart" as handler
+    // 2. Flatten manifest modules → individual invoke handlers.
+    //
+    //   Convention (mirrors legacy deco-cx/apps):
+    //     - `default` export is registered at the moduleKey itself.
+    //         shopify/loaders/ProductList.ts (default) → key "shopify/loaders/ProductList"
+    //     - Named function exports are registered at `${moduleKey}/${fnName}`.
+    //         vtex/actions/checkout.ts ({ getOrCreateCart, addItemsToCart })
+    //         → keys "vtex/actions/checkout/getOrCreateCart", ".../addItemsToCart"
+    //     - Each key also gets a `.ts` sibling for callers that include the
+    //       extension (admin invoke path, some __resolveType producers).
     for (const category of ["loaders", "actions"] as const) {
       const modules = app.manifest[category];
       if (!modules) continue;
 
       for (const [moduleKey, moduleExports] of Object.entries(modules)) {
-        for (const [fnName, fn] of Object.entries(
-          moduleExports as Record<string, unknown>,
-        )) {
+        const exports = moduleExports as Record<string, unknown>;
+
+        for (const [fnName, fn] of Object.entries(exports)) {
           if (typeof fn !== "function") continue;
-          const key = `${moduleKey}/${fnName}`;
+          const key = fnName === "default"
+            ? moduleKey
+            : `${moduleKey}/${fnName}`;
           const handler = (props: any, req: Request) =>
             (fn as Function)(props, req);
           registerInvokeHandlers({
