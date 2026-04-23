@@ -5,7 +5,51 @@ description: Migrate Deco.cx storefronts from Fresh/Preact to TanStack Start/Rea
 
 # Deco-to-TanStack-Start Migration Playbook
 
-Phase-based playbook for converting `deco-sites/*` storefronts from Fresh/Preact/Deno to TanStack Start/React/Cloudflare Workers. Battle-tested on espacosmart-storefront (100+ sections, VTEX, async rendering).
+Phase-based playbook for converting `deco-sites/*` storefronts from Fresh/Preact/Deno to TanStack Start/React/Cloudflare Workers. Battle-tested on espacosmart-storefront (VTEX, 100+ sections) and storefront-tanstack (Shopify).
+
+**Framework minimum**: `@decocms/start >= 1.6.2` (deferred sections with `:slug` route params require the `routeParams` propagation fix — see gotcha #47).
+
+## One-Prompt Migration (copy/paste to an AI agent)
+
+Paste the prompt below verbatim into a code-writing AI (Claude Code, Cursor, etc.) pointed at a fresh TanStack Start scaffold that already has the source `deco-sites/*` project copied to `.context/` for reference. The agent will execute phases 0–10 sequentially, gating on exit criteria, and stop to confirm when a phase needs a human judgment call.
+
+```
+You are migrating a Deco/Fresh/Preact storefront to TanStack Start/React/Cloudflare Workers.
+
+Source site reference: .context/<SITE_NAME>/ (read-only)
+Target repo: this working directory
+Framework docs: .cursor/skills/deco-to-tanstack-migration/SKILL.md + references/ + templates/
+
+Execute the migration in phase order. For each phase:
+  1. Read the phase section in SKILL.md and the linked references/templates
+  2. Run the automation commands from references/codemod-commands.md where the phase is bulk-safe
+  3. Verify the phase's exit criteria before moving on
+  4. If a verification fails, fix root causes — do not skip
+
+Critical invariants (violate none of these):
+  - Never add compat/ layers or Vite aliases beyond `~` → `src/`
+  - Copy components faithfully from source — do NOT rewrite JSX, class names, or grid/flex structure. Only apply mechanical migrations (class→className, for→htmlFor, preact→react imports). AI-rewritten components are the #1 regression source.
+  - `@decocms/start >= 1.6.2` in package.json (deferred-section routeParams fix)
+  - `import "./setup"` is the FIRST line in server.ts and worker-entry.ts
+  - Use `createSiteSetup()` + `applySectionConventions()` + `autoconfigApps(blocks, APP_REGISTRY)` — do NOT hand-wire section loaders, alwaysEager lists, or commerce loaders for apps the registry already covers (Phase 7 reference has the shape)
+  - Section metadata is declared in the section file (`export const eager = true`, `export const cache = "listing"`, etc.) — `generate-sections.ts` extracts it. Do not maintain duplicate arrays in setup.ts.
+  - After every phase, run: `npm run build && npm run typecheck`. Both must be green before proceeding.
+
+Stop and ask the human when:
+  - A component's layout output differs visibly from the source reference
+  - A gotcha listed in references/gotchas.md applies but the fix is non-mechanical
+  - Phase 5 (commerce/platform hooks): cart/user/wishlist flows are platform-specific and require real credentials — confirm the hook implementation before writing
+  - Phase 8 (routes): SEO sections, SSR/SPA decisions, and device detection need human confirmation
+
+Start at Phase 0. Report phase completion with a one-line summary + the verification command output.
+```
+
+The prompt assumes:
+- The target repo has TanStack Start scaffolded (`npm create @tanstack/app@latest -- --template cloudflare-workers`)
+- `@decocms/start` and `@decocms/apps` are published and installable (or locally linked)
+- The source `src/` has been copied and `.deco/blocks/` is present
+
+If either is missing, the agent will stop at Phase 0 and ask.
 
 ## Architecture Boundaries
 
@@ -227,21 +271,50 @@ See: skill `deco-islands-migration`
 **Entry**: Phase 6 complete
 
 **Actions** (critical — build `src/setup.ts`):
-1. Register all sections via `registerSections()` with dynamic imports
-2. Register critical sections (Header, Footer) via `registerSectionsSync()` + `setResolvedComponent()`
-3. Register section loaders via `registerSectionLoaders()` for sections with `export const loader`
-4. Register layout sections via `registerLayoutSections()`
-5. Register commerce loaders via `registerCommerceLoaders()` with SWR caching
-6. Wire `onBeforeResolve()` → `initVtexFromBlocks()` for VTEX config
-7. Configure `setAsyncRenderingConfig()` with `alwaysEager` for critical sections
-8. Configure admin: `setMetaData()`, `setRenderShell()`, `setInvokeLoaders()`
-9. **Register SEO sections via `registerSeoSections()`** — identify sections that produce title/description/canonical (typically SEOPDP, SEOPLP). Register their loaders in `registerSectionLoaders` too.
+
+Modern site setup uses three framework composers + convention-driven section metadata. The old manual registration arrays (`registerSectionsSync`, `setResolvedComponent`, `registerSectionLoaders`, `registerLayoutSections`, `registerSeoSections`, `setAsyncRenderingConfig({ alwaysEager })`) are replaced by codegen reading `export const X = true` declarations from each section file.
+
+1. **`createSiteSetup(options)`** from `@decocms/start/setup` — one-call framework bootstrap (sections glob, blocks, meta, CSS, fonts, production origins, preview wrapper, platform init).
+
+2. **`applySectionConventions({ meta, syncComponents, loadingFallbacks, sectionGlob })`** from `@decocms/start/cms` — reads `src/server/cms/sections.gen.ts` (produced by `generate-sections.ts`) and registers:
+   - `eager` → `registerEagerSections`
+   - `layout` → `registerLayoutSections`
+   - `seo` → `registerSeoSections`
+   - `cache` → `registerCacheableSections`
+   - `sync` → `registerSectionsSync` + bundled sync import
+   - `hasLoadingFallback` → `registerSection` with fallback
+   - `clientOnly` → `registerSection` with `clientOnly: true`
+
+3. **`autoconfigApps(blocks, APP_REGISTRY)`** from `@decocms/start/apps` — dual-registers every app's loaders + actions into the CMS resolve path AND the admin `/deco/invoke` path from a single source. `APP_REGISTRY` from `@decocms/apps/registry` maintains the list — adding a new app is one entry there, no site code change.
+
+4. **`registerCommerceLoaders({ ... })`** — ONLY for site-local loaders that don't belong to an app (e.g., `site/loaders/minicart.ts`, `site/loaders/user.ts`). Do NOT register Shopify/VTEX loaders manually — autoconfig handles those.
+
+5. **Section metadata lives in section files**, not in setup.ts:
+   ```typescript
+   // src/sections/Header/Header.tsx
+   export default function Header(props) { /* ... */ }
+   export const eager = true;   // include in alwaysEager
+   export const sync = true;    // bundle sync (no Suspense boundary)
+   export const layout = true;  // render even when CMS page wraps it in Lazy
+   ```
+   Then `npm run generate:sections` emits `sections.gen.ts` with the extracted arrays.
 
 **Template**: `templates/setup-ts.md`
 
-**Exit**: `setup.ts` compiles, all sections registered
+**Build pipeline** (add to `package.json` scripts):
+```
+"generate:blocks":   "tsx node_modules/@decocms/start/scripts/generate-blocks.ts",
+"generate:schema":   "tsx node_modules/@decocms/start/scripts/generate-schema.ts --site <SITE>",
+"generate:sections": "tsx node_modules/@decocms/start/scripts/generate-sections.ts",
+"generate:loaders":  "tsx node_modules/@decocms/start/scripts/generate-loaders.ts",
+"generate:invoke":   "tsx node_modules/@decocms/start/scripts/generate-invoke.ts",
+"generate:routes":   "tsr generate",
+"build": "npm run generate:blocks && npm run generate:schema && npm run generate:sections && npm run generate:loaders && tsr generate && vite build"
+```
 
-See: skill `deco-async-rendering-site-guide`
+**Exit**: `setup.ts` compiles; `npm run build` green; every section declared in decofile resolves on SSR.
+
+See: skill `deco-async-rendering-site-guide`, reference `templates/setup-ts.md`
 
 ---
 

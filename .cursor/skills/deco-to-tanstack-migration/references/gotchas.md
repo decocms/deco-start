@@ -718,6 +718,104 @@ Or in project `.npmrc` with an env var (for CI):
 
 **Tradeoff with `github:` syntax**: No semver resolution — `npm update` is meaningless. Pin to a tag for stability: `github:decocms/deco-start#v0.14.2`. Without a tag, you get HEAD of the default branch.
 
+## 47. Deferred Sections Lose routeParams on PDP (`@decocms/start < 1.6.2`)
+
+**Severity**: CRITICAL — every deferred PDP section loads with `page: null`, product content never renders.
+
+`resolveDeferredSection` (called by the client `_serverFn` that streams `LazySection` contents) builds its own `ResolveContext` without populating `routeParams`. When a PDP loader chain uses `website/functions/requestToParam.ts` to read `:slug` from the route, the resolver returns `null` because `routeParams` is empty. Shopify/VTEX `productDetailsPage` then receives `slug: null` and returns `null`.
+
+**Symptom**: PDP HTTP returns 200, initial HTML renders the `<LazySection>` placeholder, but the deferred `_serverFn` POST returns `{ page: null }` (or a seroval null sentinel `{t:2,s:0}`). Product details section stays empty forever.
+
+**Fix**: upgrade to `@decocms/start >= 1.6.2`. The fix:
+
+```typescript
+// src/cms/resolve.ts — resolveDeferredSection
+const match = findPageByPath(pagePath);
+const rctx: ResolveContext = {
+  routeParams: match?.params,   // ← recovered from page match
+  matcherCtx: ctx,
+  memo: new Map(),
+  depth: 0,
+};
+```
+
+**Verification**: POST directly to the _serverFn endpoint for the deferred section with a real PDP path — response body should contain `"@type":"ProductDetailsPage"`. If it contains `{t:2,s:0}` (seroval null), you're on the broken version.
+
+**Detection grep**: search your site's node_modules for the fix marker:
+```bash
+grep -n "findPageByPath(pagePath)" node_modules/@decocms/start/src/cms/resolve.ts
+```
+No match → upgrade.
+
+## 48. Section Metadata Must Live in the Section File (Convention-Driven)
+
+**Severity**: MEDIUM — duplicate registration arrays drift out of sync; sections silently miss eager/layout flags.
+
+Pre-1.6 migrations hand-maintained arrays in `setup.ts`: `alwaysEager: ["site/sections/Header/Header.tsx", ...]`, `layoutSections: [...]`, `seoSections: [...]`, `cacheableSections: {...}`. Every new section meant editing setup.ts. These lists drifted — renamed/deleted sections left dangling entries; new eager sections were forgotten.
+
+The current pattern: declare behavior in the section file, `generate-sections.ts` extracts it into `sections.gen.ts`, `applySectionConventions()` registers it.
+
+```typescript
+// src/sections/Header/Header.tsx
+export default function Header(props) { /* ... */ }
+export const eager = true;   // alwaysEager
+export const sync = true;    // bundle sync (first paint)
+export const layout = true;  // layout section (never deferred)
+```
+
+```typescript
+// src/sections/Product/SearchResult.tsx
+export const cache = "listing";   // SWR cache profile
+export function LoadingFallback() { /* ... */ }
+```
+
+```typescript
+// src/sections/SEO/SeoPDP.tsx
+export const seo = true;
+```
+
+**Fix during migration**: delete hand-maintained arrays from setup.ts. Add the right `export const` flags on each section. Run `npm run generate:sections`. The `applySectionConventions({ meta: sectionMeta, ... })` call wires everything.
+
+**Regen cadence**: `generate:sections` runs automatically as part of `npm run build`. In dev, rerun it manually after changing a section's metadata exports.
+
+## 49. `window.STOREFRONT` Stub for Phase 6 (Cart/User/Wishlist)
+
+**Severity**: MEDIUM — pages crash during Phase 6 development without the stub; the stub itself is a placeholder, not a solution.
+
+The legacy Deco cart pattern injects `window.STOREFRONT.CART.{getCart, addToCart, setQuantity, subscribe}` + matching `USER` and `WISHLIST` channels. Header badges, minicart, AddToCart button, and wishlist buttons all read from this global. Until Phase 6 (commerce wiring) ships a real TanStack Store-backed implementation, pages crash on every render where any of these are read.
+
+**Interim stub** in `src/routes/__root.tsx` `head.scripts`:
+
+```javascript
+(function(){
+  if (window.STOREFRONT) return;
+  var noop = function(){};
+  var mkChan = function(emptyValue) {
+    return {
+      getCart: function(){ return emptyValue; },
+      getUser: function(){ return emptyValue; },
+      getWishlist: function(){ return emptyValue; },
+      getQuantity: function(){ return 0; },
+      inWishlist: function(){ return false; },
+      addToCart: noop, setQuantity: noop, dispatch: noop, toggle: noop,
+      subscribe: function(cb){ try { cb(this); } catch(e){} }
+    };
+  };
+  window.STOREFRONT = { CART: mkChan(null), USER: mkChan(null), WISHLIST: mkChan(null) };
+})();
+```
+
+**Real Phase 6 replacement** (remove the stub, wire the real thing):
+
+1. Create `src/sdk/cart.ts` with a `@tanstack/store` `Store<ShopifyCart>` (or VTEX `OrderForm`).
+2. Create `src/hooks/useCart.ts` that returns `{ cart, addItem, updateItem, clear }`, backed by the store. Mutations call the app's invoke handler (`/deco/invoke/shopify/actions/cart/addItems`).
+3. Replace `AddToCartButton.tsx` inline-script / HTMX pattern with a real React component using `onClick={() => addItem(...)}`. Delete `hx-on:click` + `useScript(onClick)`.
+4. Replace `ProductVariantSelector.tsx` `hx-get` + `useSection()` with TanStack Router `<Link to={relativeLink}>` for client-side navigation.
+5. Wire the minicart loader (`src/loaders/minicart.ts`) to call `invoke.shopify.loaders.cart` server-side for SSR hydration.
+6. Either delete the STOREFRONT stub entirely, or keep a thin `STOREFRONT` bridge that delegates to the store (for any inline scripts still in Header/Minicart templates you haven't migrated).
+
+**Gotcha within the gotcha**: the HTMX-era `AddToCartButton` uses an `<input type="checkbox" className="hidden peer">` + `peer-checked:hidden` CSS to swap between the "Add to Cart" button and a QuantitySelector once the item is in the cart. The real Phase 6 implementation should drive that swap from cart state (`const inCart = useCart().items.some(i => i.id === productID)`) and render one or the other. Don't carry the checkbox trick into the TanStack world.
+
 ## 46. `export type { X } from "..."` Does Not Scope `X` for Parameter Annotations
 
 Re-exporting a type makes it available to importers but does NOT bring it into scope in the same file:
