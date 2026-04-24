@@ -127,6 +127,21 @@ export function withBlocksOverride<T>(override: Record<string, unknown>, fn: () 
   return blocksOverrideStorage.run(override, fn);
 }
 
+/**
+ * Normalize a CMS page path so downstream consumers (sitemap, resolve
+ * results, exact-match comparisons) see a single canonical form.
+ *
+ * Admin editors occasionally save paths like `/foo/bar/` with a trailing
+ * slash. The TanStack catch-all route redirects `/foo/bar/` → `/foo/bar`
+ * before matching, so a page registered under the slashed form would be
+ * unreachable without normalization. Returns `/` unchanged (the home is
+ * the one path that *should* end in a slash).
+ */
+export function normalizePagePath(path: string): string {
+  if (!path || path === "/") return path;
+  return path.endsWith("/") ? path.slice(0, -1) : path;
+}
+
 export function getAllPages(): Array<{ key: string; page: DecoPage }> {
   const blocks = loadBlocks();
   const pages: Array<{ key: string; page: DecoPage; specificity: number }> = [];
@@ -137,12 +152,16 @@ export function getAllPages(): Array<{ key: string; page: DecoPage }> {
     if (!page.sections) continue;
     if (!page.path) continue;
 
+    const normalizedPath = normalizePagePath(page.path);
+    const normalizedPage: DecoPage =
+      normalizedPath === page.path ? page : { ...page, path: normalizedPath };
+
     let specificity = 0;
-    if (page.path === "/*") specificity = 0;
-    else if (page.path.includes(":") || page.path.includes("$")) specificity = 1;
+    if (normalizedPath === "/*") specificity = 0;
+    else if (normalizedPath.includes(":") || normalizedPath.includes("$")) specificity = 1;
     else specificity = 2;
 
-    pages.push({ key, page, specificity });
+    pages.push({ key, page: normalizedPage, specificity });
   }
 
   return pages
@@ -153,8 +172,11 @@ export function getAllPages(): Array<{ key: string; page: DecoPage }> {
 function matchPath(pattern: string, urlPath: string): Record<string, string> | null {
   if (pattern === "/*") return { _splat: urlPath };
 
-  const patternParts = pattern.split("/").filter(Boolean);
-  const urlParts = urlPath.split("/").filter(Boolean);
+  const normalizedPattern = normalizePagePath(pattern);
+  const normalizedUrl = normalizePagePath(urlPath);
+
+  const patternParts = normalizedPattern.split("/").filter(Boolean);
+  const urlParts = normalizedUrl.split("/").filter(Boolean);
 
   if (patternParts.length !== urlParts.length) return null;
 
