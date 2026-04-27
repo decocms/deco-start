@@ -127,9 +127,25 @@ export function withBlocksOverride<T>(override: Record<string, unknown>, fn: () 
   return blocksOverrideStorage.run(override, fn);
 }
 
+// Higher key wins. Compared lexicographically:
+//   [literalSegments, paramSegments, hasNoSplat]
+// So `/foo/bar` > `/foo/:x` > `/foo/*` > `/*`, and `/my-account/*` > `/*`.
+function pathSpecificityKey(path: string): [number, number, number] {
+  const parts = path.split("/").filter(Boolean);
+  let literals = 0;
+  let params = 0;
+  let hasSplat = false;
+  for (const part of parts) {
+    if (part === "*") hasSplat = true;
+    else if (part.startsWith(":") || part.startsWith("$")) params++;
+    else literals++;
+  }
+  return [literals, params, hasSplat ? 0 : 1];
+}
+
 export function getAllPages(): Array<{ key: string; page: DecoPage }> {
   const blocks = loadBlocks();
-  const pages: Array<{ key: string; page: DecoPage; specificity: number }> = [];
+  const pages: Array<{ key: string; page: DecoPage; key2: [number, number, number] }> = [];
 
   for (const [key, block] of Object.entries(blocks)) {
     if (!key.startsWith("pages-")) continue;
@@ -137,16 +153,16 @@ export function getAllPages(): Array<{ key: string; page: DecoPage }> {
     if (!page.sections) continue;
     if (!page.path) continue;
 
-    let specificity = 0;
-    if (page.path === "/*") specificity = 0;
-    else if (page.path.includes(":") || page.path.includes("$")) specificity = 1;
-    else specificity = 2;
-
-    pages.push({ key, page, specificity });
+    pages.push({ key, page, key2: pathSpecificityKey(page.path) });
   }
 
   return pages
-    .sort((a, b) => b.specificity - a.specificity)
+    .sort((a, b) => {
+      for (let i = 0; i < a.key2.length; i++) {
+        if (a.key2[i] !== b.key2[i]) return b.key2[i] - a.key2[i];
+      }
+      return 0;
+    })
     .map(({ key, page }) => ({ key, page }));
 }
 
@@ -156,15 +172,25 @@ function matchPath(pattern: string, urlPath: string): Record<string, string> | n
   const patternParts = pattern.split("/").filter(Boolean);
   const urlParts = urlPath.split("/").filter(Boolean);
 
-  if (patternParts.length !== urlParts.length) return null;
+  // Trailing `*` means "match this prefix and any remaining segments".
+  const hasSplat = patternParts[patternParts.length - 1] === "*";
+  const fixedLen = hasSplat ? patternParts.length - 1 : patternParts.length;
+
+  if (hasSplat) {
+    if (urlParts.length < fixedLen) return null;
+  } else if (urlParts.length !== fixedLen) {
+    return null;
+  }
 
   const params: Record<string, string> = {};
-  for (let i = 0; i < patternParts.length; i++) {
+  for (let i = 0; i < fixedLen; i++) {
     const pp = patternParts[i];
     const up = urlParts[i];
     if (pp.startsWith(":")) params[pp.slice(1)] = up;
     else if (pp !== up) return null;
   }
+
+  if (hasSplat) params._splat = urlParts.slice(fixedLen).join("/");
 
   return params;
 }
