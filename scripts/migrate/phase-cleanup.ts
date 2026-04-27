@@ -20,7 +20,10 @@ const ROOT_FILES_TO_DELETE = [
   "tailwind.css",
   "tailwind.config.ts",
   "runtime.ts",
-  "constants.ts",
+  // NOTE: `constants.ts` is intentionally NOT deleted here — it holds
+  //   site-specific UI constants (form/drawer IDs, header heights, etc.)
+  //   that components reference via `~/constants` or `../../constants`.
+  //   We move it to `src/constants.ts` instead — see `moveRootConstantsToSrc`.
   "fresh.gen.ts",
   "manifest.gen.ts",
   "fresh.config.ts",
@@ -1252,6 +1255,94 @@ function normalizeImportCasing(ctx: MigrationContext) {
 }
 
 /**
+ * Move root-level `constants.ts` → `src/constants.ts`.
+ *
+ * Old stack: a root-level `constants.ts` exporting site-wide UI constants
+ * (MINICART_FORM_ID, SIDEMENU_DRAWER_ID, HEADER_HEIGHT, USER_ID, etc.) that
+ * components reference via `../../constants` or `~/constants`.
+ *
+ * Without this step, `phase-cleanup` deletes the file and the build fails
+ * with `Could not resolve "../../constants"` from many components. The CMS
+ * doesn't reference these IDs, so a 1:1 file move is sufficient.
+ *
+ * If `src/constants.ts` already exists (rare — usually means the migration
+ * was re-run), we leave it alone.
+ */
+function moveRootConstantsToSrc(ctx: MigrationContext) {
+  const rootPath = path.join(ctx.sourceDir, "constants.ts");
+  const srcPath = path.join(ctx.sourceDir, "src", "constants.ts");
+
+  if (!fs.existsSync(rootPath)) return;
+  if (fs.existsSync(srcPath)) {
+    log(ctx, `Skipped move: src/constants.ts already exists; deleting root constants.ts`);
+    if (!ctx.dryRun) fs.unlinkSync(rootPath);
+    ctx.deletedFiles.push("constants.ts");
+    return;
+  }
+
+  if (ctx.dryRun) {
+    log(ctx, `[DRY] Would move: constants.ts → src/constants.ts`);
+    ctx.movedFiles.push({ from: "constants.ts", to: "src/constants.ts" });
+    return;
+  }
+
+  fs.mkdirSync(path.dirname(srcPath), { recursive: true });
+  fs.renameSync(rootPath, srcPath);
+  ctx.movedFiles.push({ from: "constants.ts", to: "src/constants.ts" });
+  log(ctx, `Moved: constants.ts → src/constants.ts`);
+}
+
+/**
+ * Rewrite the legacy multi-platform `loaders/minicart.ts` file.
+ *
+ * Old stack: `loaders/minicart.ts` runtime-dispatches on `usePlatform()` to
+ * platform-specific loaders under `sdk/cart/{vtex,vnda,wake,linx,shopify,nuvemshop}/loader.ts`.
+ * The cleanup phase already deletes `sdk/cart/` entirely, leaving the loader
+ * with broken imports.
+ *
+ * New stack: the canonical Minicart contract + VTEX transform live in
+ * `@decocms/apps/vtex/inline-loaders/minicart`. We replace the loader with a
+ * thin VTEX-only re-export. Sites on Shopify/VNDA/Wake/Linx/Nuvemshop are
+ * not currently in production on the new stack — when one is, swap this for
+ * a runtime dispatcher again or add a platform-flagged rewrite.
+ */
+function rewriteMinicartLoader(ctx: MigrationContext) {
+  const candidates = [
+    path.join(ctx.sourceDir, "src", "loaders", "minicart.ts"),
+    path.join(ctx.sourceDir, "loaders", "minicart.ts"),
+  ];
+
+  for (const filePath of candidates) {
+    if (!fs.existsSync(filePath)) continue;
+
+    const content = fs.readFileSync(filePath, "utf-8");
+    // Only rewrite if it actually imports the legacy multi-platform sdk/cart layout.
+    const isLegacyLoader = /from\s+["'](?:~|\.\.?)\/sdk\/cart\/(?:vtex|vnda|wake|linx|shopify|nuvemshop)\/loader["']/
+      .test(content);
+    if (!isLegacyLoader) continue;
+
+    const newContent = `// VTEX-only minicart loader.
+//
+// The legacy site shipped per-platform loaders behind a \`usePlatform()\`
+// switch (vnda, wake, linx, shopify, nuvemshop). The canonical minicart
+// contract now lives in \`@decocms/apps\`. Until a non-VTEX customer comes
+// online on the new stack, we re-export the framework loader directly.
+// TODO: when adding another platform, replace this with a runtime
+// dispatcher and import the matching framework loader.
+export { default } from "@decocms/apps/vtex/inline-loaders/minicart";
+export type { MinicartProps } from "@decocms/apps/vtex/inline-loaders/minicart";
+`;
+
+    if (ctx.dryRun) {
+      log(ctx, `[DRY] Would rewrite: ${path.relative(ctx.sourceDir, filePath)} (VTEX-only re-export)`);
+    } else {
+      fs.writeFileSync(filePath, newContent);
+      log(ctx, `Rewrote: ${path.relative(ctx.sourceDir, filePath)} (VTEX-only re-export of @decocms/apps/vtex/inline-loaders/minicart)`);
+    }
+  }
+}
+
+/**
  * Fix APIs that don't exist in Cloudflare Workers:
  * - window.setTimeout → setTimeout
  * - window.clearTimeout → clearTimeout
@@ -1366,6 +1457,19 @@ export function cleanup(ctx: MigrationContext): void {
   //    simplified ~/lib/ wrappers generated during scaffold.
   console.log("  Rewriting VTEX utility imports → ~/lib/ wrappers...");
   rewriteVtexUtilImports(ctx);
+
+  // 11a. Preserve root-level constants.ts (site-wide UI IDs/heights) by
+  //    moving it to src/constants.ts. The cleanup phase used to delete it
+  //    unconditionally, breaking every component that imports `~/constants`.
+  console.log("  Moving root constants.ts → src/constants.ts...");
+  moveRootConstantsToSrc(ctx);
+
+  // 11b. Rewrite legacy multi-platform minicart loader → VTEX-only re-export.
+  //    `sdk/cart/` is deleted by DIRS_TO_DELETE, leaving loaders/minicart.ts
+  //    with broken imports. Replace it with a thin re-export of the
+  //    framework's @decocms/apps/vtex/inline-loaders/minicart loader.
+  console.log("  Rewriting loaders/minicart.ts → VTEX-only re-export...");
+  rewriteMinicartLoader(ctx);
 
   // 12. Fix useVariantPossiblities omit set
   console.log("  Fixing useVariantPossiblities omit set...");
