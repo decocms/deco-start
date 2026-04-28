@@ -83,7 +83,7 @@ export function generateCommerceLoaders(ctx: MigrationContext): string {
     lines.push(``);
   }
 
-  lines.push(`export const COMMERCE_LOADERS: Record<string, (props: any) => Promise<any>> = {`);
+  lines.push(`export const COMMERCE_LOADERS: Record<string, (props: any, request?: Request) => Promise<any>> = {`);
 
   if (ctx.platform === "vtex") {
     lines.push(`  ...vtexLoaders,`);

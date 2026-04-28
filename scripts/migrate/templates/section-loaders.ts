@@ -156,7 +156,10 @@ export function generateSectionLoaders(ctx: MigrationContext): string {
       const importPath = `~/` + meta.path.replace(/\.tsx?$/, "");
       entries.push(`  "${sectionKey}": async (props: any, req: Request) => {`);
       entries.push(`    const mod = await import("${importPath}");`);
-      entries.push(`    if (typeof mod.loader === "function") return mod.loader(props, req);`);
+      // Cast to any: legacy Fresh/Deno section loaders are typed `(props, req, ctx)`.
+      // We invoke with 2 args; any ctx-dependent code path inside the loader will throw
+      // at runtime and must be refactored — the migration phase-transform flags these.
+      entries.push(`    if (typeof mod.loader === "function") return (mod.loader as any)(props, req);`);
       entries.push(`    return props;`);
       entries.push(`  },`);
     }
