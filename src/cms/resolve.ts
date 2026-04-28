@@ -228,7 +228,18 @@ function isBot(userAgent?: string): boolean {
   return botPatterns.some((re) => re.test(userAgent));
 }
 
-export type CommerceLoader = (props: any) => Promise<any>;
+/**
+ * A loader registered against a `__resolveType` key. The runtime invokes it
+ * through two paths:
+ *
+ * 1. CMS resolution (`commerceLoader(resolvedProps)`) — 1-arg call.
+ * 2. `/deco/invoke/...` endpoint — `(props, request)` 2-arg call.
+ *
+ * Loaders that need the `Request` (cookies, geo, headers) declare the second
+ * parameter; pure loaders ignore it. This shape lets a single registry serve
+ * both invocation paths without `as any` casts at every wrapper.
+ */
+export type CommerceLoader = (props: any, request?: Request) => Promise<any>;
 
 /**
  * Context passed through the resolution pipeline.

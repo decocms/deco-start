@@ -96,7 +96,7 @@ export interface SiteSetupOptions {
 	 * { getCommerceLoaders: () => COMMERCE_LOADERS }
 	 * ```
 	 */
-	getCommerceLoaders?: () => Record<string, (props: any) => Promise<any>>;
+	getCommerceLoaders?: () => Record<string, (props: any, request?: Request) => Promise<any>>;
 }
 
 /**
