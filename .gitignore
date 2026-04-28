@@ -2,3 +2,6 @@ node_modules/
 dist/
 *.gen.ts
 *.gen.json
+
+.notes/
+
