@@ -390,6 +390,20 @@ async function buildPageSeo(
     if (siteSeo.title && !merged.title) merged.title = siteSeo.title;
     if (siteSeo.description && !merged.description) merged.description = siteSeo.description;
     if (siteSeo.image && !merged.image) merged.image = siteSeo.image;
+
+    // Apply site-level templates even when there is no page-level seo
+    // section. Without this, pages whose title comes from a content
+    // section (e.g. <h1> + sectionSeo) or from the site default would
+    // skip `siteSeo.titleTemplate`, causing prod-vs-worker title drift.
+    const titleTemplate = effectiveTemplate(siteSeo.titleTemplate);
+    const descTemplate = effectiveTemplate(siteSeo.descriptionTemplate);
+    if (titleTemplate && merged.title) {
+      merged.title = titleTemplate.replace("%s", merged.title);
+    }
+    if (descTemplate && merged.description) {
+      merged.description = descTemplate.replace("%s", merged.description);
+    }
+
     return merged;
   }
 
