@@ -126,6 +126,48 @@ export function transform(ctx: MigrationContext): void {
       });
     }
 
+    // Flag the legacy sections/Component.tsx dynamic-section loader.
+    // This file uses Deno-specific APIs (toFileUrl, import.meta.resolve)
+    // and the HTMX-driven `useComponent(component, props)` pattern, which
+    // do not run on Cloudflare Workers and have no equivalent in
+    // @decocms/start. The whole file must be deleted.
+    if (
+      /sections\/Component\.tsx?$/.test(record.path) ||
+      /sections\/Component\.tsx?$/.test(targetPath)
+    ) {
+      ctx.manualReviewItems.push({
+        file: targetPath,
+        reason:
+          "sections/Component.tsx (Deno HTMX dynamic-section loader) is incompatible with TanStack Start / Cloudflare Workers. " +
+          "DELETE this file and migrate every `useComponent(...)` call site to one of: " +
+          "(a) local React state for client-side toggles, " +
+          "(b) `createServerFn` + `useMutation` for server actions, or " +
+          "(c) a direct `invoke` call (`~/server/invoke`) for ad-hoc loaders. " +
+          "See: deco-to-tanstack-migration skill, 'useComponent / partial sections' section.",
+        severity: "error",
+      });
+    }
+
+    // Flag any import of useComponent — typically `import { useComponent } from "site/sections/Component.tsx"`.
+    // We also catch `from "../../sections/Component"` and similar relative variants.
+    if (
+      /\buseComponent\b/.test(result.content) &&
+      /from\s+["'][^"']*sections\/Component(?:\.tsx?)?["']/.test(result.content)
+    ) {
+      ctx.manualReviewItems.push({
+        file: targetPath,
+        reason:
+          "useComponent({ ... }) call site detected. This is the HTMX-style dynamic-section render pattern " +
+          "that ships HTML fragments and swaps them client-side. It does not work on TanStack Start. " +
+          "Recipes: " +
+          "(1) Self-contained UI toggles → keep state in React (`useState` + event handlers); " +
+          "(2) Form submissions / mutations → `createServerFn` + `useMutation` (see casaevideo-storefront for canonical examples); " +
+          "(3) Ad-hoc data fetches → call the loader/action via `~/server/invoke` and store results in `useState`. " +
+          "Remove the import after refactoring, then delete `src/sections/Component.tsx`.",
+        severity: "error",
+      });
+    }
+
     if (ctx.dryRun) {
       if (result.changed) {
         log(ctx, `[DRY] Would transform: ${record.path} → ${targetPath}`);

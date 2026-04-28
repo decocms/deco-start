@@ -32,6 +32,10 @@ const PATTERN_DETECTORS: Array<[DetectedPattern, RegExp]> = [
   ["head-component", /<Head[\s>]/],
   ["define-app", /defineApp\(/],
   ["invoke-proxy", /proxy<Manifest/],
+  // Bagaggio-style HTMX dynamic-section loader. Both the source file and
+  // every call site need manual conversion to React state / createServerFn.
+  ["sections-component-loader", /sections\/Component\.tsx?$/m],
+  ["use-component", /import\s*\{[^}]*\buseComponent\b[^}]*\}\s*from\s*["'][^"']*sections\/Component(?:\.tsx?)?["']/],
 ];
 
 /** Files/dirs that should be completely skipped during scanning */
@@ -309,6 +313,25 @@ function decideAction(
     return {
       action: "delete",
       notes: "Analytics SDK moved to __root.tsx scaffold",
+    };
+  }
+
+  // Bagaggio-style HTMX dynamic-section loader → delete and flag.
+  // The file uses Deno-only APIs (`toFileUrl(Deno.cwd())`, `import.meta.resolve`)
+  // and the `useComponent(component, props)` HTMX render-and-swap pattern, none
+  // of which work on TanStack Start / Cloudflare Workers. The site author must
+  // refactor every `useComponent(...)` call site to React state, `createServerFn`
+  // + `useMutation`, or a direct `~/server/invoke` call BEFORE this file is
+  // safe to remove.
+  if (
+    relPath === "sections/Component.tsx" ||
+    relPath === "sections/Component.ts"
+  ) {
+    return {
+      action: "delete",
+      notes:
+        "HTMX dynamic-section loader (useComponent) — incompatible with TanStack Start. " +
+        "Migrate every useComponent(...) call site to React state / createServerFn before deploy.",
     };
   }
 
@@ -636,6 +659,37 @@ export function analyze(ctx: MigrationContext): void {
   console.log(`\n  Files found: ${ctx.files.length}`);
   console.log(`  By category: ${JSON.stringify(byCategory)}`);
   console.log(`  By action: ${JSON.stringify(byAction)}`);
+
+  // Surface the HTMX dynamic-section loader and every `useComponent` call site
+  // up-front. These need manual conversion to React state / createServerFn before
+  // the migrated site will run on Cloudflare Workers — the analyzer cannot do
+  // it automatically, so it must be loud enough to land in the report.
+  const useComponentSites = ctx.files.filter(
+    (f) => f.patterns.includes("use-component"),
+  );
+  const componentLoaderFile = ctx.files.find(
+    (f) =>
+      f.path === "sections/Component.tsx" ||
+      f.path === "sections/Component.ts",
+  );
+  if (componentLoaderFile || useComponentSites.length > 0) {
+    console.log("\n  ⚠ HTMX dynamic-section loader detected (Bagaggio-style)");
+    if (componentLoaderFile) {
+      console.log(`    • ${componentLoaderFile.path} (will be deleted)`);
+    }
+    if (useComponentSites.length > 0) {
+      console.log(`    • ${useComponentSites.length} useComponent(...) call site(s) need manual conversion:`);
+      for (const f of useComponentSites.slice(0, 10)) {
+        console.log(`        - ${f.path}`);
+      }
+      if (useComponentSites.length > 10) {
+        console.log(`        ... and ${useComponentSites.length - 10} more`);
+      }
+    }
+    console.log(
+      "    See: deco-to-tanstack-migration skill, 'useComponent / partial sections' section",
+    );
+  }
 
   // Run analyzers
   extractSectionMetadata(ctx);

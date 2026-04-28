@@ -61,7 +61,9 @@ export type DetectedPattern =
   | "asset-function"
   | "head-component"
   | "define-app"
-  | "invoke-proxy";
+  | "invoke-proxy"
+  | "use-component"
+  | "sections-component-loader";
 
 /** Metadata extracted from a section file during analysis */
 export interface SectionMeta {
