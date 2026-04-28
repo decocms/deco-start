@@ -20,14 +20,14 @@ export async function handleDecofileReload(
   request: Request,
   env?: Record<string, unknown>,
 ): Promise<Response> {
-  const authHeader = request.headers.get("authorization") || "";
+  const authHeader = request.headers.get("Authorization") || "";
   const expectedToken =
-    (env?.DECO_RELOAD_TOKEN as string | undefined) ??
+    (env?.DECO_RELEASE_RELOAD_TOKEN as string | undefined) ??
     (typeof globalThis.process !== "undefined"
-      ? globalThis.process.env?.DECO_RELOAD_TOKEN
+      ? globalThis.process.env?.DECO_RELEASE_RELOAD_TOKEN
       : undefined);
 
-  if (expectedToken && !authHeader.includes(expectedToken)) {
+  if (!expectedToken || authHeader !== expectedToken) {
     return new Response("Unauthorized", { status: 401 });
   }
 
