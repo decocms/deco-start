@@ -122,19 +122,29 @@ export function decoVitePlugin() {
       if (siteName) {
         const envName = process.env.DECO_ENV_NAME || "dev";
 
+        // Daemon files are .ts and live inside node_modules. Node's
+        // experimental strip-types refuses to transpile node_modules, so
+        // a plain dynamic `import()` blows up under `vite dev`. Use tsx's
+        // ad-hoc loader (`tsImport`) — scoped to this import, doesn't
+        // register a global hook.
+        const loadDaemon = (specifier) =>
+          import("tsx/esm/api").then(({ tsImport }) => tsImport(specifier, import.meta.url));
+
         // Add daemon middleware (x-daemon-api interception + auth + volumes + SSE + admin routes)
-        import("../daemon/middleware.ts").then(({ createDaemonMiddleware }) => {
-          server.middlewares.use(createDaemonMiddleware({ site: siteName, server }));
-        }).catch((err) => {
-          console.warn("[deco] Failed to load daemon middleware:", err.message);
-        });
+        loadDaemon("../daemon/middleware.ts")
+          .then(({ createDaemonMiddleware }) => {
+            server.middlewares.use(createDaemonMiddleware({ site: siteName, server }));
+          })
+          .catch((err) => {
+            console.warn("[deco] Failed to load daemon middleware:", err.message);
+          });
 
         // Start tunnel after HTTP server is listening (so we know the real port)
         server.httpServer?.once("listening", async () => {
           const addr = server.httpServer?.address();
           const port = typeof addr === "object" && addr ? addr.port : 5173;
           try {
-            const { startTunnel } = await import("../daemon/tunnel.ts");
+            const { startTunnel } = await loadDaemon("../daemon/tunnel.ts");
             const tunnel = await startTunnel({
               site: siteName,
               env: envName,
