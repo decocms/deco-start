@@ -270,6 +270,47 @@ export async function runSectionLoaders(
 }
 
 /**
+ * Inject the active request's URL and path into section props so site
+ * loaders can read `props.__pageUrl` / `props.__pagePath` without having
+ * to derive them from `req.url` themselves.
+ *
+ * The framework already injects these for commerce loaders (resolve.ts),
+ * but section loaders (e.g. category SearchBanner, breadcrumb-aware FAQs)
+ * also need to know the active page. Without this, callers had to wrap
+ * `loader(...)` themselves in a custom `delegateAfter`-style helper —
+ * forgetting it produced silent rendering bugs (empty banners, default
+ * fallbacks).
+ *
+ * Existing values in `props` win — sites that already pre-populated
+ * `__pageUrl` (e.g. via a custom mixin) keep their value untouched.
+ *
+ * Note: this runs only at the point we hand props to the user's loader.
+ * The cacheable-section cache key hashes the *original* props (URL-agnostic),
+ * so sections registered via `registerCacheableSections` keep sharing a
+ * single cache entry across pages.
+ */
+function injectPageContext(
+  props: Record<string, unknown>,
+  request: Request,
+): Record<string, unknown> {
+  let url: URL;
+  try {
+    url = new URL(request.url);
+  } catch {
+    return props;
+  }
+  const enriched = { ...props } as Record<string, unknown>;
+  if (enriched.__pageUrl === undefined) enriched.__pageUrl = request.url;
+  if (enriched.__pagePath === undefined) enriched.__pagePath = url.pathname;
+  return enriched;
+}
+
+/** Wrap a loader so it receives __pageUrl/__pagePath in its props. */
+function withPageContext(loader: SectionLoaderFn): SectionLoaderFn {
+  return (props, req) => loader(injectPageContext(props, req), req);
+}
+
+/**
  * Run a single section's registered loader.
  * Used by both `runSectionLoaders` (batch) and `loadDeferredSection` (individual).
  *
@@ -285,9 +326,15 @@ export async function runSingleSectionLoader(
   const loader = loaderRegistry.get(section.component);
   if (!loader) return section;
 
+  // Wrap the loader so __pageUrl/__pagePath are injected at the call site.
+  // Cache keys (component name for layout, component+propsHash for cacheable)
+  // are computed from the *original* section.props — keeping cache entries
+  // URL-agnostic and shared across pages.
+  const wrapped = withPageContext(loader);
+
   if (layoutSections.has(section.component)) {
     try {
-      return await resolveLayoutSection(section, loader, request);
+      return await resolveLayoutSection(section, wrapped, request);
     } catch (error) {
       console.error(`[SectionLoader] Error in layout "${section.component}":`, error);
       return section;
@@ -297,7 +344,7 @@ export async function runSingleSectionLoader(
   const cacheConfig = cacheableSections.get(section.component);
   if (cacheConfig) {
     try {
-      return await runCacheableSectionLoader(section, loader, request, cacheConfig);
+      return await runCacheableSectionLoader(section, wrapped, request, cacheConfig);
     } catch (error) {
       console.error(`[SectionLoader] Error in cacheable "${section.component}":`, error);
       return section;
@@ -305,7 +352,10 @@ export async function runSingleSectionLoader(
   }
 
   try {
-    const enrichedProps = await loader(section.props as Record<string, unknown>, request);
+    const enrichedProps = await wrapped(
+      section.props as Record<string, unknown>,
+      request,
+    );
     return { ...section, props: enrichedProps };
   } catch (error) {
     console.error(`[SectionLoader] Error in "${section.component}":`, error);
