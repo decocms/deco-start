@@ -19,7 +19,14 @@ import path from "node:path";
  *   --out         Output file        (default: "src/server/admin/meta.gen.json")
  *   --platform    Platform name      (default: "cloudflare")
  */
-import { type Symbol as MorphSymbol, Node, Project, SyntaxKind, type Type } from "ts-morph";
+import {
+  type Symbol as MorphSymbol,
+  Node,
+  Project,
+  type SourceFile,
+  SyntaxKind,
+  type Type,
+} from "ts-morph";
 
 // ---------------------------------------------------------------------------
 // CLI arg parsing
@@ -448,6 +455,39 @@ function resolveModulePath(
   return fs.existsSync(target) ? target : null;
 }
 
+type SourceFileCache = Map<string, SourceFile>;
+type ModuleResolutionCache = Map<string, string | null>;
+type PropsSchemaCache = Map<string, any>;
+
+function getSourceFile(
+  project: import("ts-morph").Project,
+  filePath: string,
+  cache: SourceFileCache,
+): SourceFile {
+  const normalizedPath = path.resolve(filePath);
+  const cached = cache.get(normalizedPath);
+  if (cached) return cached;
+
+  const sourceFile =
+    project.getSourceFile(normalizedPath) ?? project.addSourceFileAtPath(normalizedPath);
+  cache.set(normalizedPath, sourceFile);
+  return sourceFile;
+}
+
+function resolveModulePathCached(
+  moduleSpec: string,
+  fromFile: string,
+  projectRoot: string,
+  cache: ModuleResolutionCache,
+): string | null {
+  const key = `${fromFile}\0${moduleSpec}`;
+  if (cache.has(key)) return cache.get(key) ?? null;
+
+  const resolved = resolveModulePath(moduleSpec, fromFile, projectRoot);
+  cache.set(key, resolved);
+  return resolved;
+}
+
 /**
  * Recursively follow `export { default } from "..."` chains (up to maxDepth hops)
  * and try to extract Props from each target file.
@@ -458,6 +498,9 @@ function resolvePropsViaReExport(
   filePath: string,
   projectRoot: string,
   maxDepth: number,
+  sourceFileCache: SourceFileCache,
+  moduleResolutionCache: ModuleResolutionCache,
+  propsSchemaCache: PropsSchemaCache,
 ): any | null {
   if (maxDepth <= 0) return null;
 
@@ -471,21 +514,41 @@ function resolvePropsViaReExport(
     });
     if (!hasDefault) continue;
 
-    const targetPath = resolveModulePath(moduleSpec, filePath, projectRoot);
+    const targetPath = resolveModulePathCached(
+      moduleSpec,
+      filePath,
+      projectRoot,
+      moduleResolutionCache,
+    );
     if (!targetPath) continue;
 
+    const cachedProps = propsSchemaCache.get(targetPath);
+    if (cachedProps) return cachedProps;
+
     try {
-      const targetFile = project.addSourceFileAtPath(targetPath);
+      const targetFile = getSourceFile(project, targetPath, sourceFileCache);
 
       const targetProps = targetFile.getInterface("Props");
-      if (targetProps) return typeToJsonSchema(targetProps.getType());
+      if (targetProps) {
+        const schema = typeToJsonSchema(targetProps.getType());
+        propsSchemaCache.set(targetPath, schema);
+        return schema;
+      }
 
       const targetAlias = targetFile.getTypeAlias("Props");
-      if (targetAlias) return typeToJsonSchema(targetAlias.getType());
+      if (targetAlias) {
+        const schema = typeToJsonSchema(targetAlias.getType());
+        propsSchemaCache.set(targetPath, schema);
+        return schema;
+      }
 
       // Type-checker approach: extract from default export call signature
       const propsType = extractDefaultExportPropsType(targetFile);
-      if (propsType) return typeToJsonSchema(propsType);
+      if (propsType) {
+        const schema = typeToJsonSchema(propsType);
+        propsSchemaCache.set(targetPath, schema);
+        return schema;
+      }
 
       // Recurse: target might also re-export from another file
       const deeper = resolvePropsViaReExport(
@@ -494,8 +557,14 @@ function resolvePropsViaReExport(
         targetPath,
         projectRoot,
         maxDepth - 1,
+        sourceFileCache,
+        moduleResolutionCache,
+        propsSchemaCache,
       );
-      if (deeper) return deeper;
+      if (deeper) {
+        propsSchemaCache.set(targetPath, deeper);
+        return deeper;
+      }
     } catch {
       // Target file couldn't be parsed
     }
@@ -530,6 +599,9 @@ function generateMeta(): MetaResponse {
   const definitions: Record<string, any> = {};
   const sectionBlocks: Record<string, any> = {};
   const sectionRootAnyOf: any[] = [];
+  const sourceFileCache: SourceFileCache = new Map();
+  const moduleResolutionCache: ModuleResolutionCache = new Map();
+  const propsSchemaCache: PropsSchemaCache = new Map();
 
   // Resolvable: the admin's deRefUntil expects the LITERAL key "Resolvable",
   // not a base64-encoded version. We store both for compatibility.
@@ -553,13 +625,16 @@ function generateMeta(): MetaResponse {
 
   const sectionFiles = findTsxFiles(sectionsDir);
   console.log(`Found ${sectionFiles.length} section files`);
+  for (const filePath of sectionFiles) {
+    getSourceFile(project, filePath, sourceFileCache);
+  }
 
   for (const filePath of sectionFiles) {
     const relativePath = path.relative(srcDir, filePath);
     const blockKey = `${SITE_NAMESPACE}/${relativePath}`;
 
     try {
-      const sourceFile = project.addSourceFileAtPath(filePath);
+      const sourceFile = getSourceFile(project, filePath, sourceFileCache);
 
       let propsSchema: any = null;
 
@@ -573,7 +648,16 @@ function generateMeta(): MetaResponse {
       // Strategy 2: Follow re-exports recursively (up to 3 hops)
       // Handles: section → island → component chains
       if (!propsSchema) {
-        propsSchema = resolvePropsViaReExport(project, sourceFile, filePath, root, 3);
+        propsSchema = resolvePropsViaReExport(
+          project,
+          sourceFile,
+          filePath,
+          root,
+          3,
+          sourceFileCache,
+          moduleResolutionCache,
+          propsSchemaCache,
+        );
       }
 
       // Strategy 4: Default export call signature in the section file via type checker
