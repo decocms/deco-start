@@ -66,6 +66,43 @@ describe("generateHooks (vtex)", () => {
 		// Should be well under 20 lines (factory call + re-export + imports).
 		expect(lineCount).toBeLessThan(20);
 	});
+
+	it("useUser is the createUseUser factory shim (no signal-stub boilerplate)", () => {
+		const code = files["src/hooks/useUser.ts"];
+		expect(code).toContain(
+			'import { createUseUser } from "@decocms/apps/vtex/hooks/createUseUser"',
+		);
+		expect(code).toContain('import { invoke } from "~/server/invoke"');
+		expect(code).toContain(
+			'export type { Person } from "@decocms/apps/vtex/loaders/user"',
+		);
+		expect(code).toContain("export const { useUser, resetUser } = createUseUser");
+		// Must NOT scaffold the legacy signal stub.
+		expect(code).not.toContain('signal<User | null>(null)');
+		expect(code).not.toContain("export interface User {");
+	});
+
+	it("useWishlist is the createUseWishlist factory shim", () => {
+		const code = files["src/hooks/useWishlist.ts"];
+		expect(code).toContain(
+			'import { createUseWishlist } from "@decocms/apps/vtex/hooks/createUseWishlist"',
+		);
+		expect(code).toContain('import { invoke } from "~/server/invoke"');
+		expect(code).toContain(
+			'export type { WishlistItem } from "@decocms/apps/vtex/loaders/wishlist"',
+		);
+		expect(code).toContain(
+			"export const { useWishlist, resetWishlist } = createUseWishlist",
+		);
+		// Must NOT scaffold the legacy stub with TODO action bodies.
+		expect(code).not.toContain("TODO: Implement");
+		expect(code).not.toContain("getItem(_productId: string): boolean");
+	});
+
+	it("useUser + useWishlist VTEX shims are each well under 10 lines", () => {
+		expect(files["src/hooks/useUser.ts"].split("\n").length).toBeLessThan(10);
+		expect(files["src/hooks/useWishlist.ts"].split("\n").length).toBeLessThan(10);
+	});
 });
 
 describe("generateHooks (non-vtex)", () => {
@@ -81,5 +118,24 @@ describe("generateHooks (non-vtex)", () => {
 		const code = files["src/hooks/useCart.ts"];
 		// Until a shopify factory exists, non-vtex platforms get the generic stub.
 		expect(code).toContain("Cart Hook stub");
+	});
+
+	it("non-vtex platforms keep the legacy signal-based useUser stub", () => {
+		const files = generateHooks(makeCtx("custom"));
+		const code = files["src/hooks/useUser.ts"];
+		// No factory CALL — docstring may mention it as a pointer for VTEX.
+		expect(code).not.toContain("createUseUser({");
+		expect(code).not.toContain("export const { useUser, resetUser }");
+		// Legacy stub shape (signal + User interface).
+		expect(code).toContain("signal<User | null>(null)");
+		expect(code).toContain("export interface User {");
+	});
+
+	it("non-vtex platforms keep the legacy useWishlist stub", () => {
+		const files = generateHooks(makeCtx("custom"));
+		const code = files["src/hooks/useWishlist.ts"];
+		expect(code).not.toContain("createUseWishlist({");
+		expect(code).not.toContain("export const { useWishlist, resetWishlist }");
+		expect(code).toContain("TODO: Implement");
 	});
 });
