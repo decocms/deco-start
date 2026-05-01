@@ -46,10 +46,36 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
   [/^"apps\/vtex\/hooks\/useWishlist(?:\.ts)?"$/, `"~/hooks/useWishlist"`],
   [/^"apps\/vtex\/hooks\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/vtex/hooks/$1"`],
   // Specific VTEX utils that moved to different paths in @decocms/apps
-  [/^"apps\/vtex\/utils\/fetchVTEX(?:\.ts)?"$/, `"@decocms/apps/vtex/client"`],
+  // fetchVTEX (generic fetchSafe + QS sanitization) lives at vtex/utils/fetch in apps-start.
+  [/^"apps\/vtex\/utils\/fetchVTEX(?:\.ts)?"$/, `"@decocms/apps/vtex/utils/fetch"`],
   [/^"apps\/vtex\/utils\/client(?:\.ts)?"$/, `"@decocms/apps/vtex/client"`],
   [/^"apps\/vtex\/utils\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/vtex/utils/$1"`],
   [/^"apps\/vtex\/actions\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/vtex/actions/$1"`],
+  // Tier B loader path rewrites (apps-start has no `intelligentSearch/`, `legacy/<file>`, or `paths/` subdirs).
+  // Intelligent Search loaders moved to inline-loaders/.
+  [
+    /^"apps\/vtex\/loaders\/intelligentSearch\/productList(?:\.ts)?"$/,
+    `"@decocms/apps/vtex/inline-loaders/productList"`,
+  ],
+  [
+    /^"apps\/vtex\/loaders\/intelligentSearch\/productListingPage(?:\.ts)?"$/,
+    `"@decocms/apps/vtex/inline-loaders/productListingPage"`,
+  ],
+  [
+    /^"apps\/vtex\/loaders\/intelligentSearch\/productDetailsPage(?:\.ts)?"$/,
+    `"@decocms/apps/vtex/inline-loaders/productDetailsPage"`,
+  ],
+  [
+    /^"apps\/vtex\/loaders\/intelligentSearch\/suggestions(?:\.ts)?"$/,
+    `"@decocms/apps/vtex/inline-loaders/suggestions"`,
+  ],
+  // Legacy product loaders are consolidated into a single file (named exports).
+  [
+    /^"apps\/vtex\/loaders\/legacy\/(?:productList|productListingPage|productDetailsPage|search|category)(?:\.ts)?"$/,
+    `"@decocms/apps/vtex/loaders/legacy"`,
+  ],
+  // Path-default loaders (sitemap seeds) don't exist in TanStack Start — paths resolve at request time.
+  [/^"apps\/vtex\/loaders\/paths\/(?:[^"]+)(?:\.ts)?"$/, null],
   [/^"apps\/vtex\/loaders\/([^"]+?)(?:\.ts)?"$/, `"@decocms/apps/vtex/loaders/$1"`],
   [/^"apps\/vtex\/types(?:\.ts)?"$/, `"@decocms/apps/vtex/types"`],
   [/^"apps\/vtex\/mod(?:\.ts)?"$/, `"~/types/vtex-app"`],
