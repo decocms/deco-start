@@ -368,6 +368,7 @@ For sites with 100+ sections:
 | Runtime storefront patterns | `references/storefront-patterns.md` |
 | Admin / CMS integration | `references/admin-cms.md` |
 | Gotchas index | `references/gotchas.md` |
+| Post-migration cleanup checklist | `references/post-migration-cleanup.md` |
 | React hooks patterns | `references/react-hooks-patterns.md` |
 | React signals & state | `references/react-signals-state.md` |
 | JSX migration differences | `references/jsx-migration.md` |

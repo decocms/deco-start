@@ -628,6 +628,7 @@ The conductor approach that worked (836 errors → 0 across 213 files) treated e
 | Admin schema composition | `src/admin/schema.ts` in `@decocms/start` |
 | Server functions (`createServerFn`) | `references/server-functions/` |
 | Common gotchas (45 items) | `references/gotchas.md` |
+| Post-migration cleanup checklist | `references/post-migration-cleanup.md` |
 | setup.ts template | `templates/setup-ts.md` |
 | vite.config.ts template | `templates/vite-config.md` |
 | worker-entry template | `templates/worker-entry.md` |
