@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ResolvedSection } from "./resolve";
 import {
   registerCacheableSections,
   registerLayoutSections,
   registerSectionLoader,
   runSingleSectionLoader,
 } from "./sectionLoaders";
-import type { ResolvedSection } from "./resolve";
 
 const G = globalThis as any;
 
@@ -15,10 +15,7 @@ beforeEach(() => {
   G.__deco.cacheableSections.clear();
 });
 
-const makeSection = (
-  component: string,
-  props: Record<string, unknown> = {},
-): ResolvedSection => ({
+const makeSection = (component: string, props: Record<string, unknown> = {}): ResolvedSection => ({
   component,
   props,
   key: component,
@@ -75,10 +72,7 @@ describe("runSingleSectionLoader — page context injection", () => {
 
   it("returns section unchanged when no loader is registered", async () => {
     const section = makeSection("site/sections/NoLoader.tsx", { foo: 1 });
-    const result = await runSingleSectionLoader(
-      section,
-      new Request("https://store.com/"),
-    );
+    const result = await runSingleSectionLoader(section, new Request("https://store.com/"));
     expect(result).toBe(section);
   });
 });
@@ -135,10 +129,145 @@ describe("runSingleSectionLoader — error handling", () => {
     registerSectionLoader("site/sections/Boom.tsx", loader);
 
     const section = makeSection("site/sections/Boom.tsx", { x: 1 });
-    const result = await runSingleSectionLoader(
-      section,
-      new Request("https://store.com/"),
-    );
+    const result = await runSingleSectionLoader(section, new Request("https://store.com/"));
     expect(result).toEqual(section);
+  });
+});
+
+describe("runSingleSectionLoader — nested section recursion", () => {
+  it("runs the loader of a nested section in props", async () => {
+    const childLoader = vi.fn(async (props: Record<string, unknown>) => ({
+      ...props,
+      enriched: true,
+    }));
+    registerSectionLoader("site/sections/CategoryBanner.tsx", childLoader);
+
+    // Parent has no own loader, only a nested section in props
+    const parent = makeSection("site/sections/BackgroundWrapper.tsx", {
+      child: {
+        Component: "site/sections/CategoryBanner.tsx",
+        props: { matcher: "/foo" },
+      },
+    });
+
+    const result = await runSingleSectionLoader(parent, new Request("https://store.com/foo"));
+
+    expect(childLoader).toHaveBeenCalledTimes(1);
+    expect(result.props).toEqual({
+      child: {
+        Component: "site/sections/CategoryBanner.tsx",
+        props: {
+          matcher: "/foo",
+          enriched: true,
+          // page context is injected for nested sections too
+          __pageUrl: "https://store.com/foo",
+          __pagePath: "/foo",
+        },
+      },
+    });
+  });
+
+  it("runs nested loaders in arrays (e.g. sections: Section[])", async () => {
+    const banner = vi.fn(async (props: any) => ({ ...props, ranBanner: true }));
+    const shelf = vi.fn(async (props: any) => ({ ...props, ranShelf: true }));
+    registerSectionLoader("site/sections/Banner.tsx", banner);
+    registerSectionLoader("site/sections/Shelf.tsx", shelf);
+
+    const parent = makeSection("site/sections/Wrapper.tsx", {
+      sections: [
+        { Component: "site/sections/Banner.tsx", props: { id: 1 } },
+        { Component: "site/sections/Shelf.tsx", props: { id: 2 } },
+      ],
+    });
+
+    const result = await runSingleSectionLoader(parent, new Request("https://store.com/"));
+
+    expect(banner).toHaveBeenCalledTimes(1);
+    expect(shelf).toHaveBeenCalledTimes(1);
+    const sections = (result.props as any).sections;
+    expect(sections[0].props).toMatchObject({ id: 1, ranBanner: true });
+    expect(sections[1].props).toMatchObject({ id: 2, ranShelf: true });
+  });
+
+  it("returns same props reference when no nested sections (zero-alloc leaf path)", async () => {
+    const loader = vi.fn(async (props: Record<string, unknown>) => props);
+    registerSectionLoader("site/sections/Leaf.tsx", loader);
+
+    const props = { foo: "bar" };
+    const section = makeSection("site/sections/Leaf.tsx", props);
+
+    const result = await runSingleSectionLoader(section, new Request("https://store.com/"));
+
+    // Loader returned the SAME props ref → enrichNestedSections must also
+    // return the same ref → no { ...result, props } wrapping happens
+    expect(result.props).toMatchObject({
+      foo: "bar",
+      __pageUrl: "https://store.com/",
+      __pagePath: "/",
+    });
+  });
+
+  it("recurses into deeply nested sections (wrapper inside wrapper)", async () => {
+    const inner = vi.fn(async (props: any) => ({ ...props, deep: true }));
+    registerSectionLoader("site/sections/Inner.tsx", inner);
+
+    const parent = makeSection("site/sections/Outer.tsx", {
+      child: {
+        Component: "site/sections/MidWrapper.tsx",
+        props: {
+          grandchild: {
+            Component: "site/sections/Inner.tsx",
+            props: { tag: "deep" },
+          },
+        },
+      },
+    });
+
+    const result = await runSingleSectionLoader(parent, new Request("https://store.com/"));
+
+    expect(inner).toHaveBeenCalledTimes(1);
+    const grandchild = (result.props as any).child.props.grandchild;
+    expect(grandchild.props).toMatchObject({ tag: "deep", deep: true });
+  });
+
+  it("ignores nested objects that do not look like sections", async () => {
+    const loader = vi.fn(async (props: Record<string, unknown>) => props);
+    registerSectionLoader("site/sections/Leaf.tsx", loader);
+
+    const section = makeSection("site/sections/Leaf.tsx", {
+      // Plain config object, not a section. Has `Component: string` but
+      // missing the `props` field — must NOT be treated as a nested section.
+      config: { Component: "ButtonStyle", color: "red" },
+    });
+
+    const result = await runSingleSectionLoader(section, new Request("https://store.com/"));
+
+    expect(loader).toHaveBeenCalledTimes(1);
+    expect((result.props as any).config).toEqual({
+      Component: "ButtonStyle",
+      color: "red",
+    });
+  });
+
+  it("runs nested loaders even when parent has no own loader", async () => {
+    const childLoader = vi.fn(async (props: any) => ({ ...props, ran: true }));
+    registerSectionLoader("site/sections/Child.tsx", childLoader);
+
+    // Parent has no entry in registry — but it has a nested section in props
+    // (typical of a pure layout container that just renders children).
+    const parent = makeSection("site/sections/UnregisteredLayout.tsx", {
+      child: {
+        Component: "site/sections/Child.tsx",
+        props: { foo: "bar" },
+      },
+    });
+
+    const result = await runSingleSectionLoader(parent, new Request("https://store.com/"));
+
+    expect(childLoader).toHaveBeenCalledTimes(1);
+    expect((result.props as any).child.props).toMatchObject({
+      foo: "bar",
+      ran: true,
+    });
   });
 });
