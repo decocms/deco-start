@@ -159,18 +159,44 @@ opt-in and tested.
 Older versions of the migration script's `phase-cleanup` had a bug where
 it actively rewrote valid `@decocms/apps/vtex/utils/*` and
 `@decocms/apps/vtex/client` imports back to the dead `~/lib/vtex-*` shims.
-Confirm your loaders import direct from `@decocms/apps`:
+
+The post-cleanup audit now classifies **per-symbol**: it reads each
+`~/lib/vtex-*` shim file, labels every named export as `stub`,
+`type-only`, or `functional`, and only flags an import when at least
+one imported symbol is a real silent stub (returns `null` / `{}` / `[]`
+/ identity-cast / unconditional throw). Functional helpers shipped
+alongside stubs (e.g. a `parseCookie` cookie parser, a `fetchSafe`
+wrapper) no longer create noise.
+
+The audit's finding names the exact stub symbols, e.g.
+
+```
+[WARNING] src/loaders/search/x.ts — Imports stub-only symbols from
+  vtex-transform (toProduct); vtex-segment (getSegmentFromBag) —
+  runtime is silently stubbed
+    fix: Repoint imports to '@decocms/apps/vtex/...' or
+         'apps/commerce/utils/...'
+```
+
+Manual sweep (still useful if you don't have the audit handy):
 
 ```bash
 rg "from ['\"]~/lib/vtex-" src/
 # Expected: 0 hits (or only site-specific reasons you can articulate)
 ```
 
-If you see hits, update the imports to point at `@decocms/apps/vtex/...`
-directly (or the corresponding `commerce/utils/*` if it's a generic
-utility). Your runtime behavior gets MUCH better — segment cookies, IS
-cookies, VTEX session auth all start working again instead of being
-silently stubbed to `{}` / `null`.
+When you see real findings, update the imports to point at
+`@decocms/apps/vtex/...` directly (or the corresponding
+`commerce/utils/*` if it's a generic utility). Your runtime behavior
+gets MUCH better — segment cookies, IS cookies, VTEX session auth all
+start working again instead of being silently stubbed to `{}` / `null`.
+
+**Note on `--fix`**: this rule is intentionally detect-only. Repointing
+imports requires a per-symbol map to canonical apps/start exports
+(e.g. `getSegmentFromBag` → `@decocms/apps/vtex/utils/segment`), which
+the framework doesn't ship yet. Detect-only is still strictly more
+useful than nothing — the precision means each finding maps to exactly
+one PR's worth of mechanical work.
 
 ## 6. Drop `src/types/widgets.ts` — framework owns it
 

@@ -9,6 +9,7 @@
  * Rules are intentionally read-only here — `--fix` is a follow-up.
  */
 
+import { classifyShimExports, type ExportClass } from "./shim-classify";
 import type { Finding, FixAction, FsWriter, Rule, RuleContext } from "./types";
 
 const SRC_GLOB_EXCLUDES = ["node_modules", "dist", ".wrangler", ".vite", ".tanstack", "build"];
@@ -238,27 +239,97 @@ const ruleSiteLocalGlobals: Rule = {
 /* Rule 5 — `~/lib/vtex-*` shim regression                             */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Parse one or more ES `import { a, b as c, type d } from "spec"` blocks
+ * targeting a specific source spec out of a file. Returns the list of
+ * imported names (resolved to their original symbol, ignoring `as`
+ * rebinds), with `import type {…}` and inline `type` modifiers stripped
+ * — those carry no runtime, so the rule treats them as out-of-scope.
+ */
+function namedRuntimeImportsFrom(content: string, spec: string): string[] {
+  const escaped = spec.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // `(type\s+)?` captures the entire-import `import type { … }` form.
+  // Per-symbol `type` modifiers inside the braces are stripped below.
+  const re = new RegExp(
+    `import\\s+(type\\s+)?\\{([^}]+)\\}\\s+from\\s+['\"]${escaped}['\"]`,
+    "g",
+  );
+  const out: string[] = [];
+  for (const m of content.matchAll(re)) {
+    if (m[1]) continue; // entire import is type-only
+    for (const raw of m[2].split(",")) {
+      const trimmed = raw.trim();
+      if (!trimmed || trimmed.startsWith("type ")) continue;
+      // `foo as bar` → `foo` (we want the source symbol, not the local alias).
+      const sourceName = trimmed.split(/\s+as\s+/)[0].trim();
+      if (sourceName) out.push(sourceName);
+    }
+  }
+  return out;
+}
+
 const ruleVtexShimRegression: Rule = {
   id: "vtex-shim-regression",
   title: "Imports from ~/lib/vtex-* (silent stub regression)",
   run({ siteDir, fs }: RuleContext): Finding[] {
     const tsFiles = fs.glob(siteDir, "src/**/*.{ts,tsx}", SRC_GLOB_EXCLUDES);
     const findings: Finding[] = [];
-    const re = /from\s+['"]~\/lib\/vtex-([A-Za-z0-9-]+)['"]/g;
+
+    // Per-shim classification cache. Each shim file is read at most once
+    // per audit run, even when imported by dozens of consumers.
+    const shimClasses = new Map<string, Map<string, ExportClass>>();
+    function classOf(shim: string, symbol: string): ExportClass {
+      let map = shimClasses.get(shim);
+      if (!map) {
+        const abs = `${siteDir}/src/lib/${shim}.ts`;
+        map = new Map<string, ExportClass>();
+        if (fs.exists(abs)) {
+          for (const ce of classifyShimExports(fs.readText(abs))) {
+            map.set(ce.name, ce.class);
+          }
+        }
+        shimClasses.set(shim, map);
+      }
+      // Unknown symbols (file missing or not exported) default to "stub" —
+      // pessimistic on purpose. If the symbol can't be found locally, the
+      // import is at best dead code, at worst a TS error; either way the
+      // user wants visibility into it. Compile phase catches the TS side.
+      return map.get(symbol) ?? "stub";
+    }
+
+    // Match the bare `from "~/lib/vtex-X"` to know which shims are touched.
+    const fromRe = /from\s+['"]~\/lib\/vtex-([A-Za-z0-9-]+)['"]/g;
     for (const abs of tsFiles) {
       if (abs.includes("/src/lib/")) continue;
       const content = fs.readText(abs);
-      const matches = [...content.matchAll(re)];
-      if (matches.length === 0) continue;
+      const usedShims = new Set<string>(
+        [...content.matchAll(fromRe)].map((m) => `vtex-${m[1]}`),
+      );
+      if (usedShims.size === 0) continue;
+
+      // Per-file: which shim → which stub symbols are imported.
+      const stubsBySim = new Map<string, string[]>();
+      for (const shim of usedShims) {
+        const symbols = namedRuntimeImportsFrom(content, `~/lib/${shim}`);
+        const stubs = symbols.filter((s) => classOf(shim, s) === "stub");
+        if (stubs.length > 0) stubsBySim.set(shim, stubs);
+      }
+      if (stubsBySim.size === 0) continue;
+
       const rel = abs.slice(siteDir.length + 1);
-      const shims = [...new Set(matches.map((m) => `vtex-${m[1]}`))];
+      const detail = [...stubsBySim.entries()]
+        .map(([s, syms]) => `${s} (${syms.join(", ")})`)
+        .join("; ")
+      ;
       findings.push({
         rule: "vtex-shim-regression",
         severity: "warning",
         file: rel,
-        message: `Imports from dead shim(s): ${shims.join(", ")} — runtime is silently stubbed`,
+        message: `Imports stub-only symbols from ${detail} — runtime is silently stubbed`,
         fix: "Repoint imports to '@decocms/apps/vtex/...' or 'apps/commerce/utils/...'",
-        meta: { shims },
+        meta: {
+          stubsBySim: Object.fromEntries(stubsBySim),
+        },
       });
     }
     return findings;

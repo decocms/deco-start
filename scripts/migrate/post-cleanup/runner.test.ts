@@ -263,14 +263,19 @@ describe("rule: site-local-with-globals", () => {
 });
 
 describe("rule: vtex-shim-regression", () => {
-  it("flags imports from ~/lib/vtex-segment", () => {
+  // Default-pessimistic case: shim file missing → unknown symbols treated
+  // as stubs so audit always surfaces the import. (Compile phase catches
+  // the underlying TS error separately.)
+  it("flags imports when shim file is missing (defensive default)", () => {
     const fs = makeFs({
       "/site/src/sections/Foo.tsx": 'import { getSegment } from "~/lib/vtex-segment";\n',
     });
     const report = runAudit(SITE, fs);
     const r = report.rules.find((r) => r.rule === "vtex-shim-regression")!;
     expect(r.findings).toHaveLength(1);
-    expect(r.findings[0].meta?.shims).toContain("vtex-segment");
+    expect(r.findings[0].meta?.stubsBySim).toEqual({
+      "vtex-segment": ["getSegment"],
+    });
   });
 
   it("does not flag imports from src/lib itself", () => {
@@ -280,6 +285,122 @@ describe("rule: vtex-shim-regression", () => {
     const report = runAudit(SITE, fs);
     const r = report.rules.find((r) => r.rule === "vtex-shim-regression")!;
     expect(r.findings).toEqual([]);
+  });
+
+  it("does NOT flag when imported symbols are all functional", () => {
+    const fs = makeFs({
+      "/site/src/lib/vtex-id.ts":
+        "export function parseCookie(s?: string): Record<string,string> {\n" +
+        "  if (!s) return {};\n" +
+        "  return Object.fromEntries(s.split(';').map(c => c.split('=') as [string,string]));\n" +
+        "}\n",
+      "/site/src/actions/x.ts": 'import { parseCookie } from "~/lib/vtex-id";\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "vtex-shim-regression")!;
+    // parseCookie has nested-block functional impl → not a stub → no warning.
+    expect(r.findings).toEqual([]);
+  });
+
+  it("flags only the stub symbols when import set is mixed", () => {
+    const fs = makeFs({
+      "/site/src/lib/vtex-segment.ts":
+        "export function getSegmentFromBag(_req?: any): null { return null; }\n" +
+        "export function withSegmentCookie(headers: Headers): Headers {\n" +
+        "  headers.set('x', 'y');\n" +
+        "  return headers;\n" +
+        "}\n",
+      "/site/src/loaders/x.ts":
+        'import { getSegmentFromBag, withSegmentCookie } from "~/lib/vtex-segment";\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "vtex-shim-regression")!;
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].meta?.stubsBySim).toEqual({
+      "vtex-segment": ["getSegmentFromBag"],
+    });
+    expect(r.findings[0].message).toContain("getSegmentFromBag");
+    expect(r.findings[0].message).not.toContain("withSegmentCookie");
+  });
+
+  it("flags identity-cast (toProduct) as a stub", () => {
+    const fs = makeFs({
+      "/site/src/lib/vtex-transform.ts":
+        "export function toProduct(p: any): unknown { return p as unknown; }\n",
+      "/site/src/loaders/search.ts":
+        'import { toProduct } from "~/lib/vtex-transform";\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "vtex-shim-regression")!;
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].meta?.stubsBySim).toEqual({
+      "vtex-transform": ["toProduct"],
+    });
+  });
+
+  it("does NOT flag `import type { X }` from a stub-having shim", () => {
+    const fs = makeFs({
+      "/site/src/lib/vtex-client.ts":
+        "export interface VTEXCommerceStable { account: string; }\n" +
+        "export function stub(): null { return null; }\n",
+      "/site/src/loaders/x.ts":
+        'import type { VTEXCommerceStable } from "~/lib/vtex-client";\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "vtex-shim-regression")!;
+    // Type-only imports have no runtime → never a regression.
+    expect(r.findings).toEqual([]);
+  });
+
+  it("ignores per-symbol `type` modifier and only flags runtime imports", () => {
+    const fs = makeFs({
+      "/site/src/lib/vtex-mixed.ts":
+        "export interface Cfg { a: string; }\n" +
+        "export function stub(): null { return null; }\n" +
+        "export function ok(): boolean { return true; }\n",
+      "/site/src/loaders/x.ts":
+        'import { type Cfg, stub, ok } from "~/lib/vtex-mixed";\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "vtex-shim-regression")!;
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].meta?.stubsBySim).toEqual({
+      "vtex-mixed": ["stub"],
+    });
+  });
+
+  it("aggregates findings per file across multiple shims", () => {
+    const fs = makeFs({
+      "/site/src/lib/vtex-segment.ts":
+        "export function getSegmentFromBag(): null { return null; }\n",
+      "/site/src/lib/vtex-transform.ts":
+        "export function toProduct(p: any): unknown { return p as unknown; }\n",
+      "/site/src/loaders/search.ts":
+        'import { getSegmentFromBag } from "~/lib/vtex-segment";\n' +
+        'import { toProduct } from "~/lib/vtex-transform";\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "vtex-shim-regression")!;
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].meta?.stubsBySim).toEqual({
+      "vtex-segment": ["getSegmentFromBag"],
+      "vtex-transform": ["toProduct"],
+    });
+  });
+
+  it("supports `as`-renamed imports (resolves to source name)", () => {
+    const fs = makeFs({
+      "/site/src/lib/vtex-segment.ts":
+        "export function getSegmentFromBag(): null { return null; }\n",
+      "/site/src/loaders/x.ts":
+        'import { getSegmentFromBag as getSeg } from "~/lib/vtex-segment";\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "vtex-shim-regression")!;
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].meta?.stubsBySim).toEqual({
+      "vtex-segment": ["getSegmentFromBag"],
+    });
   });
 });
 
