@@ -62,6 +62,27 @@ Both rewrite to the same React `onClick` / `onChange` etc.
 The biggest bucket. Almost always a `useScript`-wrapped function
 attached as an event handler, with no fetch involved.
 
+> **Codemod available** (since `@decocms/start >= 2.21.0`). The
+> migration script's `transforms` pipeline now runs
+> `htmx-on-event-rename`, which mechanically rewrites
+> `hx-on:click={…}` → `onClick={…}` (and every other standard DOM
+> event in the [STANDARD_EVENT_MAP](https://github.com/decocms/deco-start/blob/main/scripts/migrate/transforms/htmx-on-events.ts)
+> table) for both colon and dash variants. Handler bodies are
+> preserved verbatim; if the body references Fresh-only globals
+> (`useScript(…)`, `globalThis.window.STOREFRONT`, `STOREFRONT.…`),
+> the codemod injects a single MIGRATION TODO comment at the top
+> of the file pointing back here. **htmx lifecycle events**
+> (`hx-on:htmx-config-request`, `hx-on-htmx-before-request`, etc.)
+> and unknown custom events (`hx-on:my-custom-thing`) are left
+> alone — those need manual rewrite, and the `htmx-residue` audit
+> rule catches them.
+>
+> Smoke result on als-storefront (754 files): codemod renames 98
+> `hx-on:*` attributes across 71 files; 67 of those files (94 %)
+> get the body-TODO. Engineers still own the body rewrite below;
+> the codemod just removes the dead `hx-*` attribute name so the
+> file compiles in React.
+
 ### Before
 
 ```tsx
