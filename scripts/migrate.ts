@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+
 /**
  * Migration Script: Fresh/Deno/Preact → TanStack Start/React/Cloudflare Workers
  *
@@ -23,18 +24,19 @@
  *   6. Verify   — Smoke test the migrated output
  */
 
-import * as path from "node:path";
 import { execSync } from "node:child_process";
+import * as path from "node:path";
+import { banner, green, red, stat, yellow } from "./migrate/colors";
 import { loadConfig, validateConfig } from "./migrate/config";
-import { createContext, logPhase } from "./migrate/types";
 import { analyze } from "./migrate/phase-analyze";
+import { cleanup } from "./migrate/phase-cleanup";
+import { compile } from "./migrate/phase-compile";
+import { report } from "./migrate/phase-report";
 import { scaffold } from "./migrate/phase-scaffold";
 import { transform } from "./migrate/phase-transform";
-import { cleanup } from "./migrate/phase-cleanup";
-import { report } from "./migrate/phase-report";
 import { verify } from "./migrate/phase-verify";
-import { compile } from "./migrate/phase-compile";
-import { banner, stat, red, green, yellow } from "./migrate/colors";
+import { detectSourceLayout, explainNonClassicLayout } from "./migrate/source-layout";
+import { createContext, logPhase } from "./migrate/types";
 
 function parseArgs(args: string[]): {
   source: string;
@@ -137,6 +139,19 @@ async function main() {
     config: siteConfig,
   });
 
+  // Phase 0: Source-layout detection (early-abort for unsupported layouts).
+  // The analyzer assumes a classic root layout (sections/, islands/, ...);
+  // running it on a modern src/ layout silently yields a near-empty
+  // migration. Detect-and-abort here so the user gets an actionable error
+  // before we touch any files.
+  const layout = detectSourceLayout(sourceDir);
+  if (layout !== "classic") {
+    console.error(red(`Error: ${layout} source layout`));
+    console.error("");
+    console.error(explainNonClassicLayout(layout, sourceDir));
+    process.exit(2);
+  }
+
   try {
     // Phase 1: Analyze source
     analyze(ctx);
@@ -210,7 +225,9 @@ function bootstrap(ctx: { sourceDir: string }) {
   run("npx tsr generate", "Generate TanStack routes");
 
   if (failures > 0) {
-    console.log(`\n  ${yellow("Bootstrap completed with warnings.")} Check errors above before running dev.\n`);
+    console.log(
+      `\n  ${yellow("Bootstrap completed with warnings.")} Check errors above before running dev.\n`,
+    );
   } else {
     console.log(`\n  ${green("Ready!")} Run \`${pm} run dev\` to start the dev server.\n`);
   }
