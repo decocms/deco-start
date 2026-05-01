@@ -168,15 +168,115 @@ one imported symbol is a real silent stub (returns `null` / `{}` / `[]`
 alongside stubs (e.g. a `parseCookie` cookie parser, a `fetchSafe`
 wrapper) no longer create noise.
 
-The audit's finding names the exact stub symbols, e.g.
+The audit's finding names the exact stub symbols **and emits per-symbol
+fix guidance**, e.g.
 
 ```
 [WARNING] src/loaders/search/x.ts — Imports stub-only symbols from
   vtex-transform (toProduct); vtex-segment (getSegmentFromBag) —
   runtime is silently stubbed
-    fix: Repoint imports to '@decocms/apps/vtex/...' or
-         'apps/commerce/utils/...'
+    fix: toProduct → @decocms/apps/vtex/utils/transform (1:1 import swap)
+         — canonical signature is `toProduct(product, sku, level, options)`;
+         1-arg call sites need to expand args first | getSegmentFromBag →
+         call-site refactor: read cookies via `request.headers.get('cookie')`
+         then call `buildSegmentFromCookies()` from
+         '@decocms/apps/vtex/utils/segment'.
 ```
+
+JSON consumers can read structured guidance from `meta.fixHints`:
+
+```json
+{
+  "rule": "vtex-shim-regression",
+  "meta": {
+    "stubsBySim": { "vtex-transform": ["toProduct"], "vtex-segment": ["getSegmentFromBag"] },
+    "fixHints": {
+      "toProduct": { "kind": "swap", "canonical": "@decocms/apps/vtex/utils/transform", "note": "..." },
+      "getSegmentFromBag": { "kind": "refactor", "note": "..." }
+    }
+  }
+}
+```
+
+### Canonical replacement table
+
+| Stub symbol | Kind | Canonical / fix |
+|---|---|---|
+| `toProduct` | swap | `@decocms/apps/vtex/utils/transform.toProduct` — note canonical signature is `(product, sku, level, options)`; 1-arg call sites need to expand args |
+| `withSegmentCookie` | swap | `@decocms/apps/vtex/utils/segment.withSegmentCookie` — note canonical signature is `(segment, headers?)` |
+| `getSegmentFromBag` | refactor | read cookies via `request.headers.get('cookie')`, then `buildSegmentFromCookies()` from `@decocms/apps/vtex/utils/segment` |
+| `getISCookiesFromBag` | refactor | extract IS cookies from `request.headers.get('cookie')` directly — no canonical helper, the bag-based mechanism doesn't exist on TanStack Start |
+
+Symbols not in the table get the generic guidance ("repoint to
+`@decocms/apps/vtex/...` or `apps/commerce/utils/...`") — when you find
+a new one worth pinning down, add it to `STUB_FIX_HINTS` in
+[`scripts/migrate/post-cleanup/rules.ts`](https://github.com/decocms/deco-start/blob/main/scripts/migrate/post-cleanup/rules.ts).
+
+### Recipe: expanding 1-arg `toProduct(p)` call sites
+
+Two real-world patterns surface, requiring different fixes:
+
+**Pattern A — call site already passes 4 args under `as any`** (e.g.
+`smartShelfForYou.ts` on casaevideo): the dev wrote the call for
+canonical, the import pointed at the stub. Fix is **import-only**:
+
+```diff
+-import { toProduct } from "~/lib/vtex-transform";
++import { toProduct } from "@decocms/apps/vtex/utils/transform";
+
+ const normalizedProducts = rawProducts.data.map((p: VTEXProduct) =>
+   (toProduct as any)(p, p.items?.[0], 0, {
+     baseUrl: baseURL,
+     priceCurrency: "BRL",
+   }),
+ );
+```
+
+The `as any` cast may stay if local `~/types/vtex.Product` and
+canonical `LegacyProductVTEX | ProductVTEX` differ structurally — that's
+a separate refactor.
+
+**Pattern B — call site uses true 1-arg form** (e.g.
+`intelligenseSearch.ts` on casaevideo): the dev relied on the stub's
+identity-cast behaviour. Fix is to **expand the call** mirroring the
+canonical pattern in
+[`apps-start/vtex/loaders/autocomplete.ts`](https://github.com/decocms/apps-start/blob/main/vtex/loaders/autocomplete.ts):
+
+```diff
+-import { toProduct } from "~/lib/vtex-transform";
++import { pickSku, toProduct } from "@decocms/apps/vtex/utils/transform";
+
+ const baseURL = new URL(req.url).origin;
+ return {
+   searches,
+-  products: (products ?? []).map((p) => toProduct(p)).slice(0, count),
++  products: (products ?? []).slice(0, count).map((p: any) => {
++    const sku = pickSku(p);
++    return toProduct(p, sku, 0, { baseUrl: baseURL, priceCurrency: "BRL" });
++  }),
+ };
+```
+
+`pickSku` handles the IS-shape SKU selection; without it, downstream
+fields like `productID`, `gtin`, `additionalProperty[]` come back
+empty.
+
+**Pattern C — keep the stub deliberately**: rare, but valid when the
+upstream API already returns canonical `Product[]` shape and the call
+is purely a type-narrowing cast. Replace with a typed cast at the
+boundary instead of importing a stub:
+
+```diff
+-import { toProduct } from "~/lib/vtex-transform";
++import type { Product } from "@decocms/apps/commerce/types";
+
+-products: (products ?? []).map((p) => toProduct(p)).slice(0, count),
++products: ((products ?? []) as Product[]).slice(0, count),
+```
+
+This silences the audit (the stub import is gone) without changing
+behaviour. Only do this if you've **verified** the upstream payload is
+already schema.org-shaped.
 
 Manual sweep (still useful if you don't have the audit handy):
 
