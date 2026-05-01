@@ -587,7 +587,12 @@ describe("runAudit — totals", () => {
       .map((r) => r.rule)
       .sort();
     expect(supported).toEqual(
-      ["dead-lib-shims", "dead-runtime-shim", "local-widgets-types"].sort(),
+      [
+        "dead-lib-shims",
+        "dead-runtime-shim",
+        "local-widgets-types",
+        "vtex-shim-regression",
+      ].sort(),
     );
   });
 });
@@ -679,5 +684,123 @@ describe("runAudit — fix mode", () => {
     runAudit(SITE, fs, { writer });
     expect(store["/site/src/sections/A.tsx"]).toContain('"@decocms/start/types/widgets"');
     expect(store["/site/src/sections/A.tsx"]).toContain('"~/types/widgets-extra"');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* W12-D / W12-E — vtex-shim-regression --fix for swap-able cases      */
+/* ------------------------------------------------------------------ */
+
+describe("runAudit — fix mode — vtex-shim-regression swap cases", () => {
+  it("rewrites `toProduct` import to canonical when it is the only stub imported", () => {
+    const { fs, writer, store } = makeMutableFs({
+      "/site/src/lib/vtex-transform.ts":
+        "export function toProduct(p: any): unknown { return p as unknown; }\n",
+      "/site/src/loaders/search.ts":
+        'import { toProduct } from "~/lib/vtex-transform";\nconsole.log(toProduct);\n',
+    });
+    const report = runAudit(SITE, fs, { writer });
+    const r = report.rules.find((r) => r.rule === "vtex-shim-regression")!;
+    expect(r.fixes).toHaveLength(1);
+    expect(r.fixes![0].file).toBe("src/loaders/search.ts");
+    expect(r.fixes![0].kind).toBe("rewrite-imports");
+    expect(r.fixes![0].detail).toContain("@decocms/apps/vtex/utils/transform");
+    expect(r.fixes![0].detail).toContain("toProduct");
+    expect(store["/site/src/loaders/search.ts"]).toContain(
+      '"@decocms/apps/vtex/utils/transform"',
+    );
+    expect(store["/site/src/loaders/search.ts"]).not.toContain('"~/lib/vtex-transform"');
+  });
+
+  it("rewrites `withSegmentCookie` import to canonical when it is the only stub imported", () => {
+    const { fs, writer, store } = makeMutableFs({
+      // Mirrors the post-#123 throwing-stub body — `throw new Error(...)`
+      // is recognised by the shim classifier as `unconditional throw`.
+      "/site/src/lib/vtex-segment.ts":
+        'export function withSegmentCookie(..._args: any[]): any { throw new Error("stub"); }\n',
+      "/site/src/loaders/x.ts":
+        'import { withSegmentCookie } from "~/lib/vtex-segment";\nconsole.log(withSegmentCookie);\n',
+    });
+    const report = runAudit(SITE, fs, { writer });
+    const r = report.rules.find((r) => r.rule === "vtex-shim-regression")!;
+    expect(r.fixes).toHaveLength(1);
+    expect(r.fixes![0].detail).toContain("@decocms/apps/vtex/utils/segment");
+    expect(store["/site/src/loaders/x.ts"]).toContain(
+      '"@decocms/apps/vtex/utils/segment"',
+    );
+  });
+
+  it("does NOT rewrite mixed swap+refactor surface (getSegmentFromBag is refactor-only)", () => {
+    const { fs, writer, store } = makeMutableFs({
+      "/site/src/lib/vtex-segment.ts":
+        "export function getSegmentFromBag(_req?: any): null { return null; }\n" +
+        'export function withSegmentCookie(..._args: any[]): any { throw new Error("stub"); }\n',
+      "/site/src/loaders/x.ts":
+        'import { getSegmentFromBag, withSegmentCookie } from "~/lib/vtex-segment";\n',
+    });
+    const before = store["/site/src/loaders/x.ts"];
+    const report = runAudit(SITE, fs, { writer });
+    const r = report.rules.find((r) => r.rule === "vtex-shim-regression")!;
+    // Finding still emitted (audit), but no fix applied (mixed surface).
+    expect(r.findings).toHaveLength(1);
+    expect(r.fixes).toEqual([]);
+    expect(store["/site/src/loaders/x.ts"]).toBe(before);
+  });
+
+  it("does NOT rewrite when the file imports a real impl from the same shim", () => {
+    // vtex-intelligent-search exports both `getISCookiesFromBag` (stub →
+    // refactor) and `isFilterParam` (real impl, not in STUB_FIX_HINTS).
+    // Even if only one symbol is imported, the rule's classifier already
+    // skips real impls. But if a file imports BOTH, our --fix must not
+    // rewrite — the canonical doesn't expose isFilterParam.
+    const { fs, writer, store } = makeMutableFs({
+      "/site/src/lib/vtex-intelligent-search.ts":
+        "export function getISCookiesFromBag(_r?: any): Record<string,string> { return {}; }\n" +
+        "export function isFilterParam(k: string): boolean { return k.startsWith('filter.'); }\n",
+      "/site/src/loaders/x.ts":
+        'import { getISCookiesFromBag, isFilterParam } from "~/lib/vtex-intelligent-search";\n',
+    });
+    const before = store["/site/src/loaders/x.ts"];
+    const report = runAudit(SITE, fs, { writer });
+    const r = report.rules.find((r) => r.rule === "vtex-shim-regression")!;
+    expect(r.findings).toHaveLength(1);
+    expect(r.fixes).toEqual([]);
+    expect(store["/site/src/loaders/x.ts"]).toBe(before);
+  });
+
+  it("rewrites multiple files using the same swap-able shim in one pass", () => {
+    const { fs, writer, store } = makeMutableFs({
+      "/site/src/lib/vtex-transform.ts":
+        "export function toProduct(p: any): unknown { return p as unknown; }\n",
+      "/site/src/loaders/A.ts":
+        'import { toProduct } from "~/lib/vtex-transform";\n',
+      "/site/src/loaders/B.ts":
+        "import { toProduct } from '~/lib/vtex-transform';\n",
+    });
+    const report = runAudit(SITE, fs, { writer });
+    const r = report.rules.find((r) => r.rule === "vtex-shim-regression")!;
+    expect(r.fixes!.length).toBe(2);
+    expect(store["/site/src/loaders/A.ts"]).toContain(
+      '"@decocms/apps/vtex/utils/transform"',
+    );
+    expect(store["/site/src/loaders/B.ts"]).toContain(
+      "'@decocms/apps/vtex/utils/transform'",
+    );
+  });
+
+  it("preserves the named-imports list verbatim when swapping", () => {
+    // The fix only rewrites the FROM clause, not the imported names. Keeps
+    // local aliases (`as`) intact.
+    const { fs, writer, store } = makeMutableFs({
+      "/site/src/lib/vtex-transform.ts":
+        "export function toProduct(p: any): unknown { return p as unknown; }\n",
+      "/site/src/loaders/x.ts":
+        'import { toProduct as toP } from "~/lib/vtex-transform";\n' +
+        "console.log(toP);\n",
+    });
+    runAudit(SITE, fs, { writer });
+    expect(store["/site/src/loaders/x.ts"]).toContain(
+      'import { toProduct as toP } from "@decocms/apps/vtex/utils/transform"',
+    );
   });
 });

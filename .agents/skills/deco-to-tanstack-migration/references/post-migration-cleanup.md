@@ -291,12 +291,30 @@ When you see real findings, update the imports to point at
 gets MUCH better — segment cookies, IS cookies, VTEX session auth all
 start working again instead of being silently stubbed to `{}` / `null`.
 
-**Note on `--fix`**: this rule is intentionally detect-only. Repointing
-imports requires a per-symbol map to canonical apps/start exports
-(e.g. `getSegmentFromBag` → `@decocms/apps/vtex/utils/segment`), which
-the framework doesn't ship yet. Detect-only is still strictly more
-useful than nothing — the precision means each finding maps to exactly
-one PR's worth of mechanical work.
+**Note on `--fix`** (since `@decocms/start >= 2.16.0`): the rule
+auto-fixes the SAFE subset of swaps — when every imported symbol from
+a given shim is a `kind: "swap"` hint to the SAME canonical module.
+Concretely:
+
+| Pattern | `--fix` behaviour |
+|---|---|
+| `import { toProduct } from "~/lib/vtex-transform"` | rewritten to `@decocms/apps/vtex/utils/transform` |
+| `import { withSegmentCookie } from "~/lib/vtex-segment"` | rewritten to `@decocms/apps/vtex/utils/segment` |
+| `import { getSegmentFromBag, withSegmentCookie } from "~/lib/vtex-segment"` | left untouched (mixed swap + refactor) |
+| `import { getISCookiesFromBag } from "~/lib/vtex-intelligent-search"` | left untouched (refactor-only — no canonical drop-in) |
+| `import { toProduct, isFilterParam } from "~/lib/vtex-transform"` | left untouched (would lose the real impl) |
+
+The auto-fix rewrites only the `from "..."` clause — the imported
+names list is preserved verbatim, so `as`-aliased imports (e.g.
+`{ toProduct as toP }`) keep working. After the import swap you may
+still need to expand 1-arg `toProduct(p)` call sites to the canonical
+4-arg signature — see § 5 below.
+
+The refactor-only cases (`getSegmentFromBag`, `getISCookiesFromBag`,
+mixed surfaces) intentionally stay manual: the bag-based lookup
+mechanism doesn't exist on TanStack Start, so each call site needs a
+human reading `request.headers.get('cookie')` and calling
+`buildSegmentFromCookies()` from the canonical module.
 
 ## 6. Drop `src/types/widgets.ts` — framework owns it
 

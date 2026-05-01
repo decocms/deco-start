@@ -452,6 +452,60 @@ const ruleVtexShimRegression: Rule = {
     }
     return findings;
   },
+  applyFix({ siteDir, fs }, findings, writer): FixAction[] {
+    if (findings.length === 0) return [];
+    const actions: FixAction[] = [];
+
+    // Per-file rewrite. Conservative: only swap the import path when EVERY
+    // imported symbol from the shim is a `kind: "swap"` hint pointing at
+    // the same canonical module. Mixed surfaces (some swap + some
+    // refactor, or a real impl + a stub) stay untouched — those need a
+    // human looking at call-site signatures.
+    for (const finding of findings) {
+      const stubsBySim = (finding.meta?.stubsBySim ?? {}) as Record<string, string[]>;
+      const abs = `${siteDir}/${finding.file}`;
+      if (!fs.exists(abs)) continue;
+
+      let content = fs.readText(abs);
+      let modified = false;
+
+      for (const [shim, _stubSyms] of Object.entries(stubsBySim)) {
+        const oldSpec = `~/lib/${shim}`;
+        const importedSymbols = namedRuntimeImportsFrom(content, oldSpec);
+        if (importedSymbols.length === 0) continue;
+
+        // Every imported symbol must be a swap-kind hint AND every hint
+        // must point at the same canonical module — otherwise we'd
+        // either drop a real impl or split the import across two paths,
+        // both of which are unsafe to do mechanically here.
+        const hints = importedSymbols.map((s) => STUB_FIX_HINTS[s]);
+        const allSwap = hints.every((h) => h && h.kind === "swap");
+        if (!allSwap) continue;
+        const targets = new Set(
+          hints.map((h) => (h as { kind: "swap"; canonical: string }).canonical),
+        );
+        if (targets.size !== 1) continue;
+        const target = [...targets][0];
+
+        const escaped = oldSpec.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const importLineRe = new RegExp(`from\\s+(['"])${escaped}\\1`, "g");
+        const next = content.replace(importLineRe, (_m, q) => `from ${q}${target}${q}`);
+        if (next !== content) {
+          content = next;
+          modified = true;
+          actions.push({
+            file: finding.file,
+            kind: "rewrite-imports",
+            detail: `${oldSpec} → ${target} (${importedSymbols.join(", ")})`,
+          });
+        }
+      }
+
+      if (modified) writer.writeText(abs, content);
+    }
+
+    return actions;
+  },
 };
 
 /* ------------------------------------------------------------------ */
