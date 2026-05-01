@@ -5,6 +5,29 @@ recurring set of dead-code and boilerplate cleanup that every migrated
 site benefits from. Run this checklist before the first PR review, not
 after the site has been shipping for weeks.
 
+## Run the audit first
+
+This whole checklist is now automated by the **`deco-post-cleanup`**
+audit script (added in `@decocms/start >= 2.11.0`). Run it from the
+site repo to get a structured report of which sections below actually
+apply to your codebase:
+
+```bash
+# Pretty text output, exits 0 unless --strict is passed
+npx -p @decocms/start deco-post-cleanup
+
+# Machine-readable JSON for CI dashboards
+npx -p @decocms/start deco-post-cleanup --json
+
+# Fail the run (exit 2) if any warning-severity findings exist
+npx -p @decocms/start deco-post-cleanup --strict
+```
+
+The audit covers all 7 rules below and prints the exact file path +
+suggested fix for each finding. It is **read-only** — auto-fix support
+is a planned follow-up. Use the audit to scope this checklist to the
+real, current findings instead of triaging the full document by hand.
+
 ## 1. Delete unused `src/lib/*` shims
 
 The migration script's `templates/lib-utils.ts` generates 11 shim files
