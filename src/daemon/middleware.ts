@@ -10,10 +10,10 @@
  * Ported from: deco-cx/deco daemon/daemon.ts
  */
 import type { IncomingMessage, ServerResponse, Server as HttpServer } from "node:http";
-import { createAuthMiddleware } from "./auth.ts";
-import { createFSHandler } from "./fs.ts";
-import { createVolumesHandler } from "./volumes.ts";
-import { createWatchHandler, watchFS } from "./watch.ts";
+import { createAuthMiddleware } from "./auth";
+import { createFSHandler } from "./fs";
+import { createVolumesHandler } from "./volumes";
+import { createWatchHandler, watchFS } from "./watch";
 
 const DAEMON_API_SPECIFIER = "x-daemon-api";
 const HYPERVISOR_API_SPECIFIER = "x-hypervisor-api";

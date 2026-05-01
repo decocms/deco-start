@@ -11,7 +11,7 @@ import { join, resolve, sep } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import fjp from "fast-json-patch";
 import type { Operation } from "fast-json-patch";
-import { inferMetadata, broadcastFSEvent, type Metadata } from "./watch.ts";
+import { inferMetadata, broadcastFSEvent, type Metadata } from "./watch";
 
 const cwd = process.cwd();
 const toPosix = (p: string) => p.replaceAll(sep, "/");

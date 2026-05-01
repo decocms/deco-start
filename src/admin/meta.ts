@@ -1,5 +1,5 @@
-import { djb2Hex } from "../sdk/djb2.ts";
-import { composeMeta, type MetaResponse } from "./schema.ts";
+import { djb2Hex } from "../sdk/djb2";
+import { composeMeta, type MetaResponse } from "./schema";
 
 // Use globalThis to share meta state across module instances.
 // The daemon middleware imports this module via native import() (outside Vite SSR),

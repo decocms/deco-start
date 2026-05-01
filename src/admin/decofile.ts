@@ -1,6 +1,6 @@
-import { getRevision, loadBlocks, setBlocks } from "../cms/loader.ts";
-import { clearLoaderCache } from "../sdk/cachedLoader.ts";
-import { invalidateMetaCache } from "./meta.ts";
+import { getRevision, loadBlocks, setBlocks } from "../cms/loader";
+import { clearLoaderCache } from "../sdk/cachedLoader";
+import { invalidateMetaCache } from "./meta";
 
 export function handleDecofileRead(): Response {
   const blocks = loadBlocks();
