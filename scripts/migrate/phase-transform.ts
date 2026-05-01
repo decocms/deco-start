@@ -9,6 +9,7 @@ import { transformFreshApis } from "./transforms/fresh-apis";
 import { transformDenoIsms } from "./transforms/deno-isms";
 import { transformTailwind } from "./transforms/tailwind";
 import { transformDeadCode } from "./transforms/dead-code";
+import { transformHtmxOnEvents } from "./transforms/htmx-on-events";
 import { createSectionConventionsTransform } from "./transforms/section-conventions";
 
 /** Map of section path → metadata, populated per-run */
@@ -54,10 +55,15 @@ function applyTransforms(content: string, filePath: string, ctx?: MigrationConte
     return { content, changed: false, notes: [] };
   }
 
-  // Pipeline: imports → jsx → fresh-apis → dead-code → deno-isms → tailwind
+  // Pipeline: imports → jsx → htmx-on-events → fresh-apis → dead-code → deno-isms → tailwind
+  // htmx-on-events runs after jsx (which renames class/onChange) and
+  // before fresh-apis (which removes useScript imports the htmx
+  // codemod's TODO might still reference). The codemod is a no-op on
+  // files without hx-on, so it never adds latency to non-htmx sites.
   const pipeline: Array<{ name: string; fn: (content: string) => TransformResult }> = [
     { name: "imports", fn: (c) => transformImports(c, ctx?.islandWrapperTargets) },
     { name: "jsx", fn: transformJsx },
+    { name: "htmx-on-events", fn: transformHtmxOnEvents },
     { name: "fresh-apis", fn: transformFreshApis },
     { name: "dead-code", fn: (c) => transformDeadCode(c, ctx?.platform) },
     { name: "deno-isms", fn: transformDenoIsms },

@@ -239,6 +239,36 @@ Each item carries a status: ⬜ pending, 🟡 in progress, ✅ done, 🚫 blocke
 
 > Append-only. Each entry: date, what we found, where it impacts the plan.
 
+### 2026-05-01 — Wave 14-A rescoped from three codemods to one based on real als data
+
+- **Pre-data plan vs post-data plan.** The plan called for three
+  htmx codemods (`event-handler`, `form-swap`, `click-swap`).
+  After running `deco-htmx-analyze` against als-storefront's
+  actual code (210 occurrences across 133 files), only the
+  `event-handler` bucket (88 occurrences, 42 %) genuinely admits
+  a mechanical rewrite — the other buckets need per-call-site
+  product decisions a codemod cannot encode. **Decided: ship
+  one codemod (W14-A: `htmx-on-event-rename`), defer the other
+  two to W15+.** Rationale captured in the Wave 14 — discoveries
+  block.
+- **Codemod shape generalises:** rename + preserve body +
+  conditional file-level TODO. Three outputs, one mechanical,
+  one verbatim, one conditional on body-content heuristics. This
+  is the shape any future per-pattern codemod should target.
+- **Smoke against the real source tree validated the design in
+  five minutes.** 754 files scanned, 71 changed, 98 renames, 67
+  TODO injections (94 % of changed files). Without that smoke
+  step we'd have shipped blind on edge cases like multi-line
+  values, mixed standard + lifecycle hooks on the same element,
+  and the colon-vs-dash variants both showing up in the same
+  file.
+- **The codemod + audit pair closes another loop.** Same shape
+  as W12 (D3 throwing stubs + audit `--fix` for swap-able
+  stubs). The codemod removes the mechanical half of the htmx
+  surface; the `htmx-residue` audit catches the surviving half
+  in CI. Engineers can never silently ship a half-rewritten
+  file.
+
 ### 2026-05-01 — als-storefront surfaces the htmx track + policy reset
 
 - **als-storefront is the third migration target and the first
@@ -834,12 +864,125 @@ analysis, rewrite recipes, and a "rewrite-complete" gate.
   rule means changing one file, getting `--strict` and `--json`
   for free.
 
-### Wave 14 (htmx codemods + first als migration on 2.14+) — planned
+### Wave 14 (htmx codemod — Priority 2 part 2) — ✅ **PARTIAL / RESCOPED**
 
-- **W14-A** deco-start: codemod `transforms/htmx-form-post-swap.ts` — `<form hx-post={url} hx-target hx-swap>` → `useMutation` + state setter
-- **W14-B** deco-start: codemod `transforms/htmx-click-fetch-swap.ts` — `<button hx-get={url}>` → onClick + invoke + state
-- **W14-C** deco-start: codemod `transforms/htmx-on-click-script.ts` — `hx-on:click={useScript(...)}` → `onClick` handler
-- **W14-D** als: rm -rf old als-tanstack, fresh `deco-migrate` run on 2.14+ with new htmx codemods. Per D5 (no --restart), this is the only restart UX.
+After shipping the W13 htmx foundations and gathering real data
+from als-storefront with `deco-htmx-analyze`, the planned three-codemod
+scope was reduced to **one codemod** + **one inventory artefact**.
+The other two codemods (form-swap, click-swap) were deferred to W15+,
+to be designed *after* als migration data exposes which exact
+attribute clusters dominate. **Rationale logged in W14 discoveries.**
+
+**Shipped:**
+
+- **W14-A** [`deco-start#132`](https://github.com/decocms/deco-start/pull/132) — `feat(migrate): htmx-on-event-rename codemod` ✅ **MERGED**, released as `@decocms/start@2.22.0`.
+  Adds `scripts/migrate/transforms/htmx-on-events.ts` to the migrate
+  `transforms/` pipeline. Mechanically rewrites `hx-on:event=` and
+  `hx-on-event=` (colon + dash variants) to the React equivalent
+  for every standard DOM event in `STANDARD_EVENT_MAP` (40 entries:
+  click, submit, change, input, key*, mouse*, focus*, drag*, touch*,
+  paste/copy/cut, scroll, wheel, load, contextmenu). Handler bodies
+  are preserved verbatim. **Idempotent** — running twice is a no-op.
+  Two safety hatches: htmx lifecycle events (`hx-on:htmx-*`) and
+  unknown custom events left alone (the `htmx-residue` audit catches
+  them); a single top-of-file MIGRATION TODO comment is injected
+  when the body references Fresh-only globals (`useScript(…)`,
+  `globalThis.window.STOREFRONT`, `STOREFRONT.…`) so engineers
+  don't ship a syntactically-clean file with broken runtime calls.
+  29 unit tests + als-shaped fixtures (AddToBagButton, SearchInput,
+  RecoveryPassword form, Footer.tsx). 339/339 pass; typecheck clean.
+  htmx-rewrite skill § Pattern 1 cross-references the codemod.
+- **W14-B** [`deco-start#132`](https://github.com/decocms/deco-start/pull/132) — captured the **als-storefront htmx inventory** in this plan (this section) as a fixture for future W15+ codemod design.
+
+**Deferred (intentionally) — see Wave 14 discoveries:**
+
+- ~~**W14-C** codemod `transforms/htmx-form-post-swap.ts`~~ — moved to W15+. The form-swap rewrite is genuinely non-mechanical (per-call-site decisions about optimistic vs pessimistic UI, where to surface loading state, which response handler shape). A speculative codemod would produce React skeletons that still need ~80 % manual work.
+- ~~**W14-D** codemod `transforms/htmx-click-fetch-swap.ts`~~ — moved to W15+. Same logic; on top of that, choosing between local state machine vs sub-route is a routing-architecture decision that varies per page.
+
+#### W14-A smoke + als inventory (captured 2026-05-01)
+
+The W13-A `deco-htmx-analyze` CLI run against als-storefront's
+production Fresh tree:
+
+| Category | Count | % | Notes |
+|---|---:|---:|---|
+| `event-handler` | 88 | 42 % | **Codemoded by W14-A** — mechanical rename |
+| `click-swap` | 64 | 30 % | Manual (W15+) — needs state vs sub-route decision |
+| `form-swap` | 20 | 10 % | Manual (W15+) — needs `useMutation` shape decision |
+| `auto-fetch` | 9 | 4 % | Manual — debounced state + `useQuery` |
+| `oob-swap` | 8 | 4 % | Manual — no 1:1 React equivalent |
+| `unmatched` | 21 | 10 % | Mostly typed-generic noise (`<string>` from `Map<string,X>`) |
+| **Total** | **210** | | across 133 files |
+
+W14-A codemod sweep against the same tree (754 ts/tsx files):
+
+| Metric | Value |
+|---|---:|
+| Files scanned | 754 |
+| Files changed | 71 |
+| Total `hx-on:*` attributes renamed | 98 |
+| Files getting the MIGRATION TODO | 67 (94 % of changed) |
+
+The 98 vs 88 discrepancy is expected: the analyzer counts attribute
+*clusters* per element (an `<input hx-post hx-target hx-on:change>`
+classifies as one `auto-fetch`); the codemod counts individual
+`hx-on:*` attribute renames (the same element gets one rename
+plus the `auto-fetch` cluster left intact for the engineer to
+finish). Net effect: ~98 mechanical wins, leaving ~112 cluster
+rewrites (click-swap + form-swap + auto-fetch + oob-swap +
+unmatched) for the engineer — matching the manual rewrite
+recipes in `references/htmx-rewrite.md`.
+
+### Wave 14 — discoveries
+
+- **Speculative codemods are over-engineering; data-driven scope
+  is better.** The pre-data plan said three codemods (event-handler,
+  form-swap, click-swap). After running `deco-htmx-analyze` against
+  als-storefront's actual code, only the event-handler bucket
+  (88 occurrences, 42 % of the surface) genuinely admits a
+  mechanical rewrite. The other two buckets need per-call-site
+  product decisions (state machine vs sub-route, optimistic vs
+  pessimistic UI, response-handler shape) that a codemod cannot
+  encode without producing React skeletons that still need ~80 %
+  manual work — net negative versus the recipe in
+  `references/htmx-rewrite.md`. **New rule: codemods come *after*
+  the analyzer data, not before.**
+- **The smoke-against-real-site step is the design feedback loop.**
+  Running the codemod against als's full 754-file tree (98
+  renames, 71 files changed, 67 with TODO injection) validated
+  three things in five minutes: (a) the rename surface matches
+  the inventory (98 vs 88 ratio explained), (b) the TODO
+  injection rate is high (94 %) — the marker is essential, not
+  defensive, (c) the codemod is idempotent at scale (re-running
+  produces zero diffs). Without this step we'd ship blind.
+- **The three-output codemod shape (rename + preserve body +
+  conditional TODO) generalises.** Same shape any future
+  per-pattern codemod should target: do the mechanical part,
+  preserve the human-decision-required part, leave a single
+  file-level marker the engineer can grep for. Over-eager
+  body rewriting is what produces the ~80 % manual cleanup load
+  that justifies leaving form-swap / click-swap codemods out for
+  now.
+- **`htmx-residue` audit + W14-A codemod close another loop.**
+  Same pattern as W12 (D3 throwing stubs + audit `--fix` for
+  swap-able stubs). The codemod removes the easy half of the
+  htmx surface; the audit catches the surviving half. Engineers
+  can never accidentally ship a half-rewritten file: the
+  attribute is either gone (codemod ran, body might still need
+  work — TODO), or it's still there (audit fires in CI).
+- **als-storefront's profile probably generalises to other htmx
+  sites.** 42 % event-handler is a strong skew toward
+  trivially-mechanical rewrites; even if other sites differ,
+  this codemod alone removes the largest single bucket. If a
+  future site shows 80 % click-swap, *that* would be the cue to
+  build the click-swap codemod — not pre-emptively now.
+- **Pipeline order matters.** Codemod runs after `transformJsx`
+  (which renames `class` → `className` and `onInput` → `onChange`)
+  and before `transformFreshApis` (which removes `useScript`
+  imports). If `transformFreshApis` ran first, the codemod's
+  TODO marker would still fire (we look for `useScript(` calls,
+  not the import), but the import-removal would create dead
+  references. Order is correct.
 
 ### Wave 15+ (htmx cleanup PRs on als + propagation to other sites) — Priority 3 / 4
 
