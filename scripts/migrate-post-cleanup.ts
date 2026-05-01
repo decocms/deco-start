@@ -22,8 +22,8 @@
  */
 
 import * as path from "node:path";
-import { banner, bold, gray, green, red, yellow } from "./migrate/colors";
-import { realFsAdapter, runAudit } from "./migrate/post-cleanup/runner";
+import { banner, bold, cyan, gray, green, red, yellow } from "./migrate/colors";
+import { realFsAdapter, realFsWriter, runAudit } from "./migrate/post-cleanup/runner";
 import type { AuditReport, Severity } from "./migrate/post-cleanup/types";
 
 interface CliOpts {
@@ -31,6 +31,7 @@ interface CliOpts {
   json: boolean;
   strict: boolean;
   help: boolean;
+  fix: boolean;
 }
 
 function parseArgs(args: string[]): CliOpts {
@@ -38,6 +39,7 @@ function parseArgs(args: string[]): CliOpts {
   let json = false;
   let strict = false;
   let help = false;
+  let fix = false;
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
       case "--source":
@@ -49,13 +51,16 @@ function parseArgs(args: string[]): CliOpts {
       case "--strict":
         strict = true;
         break;
+      case "--fix":
+        fix = true;
+        break;
       case "--help":
       case "-h":
         help = true;
         break;
     }
   }
-  return { source, json, strict, help };
+  return { source, json, strict, help, fix };
 }
 
 function showHelp() {
@@ -70,6 +75,9 @@ function showHelp() {
 
   Options:
     --source <dir>   Site directory to audit (default: .)
+    --fix            Auto-apply mechanical fixes for the safe rules
+                     (dead-lib-shims, dead-runtime-shim, local-widgets-types).
+                     Other rules still detect-only.
     --json           Emit machine-readable JSON instead of pretty text
     --strict         Exit code 2 if any warning-severity findings exist
     --help, -h       Show this help
@@ -77,6 +85,8 @@ function showHelp() {
   Examples:
     npx -p @decocms/start deco-post-cleanup
     npx -p @decocms/start deco-post-cleanup --source ./my-site --json
+    npx -p @decocms/start deco-post-cleanup --fix
+    npx -p @decocms/start deco-post-cleanup --fix --strict   # fail CI if anything left
 
   See: .agents/skills/deco-to-tanstack-migration/references/post-migration-cleanup.md
   `);
@@ -87,22 +97,36 @@ function severityColor(sev: Severity, text: string): string {
   return gray(text);
 }
 
-function printText(report: AuditReport): void {
-  banner("Post-Migration Cleanup Audit");
+function printText(report: AuditReport, fixMode: boolean): void {
+  banner(fixMode ? "Post-Migration Cleanup Audit (--fix)" : "Post-Migration Cleanup Audit");
   console.log(`  ${gray("Site:")} ${bold(report.site)}`);
   console.log(`  ${gray("Findings:")} ${bold(String(report.totalFindings))}`);
+  if (fixMode) {
+    console.log(`  ${gray("Auto-fixed:")} ${bold(String(report.totalFixActions))}`);
+  }
   console.log("");
 
   let idx = 0;
   for (const summary of report.rules) {
     idx++;
     const count = summary.findings.length;
+    const fixCount = summary.fixes?.length ?? 0;
     const headColor = count === 0 ? green : yellow;
-    console.log(`${headColor(`[${idx}] ${summary.title}`)} ${gray(`(${count} found)`)}`);
+    const suffix = fixMode
+      ? gray(`(${count} found, ${fixCount} fixed${summary.supportsAutoFix ? "" : ", manual"})`)
+      : gray(`(${count} found)`);
+    console.log(`${headColor(`[${idx}] ${summary.title}`)} ${suffix}`);
     for (const f of summary.findings) {
       const tag = severityColor(f.severity, `[${f.severity.toUpperCase()}]`);
       console.log(`    ${tag} ${bold(f.file)} — ${f.message}`);
-      if (f.fix) console.log(`        ${gray("fix:")} ${f.fix}`);
+      if (f.fix && !summary.fixes) {
+        console.log(`        ${gray("fix:")} ${f.fix}`);
+      }
+    }
+    if (summary.fixes) {
+      for (const a of summary.fixes) {
+        console.log(`    ${cyan("[FIXED]")} ${bold(a.file)} — ${a.detail}`);
+      }
     }
     if (count === 0) console.log(`    ${gray("(nothing to clean up)")}`);
     console.log("");
@@ -112,11 +136,15 @@ function printText(report: AuditReport): void {
     .flatMap((r) => r.findings)
     .filter((f) => f.severity === "warning").length;
   const infos = report.totalFindings - warnings;
-  console.log(
-    `${bold("Summary:")} ${report.totalFindings} finding(s) — ${yellow(`${warnings} warning(s)`)}, ${gray(`${infos} info`)}`,
-  );
+  const tail = fixMode
+    ? `${report.totalFindings} finding(s) — ${cyan(`${report.totalFixActions} auto-fixed`)}, ${yellow(`${warnings} warning(s)`)}, ${gray(`${infos} info`)}`
+    : `${report.totalFindings} finding(s) — ${yellow(`${warnings} warning(s)`)}, ${gray(`${infos} info`)}`;
+  console.log(`${bold("Summary:")} ${tail}`);
   if (report.totalFindings > 0) {
-    console.log(gray("  See post-migration-cleanup.md for the canonical fix steps per rule."));
+    const hint = fixMode
+      ? "  Some rules require manual fixes — see post-migration-cleanup.md."
+      : "  Run with --fix to auto-correct the safe rules, or see post-migration-cleanup.md.";
+    console.log(gray(hint));
   }
 }
 
@@ -137,12 +165,14 @@ async function main() {
   }
 
   const siteDir = path.resolve(opts.source);
-  const report = runAudit(siteDir, realFsAdapter);
+  const report = runAudit(siteDir, realFsAdapter, {
+    writer: opts.fix ? realFsWriter : undefined,
+  });
 
   if (opts.json) {
     printJson(report);
   } else {
-    printText(report);
+    printText(report, opts.fix);
   }
 
   if (shouldFail(report, opts.strict)) {

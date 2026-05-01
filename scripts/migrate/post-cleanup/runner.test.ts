@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { _internals, ALL_RULES } from "./rules";
 import { runAudit } from "./runner";
-import type { FsAdapter } from "./types";
+import type { FsAdapter, FsWriter } from "./types";
 
 /**
  * In-memory FsAdapter for tests. Maps absolute path → file content.
@@ -56,6 +56,75 @@ function makeFs(files: Record<string, string>): FsAdapter {
 }
 
 const SITE = "/site";
+
+/**
+ * Mutable in-memory FS — read AND write share one backing store. Used
+ * for fix-mode tests. The `store` is exposed so tests can assert what
+ * the writer left behind (deletions and content rewrites).
+ */
+function makeMutableFs(initial: Record<string, string>): {
+  fs: FsAdapter;
+  writer: FsWriter;
+  store: Record<string, string>;
+  log: { kind: "delete" | "write"; absPath: string }[];
+} {
+  const store = Object.fromEntries(
+    Object.entries(initial).map(([k, v]) => [k.replace(/\\/g, "/"), v]),
+  );
+  const log: { kind: "delete" | "write"; absPath: string }[] = [];
+  const fs: FsAdapter = {
+    exists(absPath) {
+      return absPath.replace(/\\/g, "/") in store;
+    },
+    readText(absPath) {
+      const k = absPath.replace(/\\/g, "/");
+      if (!(k in store)) throw new Error(`ENOENT: ${absPath}`);
+      return store[k];
+    },
+    glob(siteDir, pattern, excludeDirs = []) {
+      const root = siteDir.replace(/\\/g, "/");
+      const all = Object.keys(store).filter((p) => p.startsWith(`${root}/`));
+      const filtered = all.filter((p) => {
+        const rel = p.slice(root.length + 1);
+        return !excludeDirs.some((dir) => rel.startsWith(`${dir}/`));
+      });
+      const branches = pattern.includes("{")
+        ? pattern
+            .match(/\{([^{}]+)\}/)![1]
+            .split(",")
+            .map((b) => pattern.replace(/\{[^{}]+\}/, b.trim()))
+        : [pattern];
+      const regexes = branches.map((p) => {
+        const re = p
+          .replace(/[.+^$()|]/g, "\\$&")
+          .replace(/\*\*\//g, "<<DBL>>")
+          .replace(/\*\*/g, "<<DBL>>")
+          .replace(/\*/g, "[^/]*")
+          .replace(/<<DBL>>/g, "(?:.*/)?");
+        return new RegExp(`^${re}$`);
+      });
+      return filtered
+        .filter((p) => {
+          const rel = p.slice(root.length + 1);
+          return regexes.some((re) => re.test(rel));
+        })
+        .sort();
+    },
+  };
+  const writer: FsWriter = {
+    deleteFile(absPath) {
+      const k = absPath.replace(/\\/g, "/");
+      delete store[k];
+      log.push({ kind: "delete", absPath: k });
+    },
+    writeText(absPath, content) {
+      const k = absPath.replace(/\\/g, "/");
+      store[k] = content;
+      log.push({ kind: "write", absPath: k });
+    },
+  };
+  return { fs, writer, store, log };
+}
 
 describe("runAudit — empty site", () => {
   it("returns zero findings on an empty tree", () => {
@@ -284,5 +353,108 @@ describe("runAudit — totals", () => {
     });
     const report = runAudit(SITE, fs);
     expect(report.totalFindings).toBe(3);
+    expect(report.totalFixActions).toBe(0);
+  });
+
+  it("supportsAutoFix flag reflects rule capability", () => {
+    const fs = makeFs({});
+    const report = runAudit(SITE, fs);
+    const supported = report.rules
+      .filter((r) => r.supportsAutoFix)
+      .map((r) => r.rule)
+      .sort();
+    expect(supported).toEqual(
+      ["dead-lib-shims", "dead-runtime-shim", "local-widgets-types"].sort(),
+    );
+  });
+});
+
+describe("runAudit — fix mode", () => {
+  it("does not mutate when no writer is provided (default audit-only)", () => {
+    const { fs, store } = makeMutableFs({
+      "/site/src/lib/dead.ts": "export const foo = 1;\n",
+    });
+    const before = { ...store };
+    runAudit(SITE, fs);
+    expect(store).toEqual(before);
+  });
+
+  it("fix mode deletes a dead-lib shim and reports the action", () => {
+    const { fs, writer, store } = makeMutableFs({
+      "/site/src/lib/dead.ts": "export const foo = 1;\n",
+      "/site/src/sections/Other.tsx": 'export const x = "y";\n',
+    });
+    const report = runAudit(SITE, fs, { writer });
+    const r = report.rules.find((r) => r.rule === "dead-lib-shims")!;
+    expect(r.findings).toHaveLength(1);
+    expect(r.fixes).toHaveLength(1);
+    expect(r.fixes![0].kind).toBe("delete");
+    expect(r.fixes![0].file).toBe("src/lib/dead.ts");
+    expect("/site/src/lib/dead.ts" in store).toBe(false);
+    expect("/site/src/sections/Other.tsx" in store).toBe(true);
+    expect(report.totalFixActions).toBe(1);
+  });
+
+  it("fix mode rewrites runtime imports + deletes runtime.ts", () => {
+    const { fs, writer, store, log } = makeMutableFs({
+      "/site/src/runtime.ts":
+        "export const invoke = createNestedInvokeProxy();\nexport function createNestedInvokeProxy() { return {}; }\n",
+      "/site/src/sections/A.tsx": 'import { invoke } from "~/runtime";\nconsole.log(invoke);\n',
+      "/site/src/sections/B.tsx": "import { invoke } from '~/runtime';\nconsole.log(invoke);\n",
+      "/site/src/sections/C.tsx":
+        'import { other } from "~/something-else";\nconsole.log(other);\n',
+    });
+    const report = runAudit(SITE, fs, { writer });
+    const r = report.rules.find((r) => r.rule === "dead-runtime-shim")!;
+    expect(r.findings).toHaveLength(1);
+    expect(r.fixes).toHaveLength(1);
+    expect(r.fixes![0].detail).toMatch(/rewrote 2 import/);
+    expect("/site/src/runtime.ts" in store).toBe(false);
+    expect(store["/site/src/sections/A.tsx"]).toContain('"@decocms/start/sdk"');
+    expect(store["/site/src/sections/B.tsx"]).toContain("'@decocms/start/sdk'");
+    expect(store["/site/src/sections/C.tsx"]).toContain('"~/something-else"');
+    expect(log.filter((e) => e.kind === "delete")).toHaveLength(1);
+    expect(log.filter((e) => e.kind === "write")).toHaveLength(2);
+  });
+
+  it("fix mode rewrites widgets imports + deletes widgets.ts", () => {
+    const { fs, writer, store } = makeMutableFs({
+      "/site/src/types/widgets.ts": "export type ImageWidget = string;\n",
+      "/site/src/sections/A.tsx":
+        'import type { ImageWidget } from "~/types/widgets";\nexport const x: ImageWidget = "y";\n',
+      "/site/src/sections/B.tsx":
+        "import type { ImageWidget } from '~/types/widgets';\nexport const y: ImageWidget = 'z';\n",
+    });
+    const report = runAudit(SITE, fs, { writer });
+    const r = report.rules.find((r) => r.rule === "local-widgets-types")!;
+    expect(r.fixes).toHaveLength(1);
+    expect(r.fixes![0].detail).toMatch(/rewrote 2 import/);
+    expect("/site/src/types/widgets.ts" in store).toBe(false);
+    expect(store["/site/src/sections/A.tsx"]).toContain('"@decocms/start/types/widgets"');
+    expect(store["/site/src/sections/B.tsx"]).toContain("'@decocms/start/types/widgets'");
+  });
+
+  it("fix mode is a no-op for rules without applyFix (e.g. framework-todos)", () => {
+    const { fs, writer, store } = makeMutableFs({
+      "/site/src/sections/Foo.tsx": "// TODO: move into decoVitePlugin\nexport const x = 1;\n",
+    });
+    const beforeStore = { ...store };
+    const report = runAudit(SITE, fs, { writer });
+    const r = report.rules.find((r) => r.rule === "framework-todos")!;
+    expect(r.findings).toHaveLength(1);
+    expect(r.fixes).toBeUndefined();
+    expect(r.supportsAutoFix).toBe(false);
+    expect(store).toEqual(beforeStore);
+  });
+
+  it("fix mode rewrites only exact matches, not prefix collisions", () => {
+    const { fs, writer, store } = makeMutableFs({
+      "/site/src/types/widgets.ts": "export type ImageWidget = string;\n",
+      "/site/src/sections/A.tsx":
+        'import type { ImageWidget } from "~/types/widgets";\nimport thing from "~/types/widgets-extra";\n',
+    });
+    runAudit(SITE, fs, { writer });
+    expect(store["/site/src/sections/A.tsx"]).toContain('"@decocms/start/types/widgets"');
+    expect(store["/site/src/sections/A.tsx"]).toContain('"~/types/widgets-extra"');
   });
 });
