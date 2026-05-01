@@ -34,7 +34,9 @@ interface CacheableSectionConfig {
   maxAge: number;
 }
 
-export type CacheableSectionInput = CacheableSectionConfig | import("../sdk/cacheHeaders").CacheProfileName;
+export type CacheableSectionInput =
+  | CacheableSectionConfig
+  | import("../sdk/cacheHeaders").CacheProfileName;
 
 function resolveSectionCacheConfig(input: CacheableSectionInput): CacheableSectionConfig {
   if (typeof input === "string") {
@@ -255,10 +257,7 @@ export async function runSectionLoaders(
   if (typeof process !== "undefined" && process.env?.NODE_ENV !== "production") {
     for (const s of sections) {
       const key = s.component.toLowerCase();
-      if (
-        (key.includes("header") || key.includes("footer")) &&
-        !layoutSections.has(s.component)
-      ) {
+      if ((key.includes("header") || key.includes("footer")) && !layoutSections.has(s.component)) {
         console.warn(
           `[SectionLoaders] "${s.component}" looks like a layout section but is not in registerLayoutSections(). ` +
             `Add it to registerLayoutSections() in setup.ts for consistent caching across navigations.`,
@@ -318,47 +317,180 @@ function withPageContext(loader: SectionLoaderFn): SectionLoaderFn {
  * 1. Layout sections (Header/Footer) — 5min TTL + in-flight dedup
  * 2. Cacheable sections (ProductShelf, FAQ) — SWR with configurable maxAge
  * 3. Regular sections — no cache, always fresh
+ *
+ * After the section's own loader runs, recursively runs loaders for any
+ * nested sections found in its resolved props (e.g. wrapper sections with
+ * a `sections: Section[]` prop). This eliminates the need for sites to
+ * manually walk + invoke `runSingleSectionLoader` on children.
  */
 export async function runSingleSectionLoader(
   section: ResolvedSection,
   request: Request,
 ): Promise<ResolvedSection> {
   const loader = loaderRegistry.get(section.component);
-  if (!loader) return section;
 
-  // Wrap the loader so __pageUrl/__pagePath are injected at the call site.
-  // Cache keys (component name for layout, component+propsHash for cacheable)
-  // are computed from the *original* section.props — keeping cache entries
-  // URL-agnostic and shared across pages.
-  const wrapped = withPageContext(loader);
+  let result: ResolvedSection;
 
-  if (layoutSections.has(section.component)) {
-    try {
-      return await resolveLayoutSection(section, wrapped, request);
-    } catch (error) {
-      console.error(`[SectionLoader] Error in layout "${section.component}":`, error);
-      return section;
+  if (!loader) {
+    // No own-loader, but the section may still contain nested sections in
+    // its props (CMS-resolved children) that need their loaders run.
+    result = section;
+  } else {
+    // Wrap the loader so __pageUrl/__pagePath are injected at the call site.
+    // Cache keys (component name for layout, component+propsHash for cacheable)
+    // are computed from the *original* section.props — keeping cache entries
+    // URL-agnostic and shared across pages.
+    const wrapped = withPageContext(loader);
+
+    if (layoutSections.has(section.component)) {
+      try {
+        result = await resolveLayoutSection(section, wrapped, request);
+      } catch (error) {
+        console.error(`[SectionLoader] Error in layout "${section.component}":`, error);
+        result = section;
+      }
+    } else {
+      const cacheConfig = cacheableSections.get(section.component);
+      if (cacheConfig) {
+        try {
+          result = await runCacheableSectionLoader(section, wrapped, request, cacheConfig);
+        } catch (error) {
+          console.error(`[SectionLoader] Error in cacheable "${section.component}":`, error);
+          result = section;
+        }
+      } else {
+        try {
+          const enrichedProps = await wrapped(section.props as Record<string, unknown>, request);
+          result = { ...section, props: enrichedProps };
+        } catch (error) {
+          console.error(`[SectionLoader] Error in "${section.component}":`, error);
+          result = section;
+        }
+      }
     }
   }
 
-  const cacheConfig = cacheableSections.get(section.component);
-  if (cacheConfig) {
-    try {
-      return await runCacheableSectionLoader(section, wrapped, request, cacheConfig);
-    } catch (error) {
-      console.error(`[SectionLoader] Error in cacheable "${section.component}":`, error);
-      return section;
+  // Recurse into nested sections AFTER the parent's loader/cache lookup so
+  // child sections keep their own cache TTL independent from the parent's.
+  // For layout/cacheable parents, this means a 5-min layout cache hit still
+  // re-evaluates child sections (whose own caches are usually shorter, e.g.
+  // ProductShelf 60s). For leaf sections, `enrichNestedSections` returns
+  // the same reference (no allocation, no extra work).
+  const props = result.props as Record<string, unknown> | undefined;
+  if (props && typeof props === "object") {
+    const enrichedProps = await enrichNestedSections(props, request);
+    if (enrichedProps !== props) {
+      return { ...result, props: enrichedProps };
+    }
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Nested section loader support
+// ---------------------------------------------------------------------------
+
+/**
+ * Type guard: matches the shape produced by `normalizeNestedSections` in
+ * resolve.ts — `{ Component: string, props: object }`. This is how the CMS
+ * resolver represents nested sections (children of wrapper sections).
+ *
+ * Note: the `Component` key uses capital C to match the runtime renderer's
+ * convention (mirrors deco-cx/deco's Fresh API). Not to be confused with
+ * the lowercase `component` on `ResolvedSection`.
+ */
+function isNestedSection(
+  value: unknown,
+): value is { Component: string; props: Record<string, unknown> } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const obj = value as Record<string, unknown>;
+  return (
+    typeof obj.Component === "string" &&
+    obj.props != null &&
+    typeof obj.props === "object" &&
+    !Array.isArray(obj.props)
+  );
+}
+
+/**
+ * Walk a props object and run section loaders for any nested sections.
+ * Handles direct child sections AND arrays of sections (e.g.
+ * `sections: Section[]`, `slides: Slide[]`).
+ *
+ * Returns the same reference if nothing changed — so leaf sections (the
+ * vast majority) incur zero allocation overhead.
+ *
+ * Concurrency: all nested loader calls run in parallel via Promise.all.
+ */
+async function enrichNestedSections(
+  props: Record<string, unknown>,
+  request: Request,
+): Promise<Record<string, unknown>> {
+  type Pending = {
+    key: string;
+    index?: number;
+    promise: Promise<ResolvedSection>;
+  };
+  const pending: Pending[] = [];
+
+  for (const [key, value] of Object.entries(props)) {
+    if (isNestedSection(value)) {
+      pending.push({
+        key,
+        promise: runSingleSectionLoader(
+          {
+            component: value.Component,
+            props: value.props,
+            key: value.Component,
+          } as ResolvedSection,
+          request,
+        ),
+      });
+      continue;
+    }
+
+    if (Array.isArray(value)) {
+      for (let i = 0; i < value.length; i++) {
+        const item = value[i];
+        if (isNestedSection(item)) {
+          pending.push({
+            key,
+            index: i,
+            promise: runSingleSectionLoader(
+              {
+                component: item.Component,
+                props: item.props,
+                key: item.Component,
+              } as ResolvedSection,
+              request,
+            ),
+          });
+        }
+      }
     }
   }
 
-  try {
-    const enrichedProps = await wrapped(
-      section.props as Record<string, unknown>,
-      request,
-    );
-    return { ...section, props: enrichedProps };
-  } catch (error) {
-    console.error(`[SectionLoader] Error in "${section.component}":`, error);
-    return section;
+  if (pending.length === 0) return props;
+
+  const results = await Promise.all(pending.map((p) => p.promise));
+  const updated: Record<string, unknown> = { ...props };
+
+  for (let i = 0; i < pending.length; i++) {
+    const { key, index } = pending[i];
+    const enriched = results[i];
+    const nestedValue = { Component: enriched.component, props: enriched.props };
+
+    if (index != null) {
+      // Array item — clone the array on first mutation for this key
+      const current = updated[key];
+      if (current === props[key]) {
+        updated[key] = [...(current as unknown[])];
+      }
+      (updated[key] as unknown[])[index] = nestedValue;
+    } else {
+      updated[key] = nestedValue;
+    }
   }
+
+  return updated;
 }
