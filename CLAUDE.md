@@ -8,6 +8,10 @@ Guidance for AI assistants working with `@decocms/start`.
 
 **Not a storefront itself** — this is the npm package that storefronts depend on.
 
+## Migration tooling policy (constitutional)
+
+This repo also hosts the migration scripts + skills that move Deco storefronts from Fresh/Deno to TanStack Start. The work is governed by signed-off architectural decisions (D1–D5) and a strict priority order — see [`.cursor/rules/migration-tooling-policy.mdc`](./.cursor/rules/migration-tooling-policy.mdc) (always-loaded) and [`MIGRATION_TOOLING_PLAN.md`](./MIGRATION_TOOLING_PLAN.md) (full record). Defer to the plan when in doubt.
+
 ## Tech Stack
 
 - Runtime: Cloudflare Workers (Node compat)
