@@ -9,6 +9,7 @@
  * Rules are intentionally read-only here — `--fix` is a follow-up.
  */
 
+import { analyzeFile as analyzeHtmxFile } from "../analyzers/htmx-analyze";
 import { classifyShimExports, type ExportClass } from "./shim-classify";
 import type { Finding, FixAction, FsWriter, Rule, RuleContext } from "./types";
 
@@ -887,6 +888,76 @@ const ruleFrameworkTodos: Rule = {
   },
 };
 
+/* ------------------------------------------------------------------ */
+/* Rule 8 — `htmx-residue` — leftover hx-* attrs in migrated src/      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Per D2 in the migration tooling policy, every `hx-*` attribute is
+ * rewritten on migration; nothing in `@decocms/start` ships an htmx
+ * runtime. This rule is the verification gate: a migrated site is
+ * "rewrite-complete" when there are zero `hx-*` attributes left in
+ * `src/`.
+ *
+ * Implementation reuses the htmx analyzer (`analyzeFile` from
+ * `analyzers/htmx-analyze.ts`) so categorisation and the JSX walker
+ * stay consistent with the standalone `deco-htmx-analyze` CLI. The
+ * rule restricts to `src/**` (the migrated React tree) and excludes
+ * test files — tests are allowed to mention `hx-*` for fixtures or
+ * regression checks.
+ *
+ * Severity is `warning`, so `--strict` exits 2 on any finding. The
+ * rule is intentionally detect-only: rewrites are non-mechanical
+ * (state machine + sub-route + mutation choices vary per call site)
+ * — the
+ * `references/htmx-rewrite.md` skill is the playbook.
+ */
+const ruleHtmxResidue: Rule = {
+  id: "htmx-residue",
+  title: "HTMX residue in migrated src/",
+  run({ siteDir, fs }: RuleContext): Finding[] {
+    const findings: Finding[] = [];
+    const tsFiles = fs.glob(siteDir, "src/**/*.{ts,tsx}", SRC_GLOB_EXCLUDES);
+    for (const abs of tsFiles) {
+      const rel = abs.slice(siteDir.length + 1);
+      // Skip test files — tests legitimately reference hx-* in fixtures
+      // or regression checks. Same exclusion shape as vitest's default.
+      if (/\.(test|spec)\.(ts|tsx)$/.test(rel)) continue;
+      if (rel.startsWith("src/__tests__/") || rel.includes("/__tests__/")) {
+        continue;
+      }
+      const content = fs.readText(abs);
+      const occurrences = analyzeHtmxFile(rel, content);
+      if (occurrences.length === 0) continue;
+
+      // Aggregate per-file: total + categories present.
+      const byCat = new Map<string, number>();
+      for (const occ of occurrences) {
+        byCat.set(occ.category, (byCat.get(occ.category) ?? 0) + 1);
+      }
+      const catSummary = [...byCat.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([cat, n]) => `${cat}=${n}`)
+        .join(", ");
+      const firstLine = occurrences[0].line;
+
+      findings.push({
+        rule: "htmx-residue",
+        severity: "warning",
+        file: `${rel}:${firstLine}`,
+        message: `${occurrences.length} hx-* element(s) — ${catSummary}`,
+        fix: `Rewrite per .agents/skills/deco-to-tanstack-migration/references/htmx-rewrite.md (run \`deco-htmx-analyze\` for the per-category breakdown)`,
+        meta: {
+          total: occurrences.length,
+          byCategory: Object.fromEntries(byCat),
+          firstLine,
+        },
+      });
+    }
+    return findings;
+  },
+};
+
 export const ALL_RULES: Rule[] = [
   ruleDeadLibShims,
   ruleObsoleteVitePlugins,
@@ -895,6 +966,7 @@ export const ALL_RULES: Rule[] = [
   ruleVtexShimRegression,
   ruleLocalWidgetsTypes,
   ruleFrameworkTodos,
+  ruleHtmxResidue,
 ];
 
 /** Exported for direct unit tests. */
@@ -907,6 +979,7 @@ export const _internals = {
     ruleDeadRuntimeShim,
     ruleSiteLocalGlobals,
     ruleVtexShimRegression,
+    ruleHtmxResidue,
     ruleLocalWidgetsTypes,
     ruleFrameworkTodos,
   },

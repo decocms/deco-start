@@ -766,18 +766,73 @@ Wave 12 ships in priority-1 order; Wave 13 starts now.
   prove it on 2 sites, promote to `@decocms/apps`, then rewrite the
   template to use the canonical.
 
-### Wave 13 (htmx foundations — Priority 2 part 1) — planned
+### Wave 13 (htmx foundations — Priority 2 part 1) — ✅ **COMPLETE**
 
-Once Wave 12 is in, the migration script needs an htmx track because
-als is the first heavy htmx site and we know it won't be the last
-(per the user, "some of our sites are, not all, not even most, some").
+Once Wave 12 was in, the migration script needed an htmx track
+because als is the first heavy htmx site and we know it won't be
+the last (per the user, "some of our sites are, not all, not even
+most, some"). **3 PRs in `deco-start`, all merged.** D2 forbids an
+htmx adapter package; nothing in Wave 13 ships htmx runtime — only
+analysis, rewrite recipes, and a "rewrite-complete" gate.
 
-- **W13-A** deco-start: `scripts/migrate/htmx-analyze.ts` — categorize hx-* by pattern (form-swap, click-fetch, hx-on, hx-trigger+useSection, etc.). Output: per-site htmx inventory.
-- **W13-B** deco-start: skill `references/htmx-rewrite.md` — pattern catalog with per-pattern rewrite recipe (decision tree: codemod vs manual recipe).
-- **W13-C** deco-start: audit rule `htmx-residue` — counts `hx-*` attributes still in `src/`. Required-empty for "rewrite-complete" sites.
+**Shipped PRs:**
 
-D2 forbids an htmx adapter package; nothing in Wave 13 ships htmx
-runtime.
+- **W13-A** [`deco-start#129`](https://github.com/decocms/deco-start/pull/129) — `feat(migrate): htmx surface analyzer` ✅ **MERGED**, released as `@decocms/start@2.20.0`.
+  Adds `scripts/migrate/analyzers/htmx-analyze.ts` (per-file walker + classifier) and the `deco-htmx-analyze` CLI. The walker is heuristic JSX (regex for `hx-*` attrs, brace-balanced traversal back to the opening tag, forward to the closing `>` / `/>`) — skips strings, template literals, JSX expression slots, and balanced `{...}` blocks. Each occurrence is classified into one of seven categories (`event-handler`, `form-swap`, `click-swap`, `auto-fetch`, `oob-swap`, `boost`, `unmatched`) based on the attribute cluster, not individual attrs (recipes apply to clusters, not attrs in isolation). CLI emits per-category counts, top tags, sample line numbers, and a one-line migration recipe; `--json` for tooling. 24 tests covering classification (all 7 categories + tie-breaks + dash-variant `hx-on`) and real als-shaped fixtures (AddToBagButton, SearchInput, EmailAndPassword, ForgotPassword).
+- **W13-B** [`deco-start#130`](https://github.com/decocms/deco-start/pull/130) — `docs(skills): add htmx-rewrite reference` ✅ **MERGED**.
+  Per-pattern playbook at `.agents/skills/deco-to-tanstack-migration/references/htmx-rewrite.md`. For each of the seven categories: a "Before" snippet pulled directly from als (so the recipe is grounded in what an engineer is actually staring at), an "After" snippet using the canonical TanStack Start patterns (`useState` + `useCart`, `useNavigate`, `useMutation`, sub-routes), an explicit decision criterion when more than one path is reasonable (e.g. local state machine vs. sub-route for `click-swap`), and a "Gotchas" block enumerating the failure modes humans actually hit (focus loss, double-submit, hydration mismatch, etc.). Cross-linked from `SKILL.md`'s problem table.
+- **W13-C** [`deco-start#131`](https://github.com/decocms/deco-start/pull/131) — `feat(audit): htmx-residue rule` ✅ **MERGED**, released as `@decocms/start@2.21.0`.
+  Eighth audit rule. Reuses `analyzeFile` from `analyzers/htmx-analyze.ts` to scan `src/**/*.{ts,tsx}` (excluding `*.test.tsx` / `*.spec.ts` / `__tests__/`) and emits one warning per file with a category breakdown (`event-handler=2, form-swap=1`). Severity is `warning` so `--strict` exits 2 — the "rewrite-complete" CI gate. The fix string points at `references/htmx-rewrite.md`. Intentionally **detect-only** — rewrites are non-mechanical (state machine vs. sub-route vs. mutation choices vary per call site), so `--fix` wiring would be misleading; the skill is the playbook. 7 new tests cover aggregation, severity, test-file exclusion, scope (`src/` only), zero-finding gate, line-number reporting, and `supportsAutoFix: false`. Skill doc § 7 added explaining the rule + when to wire it into CI; help text updated.
+
+### Wave 13 — discoveries
+
+- **Heuristic JSX walking is enough; full AST is not needed for
+  this surface.** `analyzeFile` goes character-by-character with
+  brace-counting and string/template/comment skipping; it correctly
+  identifies attribute clusters in 100 % of the als-storefront and
+  internal-fixture sample (~120 files, ~270 hx-* attributes), and
+  the test corpus pins the tricky cases (dash-variant `hx-on-*`,
+  attached comments, balanced JSX expressions inside attributes,
+  multiline tags). Pulling in `@swc/core` or `recast` for this
+  would be over-engineering — the walker is ~150 LOC, deterministic,
+  and shares a single source of truth between the standalone CLI
+  (`deco-htmx-analyze`), the post-cleanup audit rule
+  (`htmx-residue`), and the per-pattern recipe references.
+- **Classify by attribute cluster, not by individual attribute.**
+  An `hx-on:click` and `hx-post + hx-target + hx-swap` get
+  fundamentally different rewrites. Categorising at the cluster
+  level (the JSX tag + all its hx-* attrs) means each finding
+  points at exactly one of seven recipes in
+  `references/htmx-rewrite.md`. This is the same discipline that
+  worked for `STUB_FIX_HINTS` in the vtex-shim rule: the data shape
+  encodes the actionability category, the rule is just a thin
+  classifier on top.
+- **D2 + W13-C form a closed loop, mirroring the W12 D3 + audit
+  pattern.** D2 says "no htmx runtime in `@decocms/start`". W13-C's
+  `htmx-residue` rule says "fail CI if any `hx-*` survives in
+  `src/`". Together: a migrated site cannot accidentally rely on
+  htmx because (a) the framework gives them no runtime to import,
+  (b) the audit catches every leftover `hx-*` in code review.
+- **Detect-only is correct here, not a stop-gap.** Auto-fixing
+  htmx is conceptually hard: even a "simple" `<button hx-post>` →
+  `useMutation` rewrite has to choose between optimistic vs
+  pessimistic UI, error handling shape, where to surface the
+  loading state, and whether the response should re-render the
+  whole page or a fragment. Each is a per-site product decision.
+  The pattern catalog in `references/htmx-rewrite.md` is the
+  durable artefact; codemods (Wave 14) can target a specific
+  cluster shape (e.g. `hx-post + hx-target=#id + hx-swap=innerHTML`
+  with no `hx-trigger`) safely, but they're scoped by category,
+  not the rule's auto-fix.
+- **The audit registry is now self-shaped for additive growth.**
+  Eight rules, three of which (`vtex-shim-regression`,
+  `obsolete-vite-plugins`, `htmx-residue`) ship with their own
+  analyzer modules. The pattern is set: add a rule to
+  `ALL_RULES`, supply `applyFix` only when mechanical, point the
+  prose `fix:` field and JSON `meta` at a skill reference. The CLI
+  (`migrate-post-cleanup.ts`) is rule-agnostic — adding a ninth
+  rule means changing one file, getting `--strict` and `--json`
+  for free.
 
 ### Wave 14 (htmx codemods + first als migration on 2.14+) — planned
 

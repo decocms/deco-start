@@ -986,3 +986,111 @@ export default defineConfig({
     expect(supported).toContain("obsolete-vite-plugins");
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* W13-C — htmx-residue rule                                           */
+/* ------------------------------------------------------------------ */
+
+describe("rule: htmx-residue", () => {
+  it("flags any leftover hx-* element in src/ with category breakdown", () => {
+    const fs = makeFs({
+      "/site/src/components/AddToBag.tsx":
+        '<button hx-on:click={() => {}}>buy</button>\n',
+      "/site/src/components/Search.tsx":
+        '<form hx-post="/x" hx-target="#r" hx-swap="innerHTML"><input/></form>\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "htmx-residue")!;
+    expect(r.findings).toHaveLength(2);
+    const summary = r.findings.map((f) => f.message).join(" | ");
+    expect(summary).toContain("event-handler=1");
+    expect(summary).toContain("form-swap=1");
+    expect(r.findings[0].fix).toContain("htmx-rewrite.md");
+  });
+
+  it("aggregates multiple occurrences in one file as a single finding", () => {
+    const fs = makeFs({
+      "/site/src/components/Big.tsx":
+        '<button hx-on:click={() => {}}>1</button>\n' +
+        '<button hx-on:click={() => {}}>2</button>\n' +
+        '<form hx-post="/x" hx-target="#r" hx-swap="innerHTML"><input/></form>\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "htmx-residue")!;
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].message).toContain("3 hx-* element(s)");
+    expect(r.findings[0].message).toContain("event-handler=2");
+    expect(r.findings[0].message).toContain("form-swap=1");
+    expect(r.findings[0].meta?.total).toBe(3);
+  });
+
+  it("emits warning severity (so --strict exits 2)", () => {
+    const fs = makeFs({
+      "/site/src/x.tsx": '<button hx-on:click={() => {}}>x</button>\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "htmx-residue")!;
+    expect(r.findings[0].severity).toBe("warning");
+  });
+
+  it("excludes test files (*.test.tsx, *.spec.ts, __tests__/) — they may legitimately reference hx-*", () => {
+    const fs = makeFs({
+      "/site/src/components/x.test.tsx":
+        '<button hx-on:click={() => {}}>x</button>\n',
+      "/site/src/components/y.spec.ts":
+        'expect(html).toContain("hx-post=\\"/x\\""); /* doesn\'t hit our regex */\n',
+      "/site/src/__tests__/csrf.tsx":
+        '<form hx-post="/x" hx-target="#r" hx-swap="innerHTML"><input/></form>\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "htmx-residue")!;
+    expect(r.findings).toEqual([]);
+  });
+
+  it("does NOT flag files outside src/ (the rule is scoped to migrated React tree)", () => {
+    const fs = makeFs({
+      // A pre-migration site might still have ./components/ at root.
+      // After migration that's gone; if the engineer left some stragglers
+      // in /scripts or /docs they don't block "rewrite-complete" gate.
+      "/site/scripts/legacy.tsx":
+        '<button hx-on:click={() => {}}>x</button>\n',
+      "/site/docs/example.tsx":
+        '<button hx-on:click={() => {}}>x</button>\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "htmx-residue")!;
+    expect(r.findings).toEqual([]);
+  });
+
+  it("returns zero findings on a clean migrated tree (the rewrite-complete gate)", () => {
+    const fs = makeFs({
+      "/site/src/components/Real.tsx":
+        '<button onClick={() => {}}>x</button>\n',
+      "/site/src/routes/index.tsx":
+        'export const Route = createFileRoute("/")({ component: () => <div/> });\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "htmx-residue")!;
+    expect(r.findings).toEqual([]);
+  });
+
+  it("reports the line number of the FIRST hx-* element in the file", () => {
+    const fs = makeFs({
+      "/site/src/x.tsx":
+        "import x from 'y';\n" +
+        "// header\n" +
+        '<button hx-on:click={() => {}}>x</button>\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "htmx-residue")!;
+    expect(r.findings[0].file).toBe("src/x.tsx:3");
+    expect(r.findings[0].meta?.firstLine).toBe(3);
+  });
+
+  it("does NOT support auto-fix (rewrites are non-mechanical)", () => {
+    const fs = makeFs({});
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "htmx-residue")!;
+    expect(r.supportsAutoFix).toBe(false);
+  });
+});
