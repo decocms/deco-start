@@ -1,12 +1,18 @@
 # Vite Configuration
 
-## Final Config (Post-Migration)
+For the canonical battle-tested template (with VTEX dev proxy, CSP headers,
+React Compiler, dedupe, framework plugin, and rollup chunk strategy) see
+[`../../templates/vite-config.md`](../../templates/vite-config.md).
 
-After all imports are rewritten, the config should be minimal:
+This page covers the post-migration **minimum viable config** if you've
+stripped everything optional. Real sites should use the full template.
+
+## Minimum Viable Config
 
 ```typescript
 import { cloudflare } from "@cloudflare/vite-plugin";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
+import { decoVitePlugin } from "@decocms/start/vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
@@ -24,8 +30,23 @@ export default defineConfig({
       },
     }),
     tailwindcss(),
+    // Required — server-only stubs, blocks.gen.ts fast-path, meta.gen
+    // client stub, daemon/tunnel for dev mode. Without this, client
+    // bundle crashes on node:async_hooks / react-dom/server transitively
+    // imported by @decocms/start.
+    decoVitePlugin(),
   ],
   resolve: {
+    // Required — dedupe React/TanStack/Deco packages so there's only one
+    // instance of each. Without this you get "Invalid hook call" errors.
+    dedupe: [
+      "@decocms/start",
+      "@decocms/apps",
+      "@tanstack/react-start",
+      "@tanstack/react-router",
+      "react",
+      "react-dom",
+    ],
     alias: {
       "~": srcDir,
     },
@@ -34,6 +55,10 @@ export default defineConfig({
 ```
 
 **One alias only**: `~` -> `src/`. Nothing else.
+
+The `decoVitePlugin()` call is **mandatory** — the older skill examples
+that omitted it (or inlined the stub logic) reflect the pre-2.x state of
+`@decocms/start` and will produce build/runtime failures on current versions.
 
 ## tsconfig.json
 
