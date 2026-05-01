@@ -1,3 +1,5 @@
+export type { PageSeo } from "../cms/resolve";
+export type { Device } from "../sdk/useDevice";
 export {
   decoInvokeRoute,
   decoMetaRoute,
@@ -15,5 +17,8 @@ export {
   setSectionChunkMap,
 } from "./cmsRoute";
 export { CmsPage, NotFoundPage } from "./components";
-export type { PageSeo } from "../cms/resolve";
-export type { Device } from "../sdk/useDevice";
+export {
+  resolveSiteGlobals,
+  type SiteGlobalsLoaderData,
+  withSiteGlobals,
+} from "./withSiteGlobals";
