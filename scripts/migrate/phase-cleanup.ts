@@ -1005,42 +1005,38 @@ function upgradeSectionRenderer(ctx: MigrationContext) {
 }
 
 /**
- * Rewrite imports from @decocms/apps/vtex/utils/* and other non-existent modules
- * to use the simplified ~/lib/ wrappers generated during scaffold.
+ * Cleanup pass for VTEX-style transform / signature workarounds.
  *
- * This handles:
- * - @decocms/apps/vtex/utils/transform → ~/lib/vtex-transform
- * - @decocms/apps/vtex/utils/intelligentSearch → ~/lib/vtex-intelligent-search
- * - @decocms/apps/vtex/utils/segment → ~/lib/vtex-segment
- * - @decocms/apps/vtex/client (VTEXCommerceStable) → ~/lib/vtex-client
- * - @decocms/apps/vtex/loaders/intelligentSearch/* → inline stubs
- * - createHttpClient from various sources → ~/lib/http-utils
- * - STALE constant → ~/lib/fetch-utils
- * - Typed HTTP client patterns → simplified fetch
+ * Historical context:
+ * Earlier versions of this script rewrote `@decocms/apps/vtex/utils/*` imports
+ * to local `~/lib/vtex-*` shims because those modules did not exist yet in
+ * `@decocms/apps`. They now do (apps-start exports `./vtex/utils/*` and
+ * `./vtex/client` directly), so any further rewrite would actively REGRESS
+ * working direct imports back into NO-OP shims and silently break runtime
+ * behavior on every migrated site.
+ *
+ * Scope kept here:
+ * - `@decocms/apps/vtex/loaders/intelligentSearch/*` → inline stubs
+ *   (loaders moved under `inline-loaders/` in apps-start; this is still a
+ *    real path-mismatch fixup)
+ * - `LabelledFuzzy` type + `mapLabelledFuzzyToFuzzy` helper inlined when
+ *   `intelligentSearch/productListingPage` is imported
+ * - `createHttpClient<Type>(...)` → `createHttpClient(...)` (Proxy handles types)
+ * - `fetcher: fetchSafe,` parameter strip (Proxy uses native fetch)
+ * - Inline stub hoisting: when a Fresh loader declares
+ *   `const getSegmentFromBag = ... = ({})` etc, hoist them into imports from
+ *   the corresponding `~/lib/*` shim so multiple loaders stay in sync
+ *
+ * What was removed:
+ * The four `@decocms/apps/vtex/utils/* → ~/lib/vtex-*` rewrites that the
+ * first-pass `transforms/imports.ts` (lines 50-52) already produces in the
+ * correct, direct form. See discovery notes in MIGRATION_TOOLING_PLAN.md.
  */
 function rewriteVtexUtilImports(ctx: MigrationContext) {
-  const importRewrites: Array<{ pattern: RegExp; replacement: string; desc: string }> = [
-    {
-      pattern: /from\s+["']@decocms\/apps\/vtex\/utils\/transform["']/g,
-      replacement: 'from "~/lib/vtex-transform"',
-      desc: "vtex/utils/transform → ~/lib/vtex-transform",
-    },
-    {
-      pattern: /from\s+["']@decocms\/apps\/vtex\/utils\/intelligentSearch["']/g,
-      replacement: 'from "~/lib/vtex-intelligent-search"',
-      desc: "vtex/utils/intelligentSearch → ~/lib/vtex-intelligent-search",
-    },
-    {
-      pattern: /from\s+["']@decocms\/apps\/vtex\/utils\/segment["']/g,
-      replacement: 'from "~/lib/vtex-segment"',
-      desc: "vtex/utils/segment → ~/lib/vtex-segment",
-    },
-    {
-      pattern: /from\s+["']@decocms\/apps\/vtex\/client["']/g,
-      replacement: 'from "~/lib/vtex-client"',
-      desc: "vtex/client → ~/lib/vtex-client",
-    },
-  ];
+  // Intentionally empty — see docstring. First-pass `transforms/imports.ts`
+  // already maps `apps/vtex/utils/*` and `apps/vtex/client` directly to the
+  // `@decocms/apps` equivalents; rewriting them again here would dead-shim them.
+  const importRewrites: Array<{ pattern: RegExp; replacement: string; desc: string }> = [];
 
   rewriteFilesRecursive(ctx, path.join(ctx.sourceDir, "src"), (content, relPath) => {
     if (!relPath.endsWith(".tsx") && !relPath.endsWith(".ts")) return null;
