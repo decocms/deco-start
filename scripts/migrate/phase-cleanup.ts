@@ -1503,9 +1503,10 @@ export function cleanup(ctx: MigrationContext): void {
  * Sites that import none of the shims end up with no `src/lib/` directory
  * at all, instead of 11 dead files.
  *
- * Returns the set of specifiers actually written so the caller can log.
+ * Exported (rather than file-local) for unit testability — see
+ * `phase-cleanup.test.ts`.
  */
-function writeImportedLibShims(ctx: MigrationContext): void {
+export function writeImportedLibShims(ctx: MigrationContext): void {
   const srcRoot = path.join(ctx.sourceDir, "src");
   if (!fs.existsSync(srcRoot)) return;
 
@@ -1559,17 +1560,22 @@ function writeImportedLibShims(ctx: MigrationContext): void {
   }
 
   const toWrite = selectImportedLibTemplates(importedSpecifiers);
+  if (Object.keys(toWrite).length === 0) return;
+
+  if (ctx.dryRun) {
+    for (const relPath of Object.keys(toWrite)) {
+      log(ctx, `  [DRY] Would write: ${relPath}`);
+    }
+    return;
+  }
+
   const libDir = path.join(srcRoot, "lib");
-  if (Object.keys(toWrite).length > 0 && !fs.existsSync(libDir)) {
+  if (!fs.existsSync(libDir)) {
     fs.mkdirSync(libDir, { recursive: true });
   }
 
   for (const [relPath, content] of Object.entries(toWrite)) {
     const fullPath = path.join(ctx.sourceDir, relPath);
-    if (ctx.dryRun) {
-      log(ctx, `  [DRY] Would write: ${relPath}`);
-      continue;
-    }
     fs.writeFileSync(fullPath, content, "utf-8");
     log(ctx, `  Wrote: ${relPath}`);
   }
