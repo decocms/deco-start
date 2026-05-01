@@ -17,7 +17,8 @@ of which sections below actually apply to your codebase:
 npx -p @decocms/start deco-post-cleanup
 
 # Auto-apply mechanical fixes for the safe rules, then report what's left.
-# Safe rules: dead-lib-shims, dead-runtime-shim, local-widgets-types.
+# Safe rules: dead-lib-shims, dead-runtime-shim, local-widgets-types,
+# vtex-shim-regression (swap subset), obsolete-vite-plugins.
 # Other rules stay detect-only — they require human judgment.
 npx -p @decocms/start deco-post-cleanup --fix
 
@@ -29,18 +30,23 @@ npx -p @decocms/start deco-post-cleanup --json
 ```
 
 The audit covers all 7 rules below and prints the exact file path +
-suggested fix for each finding. With `--fix`, the three safe rules
-auto-apply (`rm` for dead files, regex-anchored import rewrites for
-shadowed shims). The output explicitly tags rules that require manual
-work as `(0 fixed, manual)`, so you always know what's left after
-auto-fix runs.
+suggested fix for each finding. With `--fix`, the safe rules
+auto-apply: `rm` for dead files, regex-anchored import rewrites for
+shadowed shims (`local-widgets-types`, `dead-runtime-shim`), the swap
+subset of `vtex-shim-regression`, and JS-aware removal of obsolete
+inline plugin literals from `vite.config.ts`. The output explicitly
+tags rules that require manual work as `(0 fixed, manual)`, so you
+always know what's left after auto-fix runs.
 
 Real-world signal: on baggagio, `--fix` produced a byte-identical
 diff to the manual cleanup PR a human had just made (45 files,
 +45/-53). On casaevideo-storefront (production), the audit caught
 six silent VTEX shim regressions that no `tsc --noEmit` run can
-detect — those still require manual cleanup until rule 5 gains a
-per-shim mapping table.
+detect — `--fix` covers the swap subset of those automatically since
+`>= 2.16.0`. On the same site's `vite.config.ts`, `--fix` removes
+both obsolete inline plugins (`site-manual-chunks` +
+`deco-stub-meta-gen`) cleanly — ~74 LOC / 2.5 KB gone, attached
+comments included.
 
 ## 1. Delete unused `src/lib/*` shims
 
@@ -115,8 +121,14 @@ The framework's `decoVitePlugin()` now handles both:
   old split caused circular-dep load-order crashes — every site overrode it)
 - `meta.gen.{json,ts}` is stubbed on the client by default
 
-Delete both inline plugins from the site's `vite.config.ts`. Verify the
-production build still succeeds (`vite build` in the site repo).
+Delete both inline plugins from the site's `vite.config.ts`. Since
+`@decocms/start >= 2.19.0`, `deco-post-cleanup --fix` does this for
+you — it walks the AST with brace-balanced parsing (template literals
+and nested `{}` inside `config()`/`load()` bodies don't trip it up),
+removes the literal **plus its trailing comma + attached `// ...`
+comment block**, and is idempotent (rerunning is a no-op). Block
+comments are left alone. Verify the production build still succeeds
+(`vite build` in the site repo).
 
 ## 3. Drop the `runtime.ts` `invoke` shim
 
