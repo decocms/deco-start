@@ -18,6 +18,7 @@ import { generateCommerceLoaders } from "./templates/commerce-loaders";
 import { generateSectionLoaders } from "./templates/section-loaders";
 import { generateCacheConfig } from "./templates/cache-config";
 import { generateSdkFiles } from "./templates/sdk-gen";
+import { generateMigrationPolicyPointerRule } from "./templates/cursor-rules";
 // `lib-utils` is imported lazily — see end of phase-cleanup. Eager
 // generation of all 11 shims left every site with dead code that had
 // to be cleaned up by hand.
@@ -138,6 +139,17 @@ export function scaffold(ctx: MigrationContext): void {
   if (usesSiteTheme) {
     writeFile(ctx, "src/components/ui/Theme.tsx", generateSiteThemeComponent());
   }
+
+  // Migration tooling policy pointer rule (D1–D5 + priorities).
+  // The canonical rule lives in decocms/deco-start; this is a tiny
+  // pointer that loads on every Cursor session in the migrated site
+  // so agents working on the site know where the policy is and what
+  // it means here. See MIGRATION_TOOLING_PLAN.md (Wave 12-H).
+  writeFile(
+    ctx,
+    ".cursor/rules/migration-tooling-policy.mdc",
+    generateMigrationPolicyPointerRule(ctx.siteName),
+  );
 
   // Create public/ directory
   if (!ctx.dryRun) {
