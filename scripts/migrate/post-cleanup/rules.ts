@@ -944,6 +944,181 @@ const ruleFrameworkTodos: Rule = {
 };
 
 /* ------------------------------------------------------------------ */
+/* Rule — `local-framework-duplicate` — site-local copy of fwk code   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Registry of files we expect sites to NOT carry locally because the
+ * canonical implementation already lives in `@decocms/start` (or a
+ * sibling apps package).
+ *
+ * Two flavours:
+ *  - `safeToAutoFix: true`  — site file is a behaviour-equivalent dup
+ *    of the framework export. `--fix` rewrites every `from "~/<path>"`
+ *    importer to `from "<canonicalImport>"` and deletes the file.
+ *  - `safeToAutoFix: false` — site file *overlaps* with framework code
+ *    but isn't a clean drop-in (different typing, partial coverage,
+ *    stricter behaviour, etc.). The rule still flags it so the entry
+ *    surfaces in audits, but never deletes — the `reason` explains why
+ *    a human has to make the call.
+ *
+ * `contentSignature` regexes ALL must match the site file's contents
+ * before the rule fires. They are deliberately specific enough to
+ * avoid catching forks that happen to share a filename but have
+ * diverged.
+ */
+interface FrameworkDuplicate {
+  /** Stable id surfaced in finding meta and CLI/JSON output. */
+  id: string;
+  /** Site-relative path of the duplicated file (e.g. "src/sdk/clx.ts"). */
+  sitePath: string;
+  /** Canonical import to rewrite to. */
+  canonicalImport: string;
+  /**
+   * Heuristic content fingerprint. The site file must match every
+   * regex for the rule to consider it the framework dup.
+   */
+  contentSignature: RegExp[];
+  /**
+   * When true, the rule's `applyFix` will rewrite all importers and
+   * delete the file. When false, the rule emits a warning only —
+   * `reason` explains the manual judgement required.
+   */
+  safeToAutoFix: boolean;
+  /**
+   * Required when `safeToAutoFix: false`. Surfaces in the finding's
+   * `fix:` field so users see *why* the auto-fix is gated.
+   */
+  reason?: string;
+  /**
+   * Human-readable one-liner shown in the finding message and used
+   * to compose the `fix:` hint when auto-fixable.
+   */
+  description: string;
+}
+
+/**
+ * Add an entry here when:
+ *  - 1+ migrated sites carry their own copy of code that already
+ *    exists in `@decocms/start` (or a sibling apps package), AND
+ *  - the canonical version is at least feature-equivalent.
+ *
+ * Per D4 in the migration tooling policy, the framework promotion
+ * itself happens at 3+ sites — but once promoted, this registry is
+ * how we *enforce* convergence on the remaining sites.
+ */
+export const FRAMEWORK_DUPLICATES: FrameworkDuplicate[] = [
+  {
+    id: "clx",
+    sitePath: "src/sdk/clx.ts",
+    canonicalImport: "@decocms/start/sdk/clx",
+    contentSignature: [
+      /export\s+const\s+clx\s*=/,
+      /args\.filter\(Boolean\)\.join/,
+    ],
+    safeToAutoFix: true,
+    description: "src/sdk/clx.ts duplicates @decocms/start/sdk/clx",
+  },
+  {
+    id: "use-send-event",
+    sitePath: "src/sdk/useSendEvent.ts",
+    canonicalImport: "@decocms/start/sdk/analytics",
+    contentSignature: [
+      /export\s+(?:const|function)\s+useSendEvent/,
+      /data-event/,
+      /encodeURIComponent/,
+    ],
+    safeToAutoFix: false,
+    reason:
+      "site copy uses a typed AnalyticsEvent generic; the framework export is permissive. " +
+      "Replacing 1:1 weakens type-safety. Either widen the framework export (preferred), or " +
+      "rewrite call sites to drop the generic. Manual review required.",
+    description:
+      "src/sdk/useSendEvent.ts overlaps with @decocms/start/sdk/analytics → useSendEvent",
+  },
+  {
+    id: "location-matcher",
+    sitePath: "src/matchers/location.ts",
+    canonicalImport: "@decocms/start/matchers/builtins",
+    contentSignature: [
+      /registerMatcher\(\s*['"]website\/matchers\/location\.ts['"]/,
+      /__cf_geo/,
+    ],
+    safeToAutoFix: false,
+    reason:
+      "framework's registerBuiltinMatchers() ships a richer location matcher (request.cf + " +
+      "geo cookies + headers + 10 sibling matchers). Adopting it changes behaviour: " +
+      "verify country-name lookup parity (resolveCountryCode vs site's inline table) and " +
+      "swap setup.ts's customMatchers entry to call registerBuiltinMatchers().",
+    description:
+      "src/matchers/location.ts overlaps with @decocms/start/matchers/builtins → registerBuiltinMatchers()",
+  },
+];
+
+const ruleLocalFrameworkDuplicate: Rule = {
+  id: "local-framework-duplicate",
+  title: "Site-local copy of framework code",
+  run({ siteDir, fs }: RuleContext): Finding[] {
+    const findings: Finding[] = [];
+    for (const dup of FRAMEWORK_DUPLICATES) {
+      const abs = `${siteDir}/${dup.sitePath}`;
+      if (!fs.exists(abs)) continue;
+      const content = fs.readText(abs);
+      const matchesAll = dup.contentSignature.every((re) => re.test(content));
+      if (!matchesAll) continue;
+
+      const fixMessage = dup.safeToAutoFix
+        ? `Auto-fixable: rewrite \`from "~/${stripExt(dup.sitePath.replace(/^src\//, ""))}"\` → \`from "${dup.canonicalImport}"\` and delete ${dup.sitePath}.`
+        : dup.reason ?? "Manual review required.";
+
+      findings.push({
+        rule: "local-framework-duplicate",
+        severity: "warning",
+        file: dup.sitePath,
+        message: `${dup.description}${dup.safeToAutoFix ? " (pure dup)" : " (partial overlap)"}`,
+        fix: fixMessage,
+        meta: {
+          id: dup.id,
+          canonicalImport: dup.canonicalImport,
+          safeToAutoFix: dup.safeToAutoFix,
+          ...(dup.reason ? { reason: dup.reason } : {}),
+        },
+      });
+    }
+    return findings;
+  },
+  applyFix(ctx, findings, writer): FixAction[] {
+    const actions: FixAction[] = [];
+    for (const f of findings) {
+      const id = f.meta?.id as string | undefined;
+      const safe = f.meta?.safeToAutoFix === true;
+      if (!safe || !id) continue;
+      const dup = FRAMEWORK_DUPLICATES.find((d) => d.id === id);
+      if (!dup) continue;
+
+      const siteImportSpec = `~/${stripExt(dup.sitePath.replace(/^src\//, ""))}`;
+      const updated = rewriteImportSpec(
+        ctx,
+        writer,
+        siteImportSpec,
+        dup.canonicalImport,
+      );
+      writer.deleteFile(`${ctx.siteDir}/${dup.sitePath}`);
+      actions.push({
+        file: dup.sitePath,
+        kind: "rewrite-imports+delete",
+        detail: `rewrote ${updated.length} import(s) "${siteImportSpec}" → "${dup.canonicalImport}" and deleted ${dup.sitePath}`,
+      });
+    }
+    return actions;
+  },
+};
+
+function stripExt(path: string): string {
+  return path.replace(/\.(ts|tsx|js|jsx|mjs)$/, "");
+}
+
+/* ------------------------------------------------------------------ */
 /* Rule 8 — `htmx-residue` — leftover hx-* attrs in migrated src/      */
 /* ------------------------------------------------------------------ */
 
@@ -1021,6 +1196,7 @@ export const ALL_RULES: Rule[] = [
   ruleVtexShimRegression,
   ruleLocalWidgetsTypes,
   ruleFrameworkTodos,
+  ruleLocalFrameworkDuplicate,
   ruleHtmxResidue,
 ];
 
@@ -1037,5 +1213,6 @@ export const _internals = {
     ruleHtmxResidue,
     ruleLocalWidgetsTypes,
     ruleFrameworkTodos,
+    ruleLocalFrameworkDuplicate,
   },
 };

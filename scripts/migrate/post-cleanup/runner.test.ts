@@ -666,6 +666,7 @@ describe("runAudit — totals", () => {
       [
         "dead-lib-shims",
         "dead-runtime-shim",
+        "local-framework-duplicate",
         "local-widgets-types",
         "obsolete-vite-plugins",
         "vtex-shim-regression",
@@ -1168,5 +1169,195 @@ describe("rule: htmx-residue", () => {
     const report = runAudit(SITE, fs);
     const r = report.rules.find((r) => r.rule === "htmx-residue")!;
     expect(r.supportsAutoFix).toBe(false);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* W15-B-1 — local-framework-duplicate rule                            */
+/* ------------------------------------------------------------------ */
+
+describe("rule: local-framework-duplicate", () => {
+  it("flags src/sdk/clx.ts when content matches the framework export (auto-fixable)", () => {
+    const fs = makeFs({
+      "/site/src/sdk/clx.ts":
+        "export const clx = (...args: (string | null | undefined | false)[]) =>\n" +
+        '  args.filter(Boolean).join(" ").replace(/\\s\\s+/g, " ");\n' +
+        "export default clx;\n",
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "local-framework-duplicate")!;
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].file).toBe("src/sdk/clx.ts");
+    expect(r.findings[0].message).toContain("pure dup");
+    expect(r.findings[0].meta?.id).toBe("clx");
+    expect(r.findings[0].meta?.safeToAutoFix).toBe(true);
+    expect(r.findings[0].meta?.canonicalImport).toBe("@decocms/start/sdk/clx");
+  });
+
+  it("flags src/sdk/clx.ts when site adds a clsx alias (signature still matches)", () => {
+    const fs = makeFs({
+      "/site/src/sdk/clx.ts":
+        "export const clx = (...args: (string | null | undefined | false)[]) =>\n" +
+        '  args.filter(Boolean).join(" ").replace(/\\s\\s+/g, " ");\n' +
+        "export const clsx = clx;\n" +
+        "export default clx;\n",
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "local-framework-duplicate")!;
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].meta?.id).toBe("clx");
+    expect(r.findings[0].meta?.safeToAutoFix).toBe(true);
+  });
+
+  it("does NOT flag a clx.ts that has been forked (signature mismatch)", () => {
+    const fs = makeFs({
+      // Realistic fork: uses lodash-style cn from a different package.
+      "/site/src/sdk/clx.ts":
+        'import { cn } from "lodash";\nexport const clx = cn;\nexport default clx;\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "local-framework-duplicate")!;
+    expect(r.findings).toEqual([]);
+  });
+
+  it("flags src/sdk/useSendEvent.ts as warn-only (typing regression risk)", () => {
+    const fs = makeFs({
+      "/site/src/sdk/useSendEvent.ts":
+        'import { AnalyticsEvent } from "@decocms/apps/commerce/types";\n' +
+        "export const useSendEvent = <E extends AnalyticsEvent>(\n" +
+        "  { event, on }: { event: E; on: 'click' | 'view' | 'change' },\n" +
+        ") => ({\n" +
+        '  "data-event": encodeURIComponent(JSON.stringify(event)),\n' +
+        '  "data-event-trigger": on,\n' +
+        "});\n",
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "local-framework-duplicate")!;
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].file).toBe("src/sdk/useSendEvent.ts");
+    expect(r.findings[0].message).toContain("partial overlap");
+    expect(r.findings[0].meta?.safeToAutoFix).toBe(false);
+    expect(r.findings[0].fix).toContain("typed AnalyticsEvent generic");
+  });
+
+  it("flags src/matchers/location.ts as warn-only (behaviour-superset opportunity)", () => {
+    const fs = makeFs({
+      "/site/src/matchers/location.ts":
+        'import { registerMatcher } from "@decocms/start/cms";\n' +
+        "export function registerLocationMatcher(): void {\n" +
+        '  registerMatcher("website/matchers/location.ts", (rule, ctx) => {\n' +
+        "    const cookies = ctx.cookies ?? {};\n" +
+        "    const country = cookies.__cf_geo_country ?? '';\n" +
+        "    return Boolean(country);\n" +
+        "  });\n" +
+        "}\n",
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "local-framework-duplicate")!;
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].file).toBe("src/matchers/location.ts");
+    expect(r.findings[0].meta?.safeToAutoFix).toBe(false);
+    expect(r.findings[0].fix).toContain("registerBuiltinMatchers");
+  });
+
+  it("emits zero findings on a clean tree (no duplicates present)", () => {
+    const fs = makeFs({
+      "/site/src/sections/Hello.tsx":
+        'import { clx } from "@decocms/start/sdk/clx";\nexport default () => <div className={clx("a")}>x</div>;\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "local-framework-duplicate")!;
+    expect(r.findings).toEqual([]);
+  });
+
+  it("emits warning severity for both auto-fixable AND warn-only entries (--strict gates everything)", () => {
+    const fs = makeFs({
+      "/site/src/sdk/clx.ts":
+        'export const clx = (...args: any[]) => args.filter(Boolean).join(" ").replace(/\\s\\s+/g, " ");\n',
+      "/site/src/sdk/useSendEvent.ts":
+        'export const useSendEvent = (e: any) => ({ "data-event": encodeURIComponent(JSON.stringify(e)) });\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "local-framework-duplicate")!;
+    for (const f of r.findings) expect(f.severity).toBe("warning");
+  });
+
+  it("auto-fix rewrites importers using ~/sdk/clx and deletes the file", () => {
+    const { fs, writer, store } = makeMutableFs({
+      "/site/src/sdk/clx.ts":
+        'export const clx = (...args: any[]) => args.filter(Boolean).join(" ").replace(/\\s\\s+/g, " ");\n',
+      "/site/src/components/A.tsx":
+        'import { clx } from "~/sdk/clx";\nexport default () => clx("x");\n',
+      "/site/src/components/B.tsx":
+        'import { clx } from "~/sdk/clx";\nimport React from "react";\nexport default () => clx("y");\n',
+      "/site/src/components/Unrelated.tsx":
+        'import { clx } from "@decocms/start/sdk/clx";\nexport default () => clx("z");\n',
+    });
+    const report = runAudit(SITE, fs, { writer });
+    const r = report.rules.find((r) => r.rule === "local-framework-duplicate")!;
+    expect(r.fixes).toBeDefined();
+    expect(r.fixes!.length).toBe(1);
+    expect(r.fixes![0].kind).toBe("rewrite-imports+delete");
+    expect(r.fixes![0].detail).toContain("rewrote 2 import(s)");
+    // File deleted from the in-memory store
+    expect(store["/site/src/sdk/clx.ts"]).toBeUndefined();
+    // Importers rewritten
+    expect(store["/site/src/components/A.tsx"]).toContain(
+      'from "@decocms/start/sdk/clx"',
+    );
+    expect(store["/site/src/components/B.tsx"]).toContain(
+      'from "@decocms/start/sdk/clx"',
+    );
+    // Already-canonical import untouched
+    expect(store["/site/src/components/Unrelated.tsx"]).toContain(
+      'from "@decocms/start/sdk/clx"',
+    );
+    expect(store["/site/src/components/Unrelated.tsx"]).not.toMatch(/~\/sdk\/clx/);
+  });
+
+  it("auto-fix is a no-op for warn-only entries (does NOT delete partial-overlap files)", () => {
+    const { fs, writer, store } = makeMutableFs({
+      "/site/src/sdk/useSendEvent.ts":
+        'import { AnalyticsEvent } from "@decocms/apps/commerce/types";\n' +
+        "export const useSendEvent = <E extends AnalyticsEvent>() => ({\n" +
+        '  "data-event": encodeURIComponent("x"),\n' +
+        "});\n",
+      "/site/src/matchers/location.ts":
+        'import { registerMatcher } from "@decocms/start/cms";\n' +
+        'registerMatcher("website/matchers/location.ts", () => Boolean(__cf_geo_country));\n',
+    });
+    const report = runAudit(SITE, fs, { writer });
+    const r = report.rules.find((r) => r.rule === "local-framework-duplicate")!;
+    expect(r.findings.length).toBe(2);
+    // Both fixes are no-ops because safeToAutoFix === false.
+    expect(r.fixes ?? []).toEqual([]);
+    // Files preserved.
+    expect(store["/site/src/sdk/useSendEvent.ts"]).toBeDefined();
+    expect(store["/site/src/matchers/location.ts"]).toBeDefined();
+  });
+
+  it("auto-fix runs only on auto-fixable entries when both kinds coexist", () => {
+    const { fs, writer, store } = makeMutableFs({
+      "/site/src/sdk/clx.ts":
+        'export const clx = (...args: any[]) => args.filter(Boolean).join(" ").replace(/\\s\\s+/g, " ");\n',
+      "/site/src/sdk/useSendEvent.ts":
+        'export const useSendEvent = (e: any) => ({ "data-event": encodeURIComponent(JSON.stringify(e)) });\n',
+      "/site/src/components/A.tsx":
+        'import { clx } from "~/sdk/clx";\nexport default () => clx("x");\n',
+    });
+    const report = runAudit(SITE, fs, { writer });
+    const r = report.rules.find((r) => r.rule === "local-framework-duplicate")!;
+    expect(r.findings.length).toBe(2);
+    expect(r.fixes!.length).toBe(1); // only clx auto-fixed
+    expect(r.fixes![0].file).toBe("src/sdk/clx.ts");
+    expect(store["/site/src/sdk/clx.ts"]).toBeUndefined();
+    expect(store["/site/src/sdk/useSendEvent.ts"]).toBeDefined();
+  });
+
+  it("supportsAutoFix is true (the rule has applyFix even though some entries are warn-only)", () => {
+    const fs = makeFs({});
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "local-framework-duplicate")!;
+    expect(r.supportsAutoFix).toBe(true);
   });
 });

@@ -18,8 +18,10 @@ npx -p @decocms/start deco-post-cleanup
 
 # Auto-apply mechanical fixes for the safe rules, then report what's left.
 # Safe rules: dead-lib-shims, dead-runtime-shim, local-widgets-types,
-# vtex-shim-regression (swap subset), obsolete-vite-plugins.
-# Other rules stay detect-only — they require human judgment.
+# vtex-shim-regression (swap subset), obsolete-vite-plugins,
+# local-framework-duplicate (auto-fixable subset of the registry).
+# Other rules — and the warn-only entries of local-framework-duplicate —
+# stay detect-only. They require human judgment.
 npx -p @decocms/start deco-post-cleanup --fix
 
 # Combine for CI: auto-fix safe rules, fail (exit 2) if warnings remain.
@@ -29,14 +31,16 @@ npx -p @decocms/start deco-post-cleanup --fix --strict
 npx -p @decocms/start deco-post-cleanup --json
 ```
 
-The audit covers all 7 rules below and prints the exact file path +
+The audit covers all 9 rules below and prints the exact file path +
 suggested fix for each finding. With `--fix`, the safe rules
 auto-apply: `rm` for dead files, regex-anchored import rewrites for
 shadowed shims (`local-widgets-types`, `dead-runtime-shim`), the swap
-subset of `vtex-shim-regression`, and JS-aware removal of obsolete
-inline plugin literals from `vite.config.ts`. The output explicitly
-tags rules that require manual work as `(0 fixed, manual)`, so you
-always know what's left after auto-fix runs.
+subset of `vtex-shim-regression`, JS-aware removal of obsolete
+inline plugin literals from `vite.config.ts`, and rewrite-imports +
+delete for the auto-fixable subset of `local-framework-duplicate`
+(see § 8). The output explicitly tags rules that require manual work
+as `(0 fixed, manual)`, so you always know what's left after auto-fix
+runs.
 
 Real-world signal: on baggagio, `--fix` produced a byte-identical
 diff to the manual cleanup PR a human had just made (45 files,
@@ -398,7 +402,58 @@ In `--strict` mode any residue exits 2 — wire that into CI once a
 site has finished its HTMX rewrite to prevent regressions sneaking
 back in via copy-paste from a Fresh source.
 
-## 8. Search for orphan `TODO: move into framework` comments
+## 8. Drop site-local copies of framework code (`local-framework-duplicate`)
+
+The audit's `local-framework-duplicate` rule encodes a registry of
+files we expect sites to NOT carry locally because the canonical
+implementation already ships in `@decocms/start`. New entries go in
+`scripts/migrate/post-cleanup/rules.ts → FRAMEWORK_DUPLICATES`.
+
+Two kinds of finding:
+
+| Kind | Auto-fix | Example | What you do |
+|---|---|---|---|
+| **Pure dup** (`safeToAutoFix: true`) | YES | `src/sdk/clx.ts` matches `@decocms/start/sdk/clx` byte-for-byte | `--fix` rewrites every `from "~/sdk/clx"` to `from "@decocms/start/sdk/clx"` and deletes the file. Zero behavior change. |
+| **Partial overlap** (`safeToAutoFix: false`) | NO | `src/sdk/useSendEvent.ts` (typed) overlaps `@decocms/start/sdk/analytics → useSendEvent` (permissive) | The rule emits a `warning` with a `reason` explaining the manual judgement: widen the framework export, accept type loss, or fork on purpose. Human picks. |
+
+### How the rule fires
+
+The site file must match every regex in `contentSignature` before
+the rule treats it as the framework dup. This is conservative on
+purpose — sites that genuinely forked the helper (added platform
+logic, wrapped in something else) are skipped automatically.
+
+### Current registry
+
+| Site path | Canonical | Auto-fix? | Reason / status |
+|---|---|---|---|
+| `src/sdk/clx.ts` | `@decocms/start/sdk/clx` | yes | Identical implementation; baggagio's extra `clsx` alias has zero callers. |
+| `src/sdk/useSendEvent.ts` | `@decocms/start/sdk/analytics` | no | Site copy uses `<E extends AnalyticsEvent>` generic; framework export is permissive. Replace 1:1 = type-safety loss. Either widen the framework first or accept the loss. |
+| `src/matchers/location.ts` | `@decocms/start/matchers/builtins` | no | Framework's `registerBuiltinMatchers()` ships a richer location matcher (`request.cf` first, geo cookies fallback, headers fallback) plus 10 sibling matchers. Adopting changes behaviour — verify country-name lookup parity, swap `setup.ts`'s `customMatchers` entry. |
+
+### Adding a new entry
+
+When you spot a site carrying its own copy of code that lives in
+`@decocms/start`, add an entry to `FRAMEWORK_DUPLICATES`:
+
+```ts
+{
+  id: "<short-stable-id>",
+  sitePath: "src/<path>.ts",
+  canonicalImport: "@decocms/start/<path>",
+  contentSignature: [/<regex 1>/, /<regex 2>/],
+  safeToAutoFix: true | false,
+  reason: "<required when not safeToAutoFix>",
+  description: "<one-liner used in finding message>",
+}
+```
+
+Per **D4** in the migration tooling policy, the framework promotion
+itself happens at 3+ sites. This registry is the *enforcement* layer
+once promoted: every other site picks up the convergence
+automatically the next time `deco-post-cleanup --fix` runs.
+
+## 9. Search for orphan `TODO: move into framework` comments
 
 Real sites accumulate `TODO` comments like `// TODO: move into decoVitePlugin
 in next @decocms/start release`. These are roadmap items the framework
@@ -415,7 +470,7 @@ For each hit, decide:
 
 ## Verification checklist
 
-After completing 1-8:
+After completing 1-9:
 
 - [ ] `npm run typecheck` baseline matches pre-cleanup count (no new errors)
 - [ ] `npm run dev` starts and `/`, `/some-pdp/p`, `/s?q=foo` all render

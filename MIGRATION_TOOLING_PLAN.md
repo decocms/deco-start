@@ -1128,6 +1128,97 @@ had no skill coverage. Wave 15-A closes both loops in one PR.
   `useSendEvent`/`clx`/location-matcher imports, `relative()`
   SKU-stripping extension. Sequenced after 15-A merges.
 
+### Wave 15-B-1 (cross-site convergence — `local-framework-duplicate` audit rule) — 🟡 **IN FLIGHT**
+
+First slice of the cross-site-convergence backlog deferred from
+Wave 15-A. Concrete data first (per the user-rule "verify before
+designing"): the `useSendEvent`/`clx`/location-matcher promotion
+turned out to be *not* a "promote site code → framework" exercise.
+The framework already has each helper. The work is **enforcing the
+existing canonical** when sites carry their own copy.
+
+Verified state (2026-05-01 grep against both sites):
+
+| Item | casaevideo | baggagio | Action |
+|---|---|---|---|
+| `src/sdk/clx.ts` | absent (already canonical) | present, identical body + dead `clsx` alias (zero callers) | pure dup → **auto-fix** |
+| `src/sdk/useSendEvent.ts` | absent | present, **stricter** typing (`<E extends AnalyticsEvent>` generic) vs framework's permissive shape | **warn-only** (replacing 1:1 weakens types) |
+| `src/matchers/location.ts` | present, cookie-only subset of framework | absent | **warn-only** (framework's `registerBuiltinMatchers()` is a behavior superset; needs per-site verification of country-name lookup parity) |
+
+So this is exactly *one* mechanically-applicable fix (`clx` in
+baggagio) plus two judgement calls. Hand-applying would be cheap;
+the value is making the audit *enforce* the convergence so the next
+copy-paste regression on any future site gets caught automatically.
+
+**Shipped (one PR against `decocms/deco-start`):**
+
+38. `feat(migrate): local-framework-duplicate audit rule with registry-driven enforcement` 🟡 **WAITING ON CI**
+    - **New rule `local-framework-duplicate`** in
+      `scripts/migrate/post-cleanup/rules.ts` driven by an exported
+      `FRAMEWORK_DUPLICATES` registry. Each entry is `{ id,
+      sitePath, canonicalImport, contentSignature: RegExp[],
+      safeToAutoFix, reason?, description }`. The rule fires only
+      when **every** content-signature regex matches the site file
+      — conservative on purpose so genuinely-forked helpers are
+      skipped.
+    - **Auto-fix path** (when `safeToAutoFix: true`): rewrite all
+      `from "~/<derived>"` importers to `from
+      "<canonicalImport>"` via the existing `rewriteImportSpec`
+      helper, then delete the file. Already-canonical importers
+      are left untouched.
+    - **Warn-only path** (when `safeToAutoFix: false`): rule still
+      fires + populates the finding's `fix:` field with the
+      `reason` so engineers see *why* auto-fix is gated and what
+      they need to verify before manual cleanup.
+    - **Three initial entries** in the registry, mapped 1:1 to the
+      cross-site audit findings:
+      | id | site path | canonical | auto-fix? |
+      |---|---|---|---|
+      | `clx` | `src/sdk/clx.ts` | `@decocms/start/sdk/clx` | **yes** |
+      | `use-send-event` | `src/sdk/useSendEvent.ts` | `@decocms/start/sdk/analytics` | no (typing regression) |
+      | `location-matcher` | `src/matchers/location.ts` | `@decocms/start/matchers/builtins` | no (behavior superset, parity check needed) |
+    - **11 new tests** covering: pure-dup detection, fork detection
+      (signature mismatch → no flag), warn-only entries, severity
+      uniformity (warning for both kinds, so `--strict` gates
+      everything), auto-fix happy-path (delete + rewrite both
+      importers, leave canonical importers alone), warn-only
+      auto-fix is a no-op (does NOT delete partial-overlap files),
+      mixed coexistence (auto-fixable `clx` and warn-only
+      `useSendEvent` in the same tree → only `clx` gets auto-fixed),
+      `supportsAutoFix` flag is true (since rule has `applyFix`).
+    - **CLI help text + `post-migration-cleanup.md` § 8** updated
+      with the new rule's table and the "adding a new entry"
+      section. Old § 8 (orphan TODO comments) renumbered to § 9.
+    - 345 → 353 tests pass, typecheck clean, end-to-end disk smoke
+      against a temp fixture confirmed: 2 importers rewritten + 1
+      file deleted in one `--fix` run.
+    - **Real-site smoke**:
+      - **baggagio**: rule fires twice — `clx.ts` (auto-fixable),
+        `useSendEvent.ts` (warn-only with the typed-generic reason).
+      - **casaevideo**: rule fires once — `location.ts` (warn-only
+        with the `registerBuiltinMatchers()` adoption hint).
+    - **Net**: every future site that copy-pastes any of these three
+      files gets a tight audit finding + auto-fix on the safe one.
+      The registry pattern means adding a 4th cross-site duplicate
+      is a single object literal — no new rule, no new tests
+      scaffolding, no new doc section.
+
+**Still in the cross-site backlog (sequenced behind 15-B-1):**
+
+- **15-B-2** — `useSuggestions` framework helper (new export in
+  `@decocms/start/sdk` typed by `Resolved<T>`, optional Sentry
+  hook). Sites adopt incrementally; once 2+ adopt, add a registry
+  entry pointing the legacy hand-rolled implementations at the
+  canonical via `local-framework-duplicate`.
+- **15-B-3** — `useOffer` factory (D4 candidate; needs design pass
+  for PIX/installment plugin slots).
+- **15-B-4** — `Picture` API unification (breaking; needs a
+  picking-the-winner pass between casaevideo's and baggagio's
+  shapes, plus a codemod for call sites).
+- **15-B-5** — `relative()` SKU-stripping option in
+  `@decocms/apps/commerce/sdk/url`. Apps-side change; sites delete
+  their wrapper.
+
 ### Wave 15+ (htmx cleanup PRs on als + propagation to other sites) — Priority 3 / 4
 
 Each htmx pattern that survives the codemod becomes a per-pattern PR
