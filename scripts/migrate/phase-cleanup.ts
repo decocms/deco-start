@@ -2,6 +2,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { MigrationContext } from "./types";
 import { log, logPhase } from "./types";
+import {
+  LIB_TEMPLATES,
+  selectImportedLibTemplates,
+} from "./templates/lib-utils";
 
 /** Directories to remove entirely after migration */
 const DIRS_TO_DELETE = [
@@ -1479,7 +1483,106 @@ export function cleanup(ctx: MigrationContext): void {
   console.log("  Fixing Worker-incompatible APIs...");
   fixWorkerIncompatibleApis(ctx);
 
+  // 14. LAZY: write only the src/lib/* shim files that the migrated
+  //     codebase actually imports. Run after every previous step so we
+  //     observe the final import graph (transforms + cleanup rewrites
+  //     + inline-stub hoisting all settled).
+  console.log("  Writing src/lib/* shims (lazy)...");
+  writeImportedLibShims(ctx);
+
   console.log(
     `  Deleted ${ctx.deletedFiles.length} files/dirs, moved ${ctx.movedFiles.length} files`,
+  );
+}
+
+/**
+ * Walk `src/**\/*.{ts,tsx}` looking for `from "~/lib/<name>"` imports.
+ * For each unique `<name>` that has a registered template in
+ * `LIB_TEMPLATES`, write `src/lib/<name>.ts` with the template content.
+ *
+ * Sites that import none of the shims end up with no `src/lib/` directory
+ * at all, instead of 11 dead files.
+ *
+ * Exported (rather than file-local) for unit testability — see
+ * `phase-cleanup.test.ts`.
+ */
+export function writeImportedLibShims(ctx: MigrationContext): void {
+  const srcRoot = path.join(ctx.sourceDir, "src");
+  if (!fs.existsSync(srcRoot)) return;
+
+  const importedSpecifiers = new Set<string>();
+  // Match `from "~/lib/<name>"` or `from '~/lib/<name>'`. We don't care
+  // about default vs named imports here — only the path matters.
+  const importRe = /from\s+["']~\/lib\/([^"']+?)(?:\.ts)?["']/g;
+
+  /** Recursively scan a directory for .ts/.tsx files and collect specifiers. */
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        // Skip the lib dir itself so we don't count internal cross-refs
+        // when we later add them.
+        if (full === path.join(srcRoot, "lib")) continue;
+        walk(full);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (!/\.(ts|tsx)$/.test(entry.name)) continue;
+      const content = fs.readFileSync(full, "utf-8");
+      let m: RegExpExecArray | null;
+      while ((m = importRe.exec(content)) !== null) {
+        importedSpecifiers.add(m[1]);
+      }
+    }
+  };
+  walk(srcRoot);
+
+  if (importedSpecifiers.size === 0) {
+    log(ctx, "  No ~/lib/* imports detected — no shims written.");
+    return;
+  }
+
+  const known = new Set(
+    Object.keys(LIB_TEMPLATES).map((k) =>
+      k.replace(/^src\/lib\//, "").replace(/\.ts$/, ""),
+    ),
+  );
+  const unknown: string[] = [];
+  for (const spec of importedSpecifiers) {
+    if (!known.has(spec)) unknown.push(spec);
+  }
+  if (unknown.length > 0) {
+    log(
+      ctx,
+      `  Warning: ~/lib/{${unknown.join(", ")}} imported but no template registered. ` +
+        `Write the file by hand or add a template to scripts/migrate/templates/lib-utils.ts.`,
+    );
+  }
+
+  const toWrite = selectImportedLibTemplates(importedSpecifiers);
+  if (Object.keys(toWrite).length === 0) return;
+
+  if (ctx.dryRun) {
+    for (const relPath of Object.keys(toWrite)) {
+      log(ctx, `  [DRY] Would write: ${relPath}`);
+    }
+    return;
+  }
+
+  const libDir = path.join(srcRoot, "lib");
+  if (!fs.existsSync(libDir)) {
+    fs.mkdirSync(libDir, { recursive: true });
+  }
+
+  for (const [relPath, content] of Object.entries(toWrite)) {
+    const fullPath = path.join(ctx.sourceDir, relPath);
+    fs.writeFileSync(fullPath, content, "utf-8");
+    log(ctx, `  Wrote: ${relPath}`);
+  }
+
+  log(
+    ctx,
+    `  Generated ${Object.keys(toWrite).length} src/lib/* shim(s) ` +
+      `(out of ${Object.keys(LIB_TEMPLATES).length} available templates).`,
   );
 }

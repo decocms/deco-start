@@ -1,25 +1,41 @@
-import type { MigrationContext } from "../types";
+/**
+ * Templates for src/lib/ utility wrappers that bridge signature gaps
+ * between deco-cx/apps (old stack) and @decocms/apps-start (new stack).
+ *
+ * These are written *lazily*: only shims that are actually imported by
+ * the migrated codebase get generated. See `selectImportedLibTemplates`.
+ *
+ * Lazy generation matters because:
+ * - Most sites end up importing zero of these (apps-start exports
+ *   direct equivalents for most VTEX utilities — see migrate#107).
+ * - Eager generation creates dead `src/lib/*.ts` files that every site
+ *   then has to clean up by hand (see baggagio-tanstack#7, ~235 LOC).
+ *
+ * Registry shape: `"src/lib/<name>.ts"` → file contents.
+ */
+export const LIB_TEMPLATES: Record<string, string> = {
+  // Filled in below after the const declarations to keep the registry
+  // and template literals colocated. See trailing assignment.
+};
 
 /**
- * Generates src/lib/ utility wrappers that provide signature-compatible
- * stubs for VTEX utilities. The old stack (deco-cx/apps) exports functions
- * with different signatures than @decocms/apps-start, and some types
- * (VTEXCommerceStable, LabelledFuzzy) don't exist at all. These wrappers
- * bridge the gap so custom loaders continue to compile and run.
+ * Given the set of `~/lib/X` imports actually present in the migrated
+ * codebase, return the subset of templates to write.
+ *
+ * `importedSpecifiers` are the `X` parts (without `~/lib/` prefix and
+ * without `.ts` extension), e.g. `"vtex-transform"`, `"http-utils"`.
  */
-export function generateLibUtils(_ctx: MigrationContext): Record<string, string> {
-  return {
-    "src/lib/vtex-transform.ts": LIB_VTEX_TRANSFORM,
-    "src/lib/vtex-intelligent-search.ts": LIB_VTEX_INTELLIGENT_SEARCH,
-    "src/lib/vtex-segment.ts": LIB_VTEX_SEGMENT,
-    "src/lib/http-utils.ts": LIB_HTTP_UTILS,
-    "src/lib/vtex-client.ts": LIB_VTEX_CLIENT,
-    "src/lib/fetch-utils.ts": LIB_FETCH_UTILS,
-    "src/lib/vtex-fetch.ts": LIB_VTEX_FETCH,
-    "src/lib/vtex-id.ts": LIB_VTEX_ID,
-    "src/lib/graphql-utils.ts": LIB_GRAPHQL_UTILS,
-    "src/lib/filter-navigate.ts": LIB_FILTER_NAVIGATE,
-  };
+export function selectImportedLibTemplates(
+  importedSpecifiers: Set<string>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const spec of importedSpecifiers) {
+    const key = `src/lib/${spec}.ts`;
+    if (key in LIB_TEMPLATES) {
+      out[key] = LIB_TEMPLATES[key];
+    }
+  }
+  return out;
 }
 
 const LIB_VTEX_TRANSFORM = `import type { Product } from "@decocms/apps/commerce/types";
@@ -253,3 +269,19 @@ export function toFilterSearchString(filterUrl: string): string {
   return clean ? \`?\${clean}\` : "";
 }
 `;
+
+// Populate the registry now that all template literals are declared.
+// Keys must match the relative path the migration script writes; values
+// are the file contents.
+Object.assign(LIB_TEMPLATES, {
+  "src/lib/vtex-transform.ts": LIB_VTEX_TRANSFORM,
+  "src/lib/vtex-intelligent-search.ts": LIB_VTEX_INTELLIGENT_SEARCH,
+  "src/lib/vtex-segment.ts": LIB_VTEX_SEGMENT,
+  "src/lib/http-utils.ts": LIB_HTTP_UTILS,
+  "src/lib/vtex-client.ts": LIB_VTEX_CLIENT,
+  "src/lib/fetch-utils.ts": LIB_FETCH_UTILS,
+  "src/lib/vtex-fetch.ts": LIB_VTEX_FETCH,
+  "src/lib/vtex-id.ts": LIB_VTEX_ID,
+  "src/lib/graphql-utils.ts": LIB_GRAPHQL_UTILS,
+  "src/lib/filter-navigate.ts": LIB_FILTER_NAVIGATE,
+});

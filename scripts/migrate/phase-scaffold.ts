@@ -18,7 +18,9 @@ import { generateCommerceLoaders } from "./templates/commerce-loaders";
 import { generateSectionLoaders } from "./templates/section-loaders";
 import { generateCacheConfig } from "./templates/cache-config";
 import { generateSdkFiles } from "./templates/sdk-gen";
-import { generateLibUtils } from "./templates/lib-utils";
+// `lib-utils` is imported lazily — see end of phase-cleanup. Eager
+// generation of all 11 shims left every site with dead code that had
+// to be cleaned up by hand.
 import { extractTheme } from "./analyzers/theme-extractor";
 
 function writeFile(ctx: MigrationContext, relPath: string, content: string) {
@@ -108,8 +110,10 @@ export function scaffold(ctx: MigrationContext): void {
   writeFile(ctx, "src/sdk/logger.ts", generateLoggerStub());
   writeMultiFile(ctx, generateSdkFiles(ctx));
 
-  // VTEX utility wrappers (signature-compatible stubs for custom loaders)
-  writeMultiFile(ctx, generateLibUtils(ctx));
+  // VTEX utility wrappers (signature-compatible stubs) are no longer
+  // generated eagerly here. They're written lazily at end of phase-cleanup,
+  // after all import rewrites have run, so that we only emit shims that
+  // some file actually imports. See `writeImportedLibShims` in phase-cleanup.
 
   // Replace Context-based useDevice with SSR-safe useSyncExternalStore version.
   // @decocms/start shell-renders sections in a separate React root without
