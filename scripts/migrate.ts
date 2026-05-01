@@ -32,6 +32,7 @@ import { transform } from "./migrate/phase-transform";
 import { cleanup } from "./migrate/phase-cleanup";
 import { report } from "./migrate/phase-report";
 import { verify } from "./migrate/phase-verify";
+import { compile } from "./migrate/phase-compile";
 import { banner, stat, red, green, yellow } from "./migrate/colors";
 
 function parseArgs(args: string[]): {
@@ -39,11 +40,17 @@ function parseArgs(args: string[]): {
   dryRun: boolean;
   verbose: boolean;
   help: boolean;
+  strict: boolean;
+  withBuild: boolean;
+  noCompile: boolean;
 } {
   let source = ".";
   let dryRun = false;
   let verbose = false;
   let help = false;
+  let strict = false;
+  let withBuild = false;
+  let noCompile = false;
 
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
@@ -56,6 +63,15 @@ function parseArgs(args: string[]): {
       case "--verbose":
         verbose = true;
         break;
+      case "--strict":
+        strict = true;
+        break;
+      case "--with-build":
+        withBuild = true;
+        break;
+      case "--no-compile":
+        noCompile = true;
+        break;
       case "--help":
       case "-h":
         help = true;
@@ -63,7 +79,7 @@ function parseArgs(args: string[]): {
     }
   }
 
-  return { source, dryRun, verbose, help };
+  return { source, dryRun, verbose, help, strict, withBuild, noCompile };
 }
 
 function showHelp() {
@@ -77,11 +93,15 @@ function showHelp() {
     --source <dir>    Source directory (default: .)
     --dry-run         Preview changes without writing files
     --verbose         Show detailed output for every file
+    --strict          Fail (exit 2) when typecheck/build report errors
+    --with-build      Also run \`vite build\` after typecheck (slower)
+    --no-compile      Skip the post-bootstrap compile phase entirely
     --help, -h        Show this help message
 
   Examples:
     npx -p @decocms/start deco-migrate --dry-run --verbose
     npx -p @decocms/start deco-migrate --source ./my-site
+    npx -p @decocms/start deco-migrate --strict --with-build
     npx -p @decocms/start deco-migrate
   `);
 }
@@ -131,6 +151,19 @@ async function main() {
     // Phase 7: Bootstrap (install + generate)
     if (!ctx.dryRun) {
       bootstrap(ctx);
+    }
+
+    // Phase 8: Compile (typecheck + optional build)
+    // Skipped in dry-run, when --no-compile is passed, or when bootstrap
+    // didn't install dependencies (handled inside `compile`).
+    if (!opts.noCompile) {
+      const compileResult = compile(ctx, {
+        strict: opts.strict,
+        withBuild: opts.withBuild,
+      });
+      if (compileResult.shouldFail) {
+        process.exit(2);
+      }
     }
   } catch (error) {
     console.error(`\n  ${red("Migration failed:")}`, error);
