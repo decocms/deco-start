@@ -1,6 +1,6 @@
 ---
 name: deco-migrate-script
-description: Automated migration script that converts Deco storefronts from Fresh/Preact/Deno to TanStack Start/React/Cloudflare Workers. Runs 7 phases (analyze, scaffold, transform, cleanup, report, verify, bootstrap). Use when running the migration script, debugging its output, extending it with new transforms, or understanding what it does. Located at scripts/migrate.ts in @decocms/start.
+description: Automated migration script that converts Deco storefronts from Fresh/Preact/Deno to TanStack Start/React/Cloudflare Workers. Runs 8 phases (analyze, scaffold, transform, cleanup, report, verify, bootstrap, compile). Use when running the migration script, debugging its output, extending it with new transforms, or understanding what it does. Located at scripts/migrate.ts in @decocms/start.
 globs:
   - "scripts/migrate.ts"
   - "scripts/migrate/**/*"
@@ -27,7 +27,12 @@ npx tsx node_modules/@decocms/start/scripts/migrate.ts --source /path/to/old-sit
 | `--source <dir>` | Source site directory (default: `.`) |
 | `--dry-run` | Preview changes without writing files |
 | `--verbose` | Show detailed per-file output |
+| `--strict` | Promote post-bootstrap typecheck/build failures from warnings to errors (exit 2) |
+| `--with-build` | After typecheck, also run `npx vite build` for full runtime validation (slower) |
+| `--no-compile` | Skip the post-bootstrap compile phase entirely |
 | `--help` | Show help |
+
+**CI usage:** pair `--strict` with `--with-build` to catch both type and runtime regressions before merge.
 
 ## Architecture
 
@@ -42,6 +47,7 @@ scripts/migrate/
 ├── phase-cleanup.ts            ← Phase 4: delete old artifacts
 ├── phase-report.ts             ← Phase 5: generate MIGRATION_REPORT.md
 ├── phase-verify.ts             ← Phase 6: smoke tests
+├── phase-compile.ts            ← Phase 8: post-bootstrap tsc/vite-build
 ├── transforms/                 ← Transform modules (applied in order)
 │   ├── imports.ts              ← 70+ import rewriting rules
 │   ├── jsx.ts                  ← JSX attribute fixes
@@ -263,6 +269,26 @@ Runs automatically after all phases (skipped in `--dry-run`):
 1. `npm install` (or `bun install`)
 2. `npx tsx node_modules/@decocms/start/scripts/generate-blocks.ts`
 3. `npx tsr generate`
+
+### Phase 8: Compile
+
+Runs automatically after bootstrap (skipped in `--dry-run` or with `--no-compile`):
+
+1. `npx tsc --noEmit` — surfaces any typecheck regression introduced by the
+   transform pipeline. Output is captured and printed (truncated to ~50 lines)
+   so users can see the actual TypeScript diagnostics.
+2. `npx vite build` — only when `--with-build` is passed. Catches
+   runtime-only issues that escape typecheck (missing exports, broken
+   barrel files, server/client boundary violations).
+
+Failures are warnings by default — the migration completes and tells the
+user to inspect the diagnostics. With `--strict`, failures abort with
+exit code `2` so CI can fail the pipeline.
+
+Skipped automatically when `node_modules/` is missing (e.g. bootstrap
+failed before install). This is the gate that catches regressions like
+`#105 TS5097` (rewriter leaving `.ts` extensions in imports) or dead
+shim references that escape the static `phase-verify` checks.
 
 ## Key Design Decisions
 
