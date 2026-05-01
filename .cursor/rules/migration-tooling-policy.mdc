@@ -1,0 +1,111 @@
+---
+description: Constitutional decisions for the deco-start migration-tooling effort (D1–D5, priorities, process). Always loaded.
+alwaysApply: true
+---
+
+# Migration Tooling Policy
+
+Decisions for `@decocms/start` + `@decocms/apps` + migration scripts/skills.
+Authority: `MIGRATION_TOOLING_PLAN.md` in this repo. This rule is a quick-load
+summary; always defer to the plan when they conflict.
+
+## Constitutional principles
+
+1. **Design for 100 sites, not 3.** When the surface of an abstraction is
+   well-understood, ship it. Don't defer waiting for "more signal" — design
+   for the projection. When the surface is *not* understood, *decide*
+   explicitly (write a D-record like D1–D5), don't ship fast.
+2. **Strict over flexible.** No support layers, no soft drift, no
+   fork-runtime adapters. Every fork divergence becomes either a PR back to
+   canonical or visible local debt.
+3. **Audit is the safety net.** Anything we can't auto-fix becomes a flagged
+   finding. The gap between "detect" and "fix" is the next thing to close,
+   not a permanent state.
+4. **PR-only, no direct main, no deploys.** Every change goes through
+   review. Even policy/plan changes (this rule).
+
+## Decisions (signed off 2026-05-01)
+
+### D1 — Apps forks: force convergence
+All sites consume `@decocms/apps` from canonical. Site-specific
+customizations live in `src/apps/local/`. Forking is **not supported** by
+the framework — sites that need framework-level changes either PR to
+canonical, or fork independently and own the consequence.
+
+**Agent behavior**: never write a "fork support layer". When auditing a
+site, treat any non-canonical apps import as a finding; recommend
+PR-to-canonical or move-to-`src/apps/local/`.
+
+### D2 — HTMX: rewrite on migration
+HTMX is fully rewritten to React idioms (state, effects, server functions,
+mutations) during migration. There is **no HTMX runtime** in
+`@decocms/start`. The migration ships codemods for the common patterns
+and skill recipes for the long tail.
+
+**Agent behavior**: never propose an HTMX adapter or `@decocms/start/htmx`
+package. When facing HTMX patterns, reach for codemods first, skill
+recipes second, pattern catalog third.
+
+### D3 — Stub generation: throw at runtime
+Migration-time stubs (`src/lib/vtex-*`, `src/lib/http-utils.ts`, etc.) must
+**throw at runtime** with a clear message pointing at the canonical
+replacement, not return identity casts or empty objects. This forces:
+
+- The audit's `--fix` to cover swap cases (no permanent detect-only state).
+- Skill recipes to keep up with stub generation.
+
+**Agent behavior**: when adding or modifying a generated stub template,
+the body must throw with a message including (a) what the stub stands in
+for, (b) the canonical replacement, (c) a pointer to the relevant skill
+section. Silent stubs are a regression.
+
+### D4 — Site-local apps: local by default, promote at 3
+Site-specific apps (extensions, custom commerce integrations) live in
+`src/apps/local/` by default. Promotion to `@decocms/apps` happens when
+**3 or more sites** use the same extension.
+
+**Agent behavior**: don't preemptively promote single-consumer code.
+Conversely, don't accept "wait for more signal" as a dodge — when you see
+the third consumer, promote.
+
+### D5 — Failed migrations: rm -rf and re-run
+There is **no `--restart` mode**. A half-migrated site repo is a throwaway:
+delete it and re-run `deco-migrate` from scratch on the latest tooling.
+Failure modes get documented in skills, not encoded as escape hatches.
+
+**Agent behavior**: when a migration goes sideways, propose deletion +
+re-run, not in-place repair. Add the failure mode to the skill.
+
+## Priority order
+
+Work proceeds in this order. Higher priorities don't block on lower ones,
+but lower ones don't ship before the higher ones are at least scoped:
+
+1. **Framework changes** (`@decocms/start` + `@decocms/apps`) — fix the
+   foundation first. New factories, new audit rules, new framework
+   primitives. Without these, scripts have nothing to migrate *to*.
+2. **Migration scripts + skills** — make migration to the latest
+   `@decocms/start` + `@decocms/apps` automated. Codemods, audit `--fix`
+   rules, skill recipes.
+3. **Migrate als** — first real htmx-heavy site. Validates the htmx
+   sub-track end-to-end.
+4. **Update existing TanStack sites to latest** — open PRs against
+   casaevideo, baggagio, future sites bumping `@decocms/start` and
+   `@decocms/apps`, applying audit `--fix`, cleaning up to reflect
+   current best practices.
+
+Out-of-band work (incident response, urgent prod fixes) bypasses this
+order — but only if explicitly identified as urgent.
+
+## Process directives
+
+- All work goes through PR review on a feature branch (`feat/`, `fix/`,
+  `chore/`, `docs/`). No exceptions.
+- Conventional Commits in English for `decocms/*` repos; PT-BR for
+  storefront site repos.
+- Plan updates (`MIGRATION_TOOLING_PLAN.md`) ship with the work they
+  describe, in the same PR or a follow-up. The plan is the single source
+  of truth; this rule is its boot loader.
+- When reading a section of the plan or a skill, prefer the plan or skill
+  over your memory of past conversations.
+- Do not run `deco-deploy` or any deploy command from agent flows.
