@@ -117,7 +117,7 @@ Schema is composed at runtime: `generate-schema.ts` produces section schemas, `c
 
 ## Migration Guide
 
-Detailed migration playbook from Fresh/Preact/Deno to TanStack Start/React/Workers is available at `.cursor/skills/deco-to-tanstack-migration/`. Covers:
+Detailed migration playbook from Fresh/Preact/Deno to TanStack Start/React/Workers is available at `.agents/skills/deco-to-tanstack-migration/` (the canonical location — also surfaced as a Cursor skill via the `.agents/` skills root). Covers:
 
 - Import rewrites (Preact → React, @preact/signals → @tanstack/store)
 - Deco framework elimination (@deco/deco/*, $fresh/*)
