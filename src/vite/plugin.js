@@ -13,6 +13,18 @@
  *   file, and this plugin intercepts the .ts import to return JSON.parse(...)
  *   — V8's JSON parser is 2-10x faster than the JS parser for large data.
  *
+ * meta.gen handling:
+ *   The admin schema bundle (`server/admin/meta.gen.json`) is server-only;
+ *   the client receives pre-resolved blocks via the SSR payload. Stubbing
+ *   it on the client cuts a typically-large module out of the browser bundle.
+ *   Match is done by substring on the import id, so any path style works.
+ *
+ * manualChunks:
+ *   `@decocms/start` and `@decocms/apps` are intentionally NOT split into
+ *   their own chunks. They have circular re-exports that produce a load-order
+ *   crash when chunked separately. Rollup's default bundling (group with
+ *   importer or vendor catch-all) avoids that.
+ *
  * Usage:
  * ```ts
  * import { decoVitePlugin } from "@decocms/start/vite";
@@ -62,6 +74,11 @@ const STUB_SOURCE = {
 
   "\0stub:tanstack-head-scripts":
     "export const injectedHeadScripts = undefined;",
+
+  // The admin schema bundle is server-only — the client receives pre-resolved
+  // blocks via the SSR payload. Stubbing it on the client cuts a large module
+  // (typically 0.5-5 MB) out of the browser bundle.
+  "\0stub:meta-gen": "export default {};",
 };
 
 /** @returns {import("vite").PluginOption} */
@@ -71,10 +88,23 @@ export function decoVitePlugin() {
     name: "deco-server-only-stubs",
     enforce: "pre",
 
-    resolveId(id, _importer, options) {
+    resolveId(id, importer, options) {
       // Server builds keep the real modules.
       if (options?.ssr) return undefined;
-      return CLIENT_STUBS[id];
+      // Bare-specifier exact-match stubs (react-dom/server, node:stream, etc.).
+      if (CLIENT_STUBS[id]) return CLIENT_STUBS[id];
+      // meta.gen.{json,ts} — the admin schema bundle. Server-only; client
+      // receives pre-resolved blocks. Matches both file extensions so the
+      // plugin works whether `setup.ts` imports the .json directly (current)
+      // or a future variant routes through a generated .ts wrapper.
+      // Requires `importer` so we don't accidentally stub the entry module.
+      if (
+        importer &&
+        (id.endsWith("meta.gen.json") || id.endsWith("meta.gen.ts"))
+      ) {
+        return "\0stub:meta-gen";
+      }
+      return undefined;
     },
 
     load(id, options) {
@@ -163,9 +193,14 @@ export function decoVitePlugin() {
       /** @type {import("vite").UserConfig} */
       const cfg = {};
 
-      // Allow tunnel domains through Vite's host check
+      // Allow tunnel domains through Vite's host check.
+      // .deco.studio is the new admin frontend; both real-world Deco sites
+      // (casaevideo-storefront, baggagio-tanstack) duplicated this list to
+      // include it — bundling it here removes that boilerplate.
       if (process.env.DECO_SITE_NAME) {
-        cfg.server = { allowedHosts: [".deco.host", ".decocdn.com"] };
+        cfg.server = {
+          allowedHosts: [".deco.host", ".decocdn.com", ".deco.studio"],
+        };
       }
 
       // Only split chunks for production builds — dev uses unbundled ESM.
@@ -219,12 +254,14 @@ export function decoVitePlugin() {
                 if (id.includes("@tanstack/react-query")) {
                   return "vendor-query";
                 }
-                if (id.includes("@decocms/start")) {
-                  return "vendor-deco";
-                }
-                if (id.includes("@decocms/apps")) {
-                  return "vendor-commerce";
-                }
+                // Intentionally NOT splitting @decocms/start or @decocms/apps:
+                // they have circular re-exports (e.g. apps imports from
+                // start/sdk/cachedLoader, start admin imports from apps).
+                // Splitting them into separate chunks produces a Rollup
+                // chunk-load order that crashes at runtime ("undefined is not
+                // a function") — both real-world sites worked around this by
+                // overriding manualChunks. Letting Rollup bundle them together
+                // (or with the importing chunk) is correct.
               },
             },
           },
