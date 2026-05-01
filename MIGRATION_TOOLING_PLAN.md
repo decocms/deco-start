@@ -688,27 +688,83 @@ Releases shipped from Wave 6:
 - `@decocms/apps@1.7.0` — adds `vtex/hooks/createUseCart` factory
 - `@decocms/start@2.8.0` (compile phase) → `2.9.0` (template shim) → `2.10.0` (per-site config)
 
-### Wave 12 (kicked off 2026-05-01 after D1–D5 sign-off) — Priority 1 (framework + commerce)
+### Wave 12 (kicked off 2026-05-01 after D1–D5 sign-off) — Priority 1 (framework + commerce) — ✅ **COMPLETE**
 
 After surfacing als-storefront as the third migration target (heavy on
 htmx, ~120 hx-* files, prior als-tanstack attempt thrown away), the
-"wait for 3rd site" deferrals collapse. Wave 12 ships the abstractions
-that als + casaevideo + baggagio have already justified, plus the
-audit `--fix` work D3 forces us into.
+"wait for 3rd site" deferrals collapse. Wave 12 shipped the abstractions
+that als + casaevideo + baggagio had already justified, plus the
+audit `--fix` work D3 forces us into. **9 PRs across `deco-start` and
+`apps-start`, all merged.**
 
-**Planned PRs (will be filled in as they ship):**
+**Shipped PRs:**
 
-- **W12-A** apps-start: `createUseUser` factory (mirrors `createUseCart` from #32)
-- **W12-B** apps-start: `createUseWishlist` factory (same pattern)
-- **W12-C** deco-start: throwing stubs in `lib-utils.ts` template + per-stub message linking to skill (D3 implementation)
-- **W12-D** deco-start: audit `--fix` for `toProduct` swap (uses #121's `meta.fixHints`)
-- **W12-E** deco-start: audit `--fix` for `withSegmentCookie` swap
-- **W12-F** deco-start: audit `--fix` for `obsolete-vite-plugins` rule (mechanical cleanup)
-- **W12-G** apps-start (or deco-start CLAUDE.md cross-link): per-repo pointer to `migration-tooling-policy.mdc` so the constitutional rule is discoverable from any consumer repo
-- **W12-H** deco-start: cleanup phase scaffolds `.cursor/rules/migration-policy-pointer.mdc` in target site, pointing at the canonical rule (D1/D4 enforcement at site level)
+- **W12-A + W12-B** [`apps-start#33`](https://github.com/decocms/apps-start/pull/33) — `feat(vtex/hooks): add createUseUser + createUseWishlist factories` ✅ **MERGED**.
+  Mirrors the `createUseCart` shape: invoke-driven legacy state machine, signal-shaped public API (`.value`), independent instances per call. `createUseWishlist` also exposes the `legacyAddArgsToCanonical` and `findWishlistEntry` helpers so site code can keep its old `productId`/`productGroupId` swap convention while routing through the canonical `vtex.actions.{addToWishlist, removeFromWishlist}` signature. New unit tests assert factory shape, instance independence, the arg-swap convention, and the entry-finder helper.
+- **(Lint unblock)** [`apps-start#34`](https://github.com/decocms/apps-start/pull/34) — `chore(lint): tighten shopify storefront.graphql.gen.ts types + biome formatting` ✅ **MERGED**.
+  Cleared pre-existing `noExplicitAny` failures in `shopify/utils/storefront/storefront.graphql.gen.ts` plus formatting drift in `vtex/__tests__/client-segment-cookie.test.ts` so subsequent Wave 12 PRs in `apps-start` could land on a green CI baseline. Replaced loose `any` types with a structured `ProductFilter` shape (derived from real consumers) and `unknown` elsewhere; ran `biome check --write` to fix import order + formatting.
+- **W12-C** [`deco-start#123`](https://github.com/decocms/deco-start/pull/123) — `feat(migrate): D3 — generated stubs throw at runtime` ✅ **MERGED**, released as `@decocms/start@2.16.0`.
+  Implements **D3** verbatim. The migration-time stubs in `lib-utils.ts` for `toProduct`, `getISCookiesFromBag`, `getSegmentFromBag`, `withSegmentCookie` no longer return identity-cast values, empty objects, or empty `Headers` — they now `throw new Error(STUB_MSG)` with a per-symbol message that names the canonical replacement, the canonical signature, and the `deco-post-cleanup --fix` invocation. Tests assert the throwing bodies + that other functional helpers (e.g. `parseCookie`, `isFilterParam`) are untouched.
+- **W12-D + W12-E** [`deco-start#124`](https://github.com/decocms/deco-start/pull/124) — `feat(audit): vtex-shim-regression --fix for swap-able symbols` ✅ **MERGED**, released as `@decocms/start@2.17.0`.
+  Auto-fixes the swap subset of the regression rule: when every imported symbol from a `~/lib/vtex-*` shim has a `kind: "swap"` hint pointing to the same canonical module, the rule rewrites the `from "..."` clause to canonical and leaves the named-import list (including `as`-aliases) verbatim. Mixed swap + refactor surfaces, and shims that mix stubs with real impls (e.g. `isFilterParam`), are deliberately left for manual fix. 6 new tests + skill doc § 5 update.
+- **W12-i** [`deco-start#125`](https://github.com/decocms/deco-start/pull/125) — `feat(migrate): scaffold useUser + useWishlist as factory shims (vtex)` ✅ **MERGED**.
+  Updates the migration script's `hooks.ts` template so freshly migrated VTEX sites get 3-line factory shims (`export const { useUser, resetUser } = createUseUser({ invoke })`) instead of 200-LOC singletons that were copy-pasted by the old migration. Non-VTEX sites still get the legacy stubs but with docstrings pointing at the factories for parity context. 4 new tests cover both branches and a line-count budget.
+- **W12-F** [`deco-start#127`](https://github.com/decocms/deco-start/pull/127) — `feat(audit): obsolete-vite-plugins --fix` ✅ **MERGED**.
+  JS-aware applyFix for the rule. Walks `vite.config.ts` with a brace-counter that skips strings, template literals (including `${...}` interpolation), and line/block comments, so nested `{}` inside `config()` / `load()` / `resolveId()` bodies do not throw off boundary detection. Removes the inline literal + trailing `,\n` + the contiguous block of `// ...` comments immediately attached above. Idempotent. 7 new tests + smoke verified against real casaevideo `vite.config.ts` (162 LOC → both plugins gone, 2503 bytes / ~74 LOC removed, structurally identical to baggagio's already-clean shape, post-fix audit returns 0 findings).
+- **W12-G** [`apps-start#35`](https://github.com/decocms/apps-start/pull/35) — `docs: add AGENTS.md cross-linking the canonical migration policy` ✅ **MERGED**.
+  Adds an AGENTS.md to `apps-start` so any agent or contributor opening that repo knows the canonical migration policy lives in `decocms/deco-start` and what D1–D5 mean specifically inside `apps-start` (especially D4: site-local apps live in the *site*, not in `apps-start`). Architecture overview + cross-link table.
+- **W12-H** [`deco-start#126`](https://github.com/decocms/deco-start/pull/126) — `feat(migrate): scaffold migration-tooling-policy pointer rule` ✅ **MERGED**, released as `@decocms/start@2.18.0`.
+  Migration scaffold phase now writes `.cursor/rules/migration-tooling-policy.mdc` into every newly migrated site. The pointer is `alwaysApply: true`, links to the canonical rule and plan in `decocms/deco-start`, includes a one-line-per-decision D1–D5 table scoped to the site, and points at the `deco-post-cleanup --fix` / `--strict` commands. Length budget under 3 KB so it stays a pointer, not a copy. 8 new tests.
 
-Wave 12 ships in priority-1 order; Wave 13 only starts when the
-foundation is in place.
+Wave 12 ships in priority-1 order; Wave 13 starts now.
+
+### Wave 12 — discoveries
+
+- **D3 + audit `--fix` is a closed loop, not an either/or.** The
+  symmetry that `--fix` for swap-able stubs (W12-D/E) combined with
+  throwing stubs (W12-C) produces is significant: the moment a
+  migrated site runs anything that hits a stub'd symbol, it throws
+  with an actionable error pointing at the canonical replacement; the
+  same moment, `--fix` knows what `from "..."` clause to rewrite. The
+  user no longer has a "silent regression" failure mode.
+- **Per-symbol fix-hint table now has 5 consumers.** It's read by:
+  the rule's prose `fix:` field, the rule's `meta.fixHints`
+  structured payload, the runtime stub error message, the `--fix`
+  rewriter (selects swap candidates), and the skill doc table. Adding
+  a 5th, 6th, Nth stub means appending one entry to `STUB_FIX_HINTS`
+  — every consumer picks up the new symbol for free.
+- **Site-level policy enforcement at scaffold time, not runtime.**
+  W12-H ships the canonical D1–D5 policy *as a pointer* into every
+  new site. Cursor sessions in those sites load the rule with
+  `alwaysApply: true`, so they know the policy without us having to
+  pull a copy of the rule into each repo. Drift-free by construction
+  — the canonical rule changes upstream and the pointer keeps
+  pointing.
+- **Brace-balanced parsing + comment attachment makes
+  `obsolete-vite-plugins` `--fix` safe at scale.** The casaevideo
+  smoke test confirmed the approach handles real-world vite configs
+  with multi-line plugins, attached comments describing the
+  workaround, template literals containing `}`, and nested
+  `rollupOptions`. Idempotency falls out of "rule found 0 plugins
+  → no findings → no fix actions". This is the pattern for any
+  future `--fix` that needs to surgically edit a file: extract a
+  span helper, write surface-level tests, smoke against a real
+  production file, ship.
+- **`apps-start` had latent CI debt.** W12 surfaced pre-existing
+  `noExplicitAny` failures in `shopify/utils/storefront/storefront.graphql.gen.ts`
+  that had been failing on `main` for an unknown duration. The lint
+  unblock PR (`apps-start#34`) is the kind of "passing through" fix
+  that should land first whenever a CI gate is red. Don't paper
+  over it.
+- **Factories migrate cleaner than templates.** Comparing
+  `apps-start#33` (factories) to `deco-start#125` (template that
+  *consumes* the factories), the factory PR is the larger artifact
+  but the template PR shipped 4 lines into each generated file.
+  Investing once in a well-shaped factory pays a 50:1 multiplier on
+  every site that runs the migration after that point. This is the
+  D4 promotion path working end-to-end: build it once at site level,
+  prove it on 2 sites, promote to `@decocms/apps`, then rewrite the
+  template to use the canonical.
 
 ### Wave 13 (htmx foundations — Priority 2 part 1) — planned
 
