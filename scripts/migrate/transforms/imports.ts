@@ -29,7 +29,12 @@ const IMPORT_RULES: Array<[RegExp, string | null]> = [
   [/^"@deco\/deco"$/, `"~/types/deco"`],
 
   // Apps — widgets & components
-  [/^"apps\/admin\/widgets\.ts"$/, `"~/types/widgets"`],
+  // Widget aliases (ImageWidget, HTMLWidget, ...) are framework-owned —
+  // every site has the same type set, and the schema generator detects
+  // them via type-text matching, not module identity. Re-export from
+  // @decocms/start/types/widgets so we don't keep a duplicated 8-line
+  // file in every site.
+  [/^"apps\/admin\/widgets\.ts"$/, `"@decocms/start/types/widgets"`],
   [/^"apps\/website\/components\/Image\.tsx"$/, `"~/components/ui/Image"`],
   [/^"apps\/website\/components\/Picture\.tsx"$/, `"~/components/ui/Picture"`],
   [/^"apps\/website\/components\/Video\.tsx"$/, `"~/components/ui/Video"`],

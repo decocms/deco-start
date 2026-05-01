@@ -135,7 +135,38 @@ utility). Your runtime behavior gets MUCH better — segment cookies, IS
 cookies, VTEX session auth all start working again instead of being
 silently stubbed to `{}` / `null`.
 
-## 6. Search for orphan `TODO: move into framework` comments
+## 6. Drop `src/types/widgets.ts` — framework owns it
+
+Older migrations scaffold a local `src/types/widgets.ts` containing 8
+string-aliased widget types (`ImageWidget`, `HTMLWidget`, …). The
+framework now exports the same set (plus `TextArea`) at
+`@decocms/start/types/widgets`, and the schema generator detects the
+widgets via type-text matching, so the local file is purely
+duplicated boilerplate.
+
+```bash
+# Quick check
+rg -n "from ['\"]~/types/widgets['\"]" src/ | wc -l   # >0 → cleanup applies
+```
+
+Replace all imports in one pass:
+
+```bash
+# macOS / BSD sed: drop the empty quotes after -i
+rg -l "from ['\"]~/types/widgets['\"]" src/ \
+  | xargs sed -i '' "s|from ['\"]~/types/widgets['\"]|from \"@decocms/start/types/widgets\"|g"
+```
+
+Then delete the now-orphan local file:
+
+```bash
+rm src/types/widgets.ts
+```
+
+Confirm `tsc --noEmit` is still clean — the framework version is a
+strict superset of what the migration script generated.
+
+## 7. Search for orphan `TODO: move into framework` comments
 
 Real sites accumulate `TODO` comments like `// TODO: move into decoVitePlugin
 in next @decocms/start release`. These are roadmap items the framework
@@ -152,7 +183,7 @@ For each hit, decide:
 
 ## Verification checklist
 
-After completing 1-6:
+After completing 1-7:
 
 - [ ] `npm run typecheck` baseline matches pre-cleanup count (no new errors)
 - [ ] `npm run dev` starts and `/`, `/some-pdp/p`, `/s?q=foo` all render

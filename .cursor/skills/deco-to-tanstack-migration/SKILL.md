@@ -218,7 +218,7 @@ See: `references/deco-framework/README.md`
 
 **Actions**:
 1. `from "apps/commerce/types.ts"` → `from "@decocms/apps/commerce/types"`
-2. `from "apps/admin/widgets.ts"` → `from "~/types/widgets"` (create local file with string aliases)
+2. `from "apps/admin/widgets.ts"` → `from "@decocms/start/types/widgets"` (framework owns the string aliases — `ImageWidget`, `HTMLWidget`, etc.; do **not** create a local `src/types/widgets.ts`)
 3. `from "apps/website/components/Image.tsx"` → `from "~/components/ui/Image"` (create local components)
 4. SDK utilities: `~/sdk/useOffer` → `@decocms/apps/commerce/sdk/useOffer`, `~/sdk/format` → `@decocms/apps/commerce/sdk/formatPrice`, etc.
 

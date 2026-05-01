@@ -30,7 +30,9 @@ const REQUIRED_FILES = [
   "src/hooks/useCart.ts",
   "src/hooks/useUser.ts",
   "src/hooks/useWishlist.ts",
-  "src/types/widgets.ts",
+  // src/types/widgets.ts intentionally omitted — provided by the
+  // framework at `@decocms/start/types/widgets`; sites no longer
+  // shadow the file locally.
   "src/types/deco.ts",
   "src/types/commerce-app.ts",
   "src/components/ui/Image.tsx",
@@ -442,7 +444,8 @@ const checks: Check[] = [
     severity: "warning",
     fn: (ctx) => {
       const typeFiles = [
-        "src/types/widgets.ts",
+        // widgets.ts is provided by @decocms/start/types/widgets, not
+        // scaffolded locally.
         "src/types/deco.ts",
         "src/types/commerce-app.ts",
       ];

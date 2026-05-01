@@ -3,15 +3,12 @@ import type { MigrationContext } from "../types";
 export function generateTypeFiles(ctx: MigrationContext): Record<string, string> {
   const files: Record<string, string> = {};
 
-  files["src/types/widgets.ts"] = `export type ImageWidget = string;
-export type HTMLWidget = string;
-export type VideoWidget = string;
-export type TextWidget = string;
-export type RichText = string;
-export type Secret = string;
-export type Color = string;
-export type ButtonWidget = string;
-`;
+  // src/types/widgets.ts is no longer generated — the framework owns these
+  // string aliases (`ImageWidget`, `HTMLWidget`, …) at
+  // `@decocms/start/types/widgets`, and `transforms/imports.ts` rewrites
+  // `apps/admin/widgets.ts` directly to that path. Schema generation
+  // works the same way: the generator matches by type *text*, not module
+  // identity (see scripts/generate-schema.ts:WIDGET_TYPE_FORMATS).
 
   files["src/types/deco.ts"] = `export type SectionProps<T extends (...args: any[]) => any> = Awaited<
   ReturnType<T>
