@@ -9,9 +9,46 @@
  * Rules are intentionally read-only here — `--fix` is a follow-up.
  */
 
-import type { Finding, Rule, RuleContext } from "./types";
+import type { Finding, FixAction, FsWriter, Rule, RuleContext } from "./types";
 
 const SRC_GLOB_EXCLUDES = ["node_modules", "dist", ".wrangler", ".vite", ".tanstack", "build"];
+
+/**
+ * Rewrite all `from "<oldSpec>"` (or `from '<oldSpec>'`) imports in
+ * `src/**` to `from "<newSpec>"`. Returns the list of site-relative
+ * paths actually changed so fix-action summaries can quote a count.
+ * Uses the write side of the FS adapter — never touches disk in unit
+ * tests.
+ *
+ * Intentionally string-anchored on the exact spec; will not pick up
+ * partial-prefix matches like `~/types/widgets-extra`.
+ */
+function rewriteImportSpec(
+  ctx: RuleContext,
+  writer: FsWriter,
+  oldSpec: string,
+  newSpec: string,
+): string[] {
+  const { siteDir, fs } = ctx;
+  const tsFiles = fs.glob(siteDir, "src/**/*.{ts,tsx}", SRC_GLOB_EXCLUDES);
+  const escaped = oldSpec.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`from\\s+(['"])${escaped}\\1`, "g");
+  const updated: string[] = [];
+  for (const abs of tsFiles) {
+    const content = fs.readText(abs);
+    if (!re.test(content)) {
+      re.lastIndex = 0;
+      continue;
+    }
+    re.lastIndex = 0;
+    const next = content.replace(re, (_m, q) => `from ${q}${newSpec}${q}`);
+    if (next !== content) {
+      writer.writeText(abs, next);
+      updated.push(abs.slice(siteDir.length + 1));
+    }
+  }
+  return updated;
+}
 
 /* ------------------------------------------------------------------ */
 /* Rule 1 — dead `src/lib/*` shims                                     */
@@ -63,6 +100,18 @@ const ruleDeadLibShims: Rule = {
       });
     }
     return findings;
+  },
+  applyFix({ siteDir }, findings, writer): FixAction[] {
+    const actions: FixAction[] = [];
+    for (const f of findings) {
+      writer.deleteFile(`${siteDir}/${f.file}`);
+      actions.push({
+        file: f.file,
+        kind: "delete",
+        detail: "deleted (all exports verified unused)",
+      });
+    }
+    return actions;
   },
 };
 
@@ -132,6 +181,18 @@ const ruleDeadRuntimeShim: Rule = {
         file: "src/runtime.ts",
         message: `Only re-exports invoke (${exports.join(", ")}) — replace with @decocms/start/sdk`,
         fix: 'rg -l "from \\"~/runtime\\"" src/ | xargs sed -i \'\' \'s|from "~/runtime"|from "@decocms/start/sdk"|g\' && rm src/runtime.ts',
+      },
+    ];
+  },
+  applyFix(ctx, findings, writer): FixAction[] {
+    if (findings.length === 0) return [];
+    const updated = rewriteImportSpec(ctx, writer, "~/runtime", "@decocms/start/sdk");
+    writer.deleteFile(`${ctx.siteDir}/src/runtime.ts`);
+    return [
+      {
+        file: "src/runtime.ts",
+        kind: "rewrite-imports+delete",
+        detail: `rewrote ${updated.length} import(s) → @decocms/start/sdk and deleted src/runtime.ts`,
       },
     ];
   },
@@ -229,6 +290,23 @@ const ruleLocalWidgetsTypes: Rule = {
         message: `Local file shadows @decocms/start/types/widgets (used in ${importCount} place(s))`,
         fix: 'rewrite imports to "@decocms/start/types/widgets" and rm src/types/widgets.ts',
         meta: { importCount },
+      },
+    ];
+  },
+  applyFix(ctx, findings, writer): FixAction[] {
+    if (findings.length === 0) return [];
+    const updated = rewriteImportSpec(
+      ctx,
+      writer,
+      "~/types/widgets",
+      "@decocms/start/types/widgets",
+    );
+    writer.deleteFile(`${ctx.siteDir}/src/types/widgets.ts`);
+    return [
+      {
+        file: "src/types/widgets.ts",
+        kind: "rewrite-imports+delete",
+        detail: `rewrote ${updated.length} import(s) → @decocms/start/types/widgets and deleted src/types/widgets.ts`,
       },
     ];
   },
