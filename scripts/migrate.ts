@@ -30,6 +30,7 @@ import { banner, green, red, stat, yellow } from "./migrate/colors";
 import { loadConfig, validateConfig } from "./migrate/config";
 import { analyze } from "./migrate/phase-analyze";
 import { cleanup } from "./migrate/phase-cleanup";
+import { cleanupAudit } from "./migrate/phase-cleanup-audit";
 import { compile } from "./migrate/phase-compile";
 import { report } from "./migrate/phase-report";
 import { scaffold } from "./migrate/phase-scaffold";
@@ -46,6 +47,7 @@ function parseArgs(args: string[]): {
   strict: boolean;
   withBuild: boolean;
   noCompile: boolean;
+  noCleanupAudit: boolean;
 } {
   let source = ".";
   let dryRun = false;
@@ -54,6 +56,7 @@ function parseArgs(args: string[]): {
   let strict = false;
   let withBuild = false;
   let noCompile = false;
+  let noCleanupAudit = false;
 
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
@@ -75,6 +78,9 @@ function parseArgs(args: string[]): {
       case "--no-compile":
         noCompile = true;
         break;
+      case "--no-cleanup-audit":
+        noCleanupAudit = true;
+        break;
       case "--help":
       case "-h":
         help = true;
@@ -82,7 +88,16 @@ function parseArgs(args: string[]): {
     }
   }
 
-  return { source, dryRun, verbose, help, strict, withBuild, noCompile };
+  return {
+    source,
+    dryRun,
+    verbose,
+    help,
+    strict,
+    withBuild,
+    noCompile,
+    noCleanupAudit,
+  };
 }
 
 function showHelp() {
@@ -93,13 +108,15 @@ function showHelp() {
     npx -p @decocms/start deco-migrate [options]
 
   Options:
-    --source <dir>    Source directory (default: .)
-    --dry-run         Preview changes without writing files
-    --verbose         Show detailed output for every file
-    --strict          Fail (exit 2) when typecheck/build report errors
-    --with-build      Also run \`vite build\` after typecheck (slower)
-    --no-compile      Skip the post-bootstrap compile phase entirely
-    --help, -h        Show this help message
+    --source <dir>        Source directory (default: .)
+    --dry-run             Preview changes without writing files
+    --verbose             Show detailed output for every file
+    --strict              Fail (exit 2) when typecheck/build report errors
+    --with-build          Also run \`vite build\` after typecheck (slower)
+    --no-compile          Skip the post-bootstrap compile phase entirely
+    --no-cleanup-audit    Skip the post-migration cleanup audit (run separately
+                          via \`deco-post-cleanup\` if needed)
+    --help, -h            Show this help message
 
   Examples:
     npx -p @decocms/start deco-migrate --dry-run --verbose
@@ -188,6 +205,17 @@ async function main() {
         withBuild: opts.withBuild,
       });
       if (compileResult.shouldFail) {
+        process.exit(2);
+      }
+    }
+
+    // Phase 9: Post-migration cleanup audit
+    // Read-only scan that catches residual debt the migration script
+    // can't (or won't) fix. Always informational unless --strict is on,
+    // in which case warning-severity findings exit 2.
+    if (!opts.noCleanupAudit) {
+      const auditFailed = cleanupAudit(ctx, { strict: opts.strict });
+      if (auditFailed) {
         process.exit(2);
       }
     }
