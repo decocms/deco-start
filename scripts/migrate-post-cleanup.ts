@@ -76,8 +76,9 @@ function showHelp() {
   Options:
     --source <dir>   Site directory to audit (default: .)
     --fix            Auto-apply mechanical fixes for the safe rules
-                     (dead-lib-shims, dead-runtime-shim, local-widgets-types).
-                     Other rules still detect-only.
+                     (dead-lib-shims, dead-runtime-shim, local-widgets-types,
+                     vtex-shim-regression swap subset, obsolete-vite-plugins).
+                     Other rules — including htmx-residue — stay detect-only.
     --json           Emit machine-readable JSON instead of pretty text
     --strict         Exit code 2 if any warning-severity findings exist
     --help, -h       Show this help

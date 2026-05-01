@@ -359,7 +359,46 @@ rm src/types/widgets.ts
 Confirm `tsc --noEmit` is still clean — the framework version is a
 strict superset of what the migration script generated.
 
-## 7. Search for orphan `TODO: move into framework` comments
+## 7. Verify no leftover HTMX residue in `src/`
+
+For sites that came from a Fresh codebase using HTMX (`@deco/htmx`,
+`hx-*` attributes on JSX elements), the migration to TanStack Start
+requires **rewriting** every HTMX interaction to React state +
+event handlers + `useNavigate()`/sub-routes. The framework
+intentionally ships **no** HTMX runtime — leaving `hx-*` attributes
+in the migrated `src/` tree means the corresponding interaction is
+silently dead.
+
+The audit's `htmx-residue` rule scans every `*.{ts,tsx}` under `src/`
+(excluding `*.test.tsx` / `*.spec.ts` / `__tests__/`) for any
+remaining `hx-*` attribute, classifies each occurrence into one of
+seven categories (`event-handler`, `form-swap`, `click-swap`,
+`auto-fetch`, `oob-swap`, `boost`, `unmatched`), and emits one
+warning per file with a category breakdown:
+
+```
+[WARNING] src/components/AddToBagButton.tsx:14 — 1 hx-* element(s) — event-handler=1
+  fix: Rewrite per .agents/skills/deco-to-tanstack-migration/references/htmx-rewrite.md
+       (run `deco-htmx-analyze` for the per-category breakdown)
+```
+
+The rule is intentionally **detect-only**:
+
+- The rewrites are non-mechanical — choosing between a local state
+  machine, a sub-route, a React form action, or a platform hook
+  (e.g. `useCart`) varies per call site and depends on the data
+  flow, not just the attribute cluster.
+- The companion CLI `deco-htmx-analyze` produces a richer inventory
+  (top tags, sample line numbers, JSON output) when you need to
+  triage hundreds of occurrences across a large repo.
+- The `references/htmx-rewrite.md` skill is the per-pattern
+  playbook with before/after code for each of the seven categories.
+
+In `--strict` mode any residue exits 2 — wire that into CI once a
+site has finished its HTMX rewrite to prevent regressions sneaking
+back in via copy-paste from a Fresh source.
+
+## 8. Search for orphan `TODO: move into framework` comments
 
 Real sites accumulate `TODO` comments like `// TODO: move into decoVitePlugin
 in next @decocms/start release`. These are roadmap items the framework
@@ -376,7 +415,7 @@ For each hit, decide:
 
 ## Verification checklist
 
-After completing 1-7:
+After completing 1-8:
 
 - [ ] `npm run typecheck` baseline matches pre-cleanup count (no new errors)
 - [ ] `npm run dev` starts and `/`, `/some-pdp/p`, `/s?q=foo` all render
