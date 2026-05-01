@@ -168,15 +168,49 @@ one imported symbol is a real silent stub (returns `null` / `{}` / `[]`
 alongside stubs (e.g. a `parseCookie` cookie parser, a `fetchSafe`
 wrapper) no longer create noise.
 
-The audit's finding names the exact stub symbols, e.g.
+The audit's finding names the exact stub symbols **and emits per-symbol
+fix guidance**, e.g.
 
 ```
 [WARNING] src/loaders/search/x.ts — Imports stub-only symbols from
   vtex-transform (toProduct); vtex-segment (getSegmentFromBag) —
   runtime is silently stubbed
-    fix: Repoint imports to '@decocms/apps/vtex/...' or
-         'apps/commerce/utils/...'
+    fix: toProduct → @decocms/apps/vtex/utils/transform (1:1 import swap)
+         — canonical signature is `toProduct(product, sku, level, options)`;
+         1-arg call sites need to expand args first | getSegmentFromBag →
+         call-site refactor: read cookies via `request.headers.get('cookie')`
+         then call `buildSegmentFromCookies()` from
+         '@decocms/apps/vtex/utils/segment'.
 ```
+
+JSON consumers can read structured guidance from `meta.fixHints`:
+
+```json
+{
+  "rule": "vtex-shim-regression",
+  "meta": {
+    "stubsBySim": { "vtex-transform": ["toProduct"], "vtex-segment": ["getSegmentFromBag"] },
+    "fixHints": {
+      "toProduct": { "kind": "swap", "canonical": "@decocms/apps/vtex/utils/transform", "note": "..." },
+      "getSegmentFromBag": { "kind": "refactor", "note": "..." }
+    }
+  }
+}
+```
+
+### Canonical replacement table
+
+| Stub symbol | Kind | Canonical / fix |
+|---|---|---|
+| `toProduct` | swap | `@decocms/apps/vtex/utils/transform.toProduct` — note canonical signature is `(product, sku, level, options)`; 1-arg call sites need to expand args |
+| `withSegmentCookie` | swap | `@decocms/apps/vtex/utils/segment.withSegmentCookie` — note canonical signature is `(segment, headers?)` |
+| `getSegmentFromBag` | refactor | read cookies via `request.headers.get('cookie')`, then `buildSegmentFromCookies()` from `@decocms/apps/vtex/utils/segment` |
+| `getISCookiesFromBag` | refactor | extract IS cookies from `request.headers.get('cookie')` directly — no canonical helper, the bag-based mechanism doesn't exist on TanStack Start |
+
+Symbols not in the table get the generic guidance ("repoint to
+`@decocms/apps/vtex/...` or `apps/commerce/utils/...`") — when you find
+a new one worth pinning down, add it to `STUB_FIX_HINTS` in
+[`scripts/migrate/post-cleanup/rules.ts`](https://github.com/decocms/deco-start/blob/main/scripts/migrate/post-cleanup/rules.ts).
 
 Manual sweep (still useful if you don't have the audit handy):
 

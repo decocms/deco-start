@@ -240,6 +240,123 @@ const ruleSiteLocalGlobals: Rule = {
 /* ------------------------------------------------------------------ */
 
 /**
+ * Per-symbol guidance for the canonical replacement of each known
+ * shim stub. Used by the `vtex-shim-regression` rule to compose
+ * actionable `fix:` messages instead of the generic "Repoint imports"
+ * fallback.
+ *
+ * Kept as data (not code) so the JSON output of the audit can carry
+ * structured fix metadata for downstream tooling (CI dashboards,
+ * follow-up auto-fix rules, etc.).
+ *
+ * Categories:
+ * - `swap`: 1:1 import swap is safe — caller imports the symbol from
+ *   `canonical` instead of the local shim. Note may flag a signature
+ *   gotcha that the caller has to address at the call site.
+ * - `refactor`: a call-site rewrite is required (typically because the
+ *   stub's "bag-based" API has no analog on TanStack Start; the request
+ *   headers are the new source of truth). The note explains the pattern.
+ *
+ * Symbols absent from this table fall back to the generic guidance.
+ * The rule still flags them — only the `fix:` prose changes.
+ */
+export type FixHint =
+  | { kind: "swap"; canonical: string; note?: string }
+  | { kind: "refactor"; note: string };
+
+export const STUB_FIX_HINTS: Record<string, FixHint> = {
+  // src/lib/vtex-transform
+  toProduct: {
+    kind: "swap",
+    canonical: "@decocms/apps/vtex/utils/transform",
+    note:
+      "canonical signature is `toProduct(product, sku, level, options)`; " +
+      "1-arg call sites need to expand args first — see skill § 5",
+  },
+  // src/lib/vtex-segment
+  getSegmentFromBag: {
+    kind: "refactor",
+    note:
+      "read cookies via `request.headers.get('cookie')` then call " +
+      "`buildSegmentFromCookies()` from '@decocms/apps/vtex/utils/segment'. " +
+      "The bag-based lookup mechanism does not exist on TanStack Start.",
+  },
+  withSegmentCookie: {
+    kind: "swap",
+    canonical: "@decocms/apps/vtex/utils/segment",
+    note:
+      "canonical signature is `withSegmentCookie(segment, headers?)`; " +
+      "if you currently pass only headers, also pass a segment object",
+  },
+  // src/lib/vtex-intelligent-search
+  getISCookiesFromBag: {
+    kind: "refactor",
+    note:
+      "extract IS cookies from `request.headers.get('cookie')` directly. " +
+      "The bag-based lookup mechanism does not exist on TanStack Start.",
+  },
+};
+
+/**
+ * Format a single symbol's fix guidance as a one-liner suitable for
+ * the audit's `fix:` field. Returns undefined when the symbol has no
+ * specific entry in `STUB_FIX_HINTS`.
+ */
+export function formatFixHint(symbol: string): string | undefined {
+  const hint = STUB_FIX_HINTS[symbol];
+  if (!hint) return undefined;
+  if (hint.kind === "swap") {
+    const head = `${symbol} → ${hint.canonical} (1:1 import swap)`;
+    return hint.note ? `${head} — ${hint.note}` : head;
+  }
+  return `${symbol} → call-site refactor: ${hint.note}`;
+}
+
+/**
+ * Compose the `fix:` message for a finding from the per-shim stub map.
+ * Splits symbols into "have specific guidance" vs "fall back to generic".
+ * Output joins each piece with ` | ` so the message stays one logical
+ * line even when there are several stubs.
+ */
+export function buildVtexShimFixMessage(stubsBySim: Map<string, string[]>): string {
+  const known: string[] = [];
+  const unknown: string[] = [];
+  for (const syms of stubsBySim.values()) {
+    for (const s of syms) {
+      const hint = formatFixHint(s);
+      if (hint) known.push(hint);
+      else unknown.push(s);
+    }
+  }
+  const parts: string[] = [...known];
+  if (unknown.length > 0) {
+    parts.push(
+      `${unknown.join(", ")} → repoint to '@decocms/apps/vtex/...' or 'apps/commerce/utils/...'`,
+    );
+  }
+  return parts.length > 0
+    ? parts.join(" | ")
+    : "Repoint imports to '@decocms/apps/vtex/...' or 'apps/commerce/utils/...'";
+}
+
+/**
+ * Build the structured `fixHints` payload for `meta` so JSON consumers
+ * (CI dashboards, follow-up tooling) can render their own UI. Each
+ * entry is keyed by symbol; symbols without specific guidance are
+ * omitted (the prose fallback covers them).
+ */
+function fixHintsToMeta(stubsBySim: Map<string, string[]>): Record<string, FixHint> {
+  const out: Record<string, FixHint> = {};
+  for (const syms of stubsBySim.values()) {
+    for (const s of syms) {
+      const hint = STUB_FIX_HINTS[s];
+      if (hint) out[s] = hint;
+    }
+  }
+  return out;
+}
+
+/**
  * Parse one or more ES `import { a, b as c, type d } from "spec"` blocks
  * targeting a specific source spec out of a file. Returns the list of
  * imported names (resolved to their original symbol, ignoring `as`
@@ -319,16 +436,17 @@ const ruleVtexShimRegression: Rule = {
       const rel = abs.slice(siteDir.length + 1);
       const detail = [...stubsBySim.entries()]
         .map(([s, syms]) => `${s} (${syms.join(", ")})`)
-        .join("; ")
-      ;
+        .join("; ");
+      const fixHintsMeta = fixHintsToMeta(stubsBySim);
       findings.push({
         rule: "vtex-shim-regression",
         severity: "warning",
         file: rel,
         message: `Imports stub-only symbols from ${detail} — runtime is silently stubbed`,
-        fix: "Repoint imports to '@decocms/apps/vtex/...' or 'apps/commerce/utils/...'",
+        fix: buildVtexShimFixMessage(stubsBySim),
         meta: {
           stubsBySim: Object.fromEntries(stubsBySim),
+          ...(Object.keys(fixHintsMeta).length > 0 ? { fixHints: fixHintsMeta } : {}),
         },
       });
     }

@@ -404,6 +404,108 @@ describe("rule: vtex-shim-regression", () => {
   });
 });
 
+describe("rule: vtex-shim-regression — per-symbol fix hints", () => {
+  it("emits 1:1 swap hint for `toProduct`", () => {
+    const fs = makeFs({
+      "/site/src/lib/vtex-transform.ts":
+        "export function toProduct(p: any): unknown { return p as unknown; }\n",
+      "/site/src/loaders/x.ts":
+        'import { toProduct } from "~/lib/vtex-transform";\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "vtex-shim-regression")!;
+    expect(r.findings).toHaveLength(1);
+    const f = r.findings[0];
+    expect(f.fix).toContain("toProduct → @decocms/apps/vtex/utils/transform");
+    expect(f.fix).toContain("1:1 import swap");
+    expect(f.meta?.fixHints).toEqual({
+      toProduct: {
+        kind: "swap",
+        canonical: "@decocms/apps/vtex/utils/transform",
+        note: expect.stringContaining("canonical signature"),
+      },
+    });
+  });
+
+  it("emits refactor hint for `getSegmentFromBag`", () => {
+    const fs = makeFs({
+      "/site/src/lib/vtex-segment.ts":
+        "export function getSegmentFromBag(): null { return null; }\n",
+      "/site/src/loaders/x.ts":
+        'import { getSegmentFromBag } from "~/lib/vtex-segment";\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "vtex-shim-regression")!;
+    const f = r.findings[0];
+    expect(f.fix).toContain("getSegmentFromBag → call-site refactor");
+    expect(f.fix).toContain("buildSegmentFromCookies");
+    expect(f.meta?.fixHints).toEqual({
+      getSegmentFromBag: {
+        kind: "refactor",
+        note: expect.stringContaining("buildSegmentFromCookies"),
+      },
+    });
+  });
+
+  it("composes hints for files with multiple stubs", () => {
+    const fs = makeFs({
+      "/site/src/lib/vtex-segment.ts":
+        "export function getSegmentFromBag(): null { return null; }\n",
+      "/site/src/lib/vtex-transform.ts":
+        "export function toProduct(p: any): unknown { return p as unknown; }\n",
+      "/site/src/loaders/x.ts":
+        'import { getSegmentFromBag } from "~/lib/vtex-segment";\n' +
+        'import { toProduct } from "~/lib/vtex-transform";\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "vtex-shim-regression")!;
+    const f = r.findings[0];
+    expect(f.fix).toContain("getSegmentFromBag → call-site refactor");
+    expect(f.fix).toContain("toProduct → @decocms/apps/vtex/utils/transform");
+    // Joined with " | " for visual separation.
+    expect(f.fix).toContain(" | ");
+    expect(Object.keys(f.meta?.fixHints as object)).toEqual(
+      expect.arrayContaining(["toProduct", "getSegmentFromBag"]),
+    );
+  });
+
+  it("falls back to generic hint for symbols without entries", () => {
+    const fs = makeFs({
+      "/site/src/lib/vtex-mystery.ts":
+        "export function unknownStub(): null { return null; }\n",
+      "/site/src/loaders/x.ts":
+        'import { unknownStub } from "~/lib/vtex-mystery";\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "vtex-shim-regression")!;
+    const f = r.findings[0];
+    expect(f.fix).toContain("unknownStub → repoint to '@decocms/apps/vtex/...");
+    // No fixHints in meta when no symbols match the table.
+    expect(f.meta?.fixHints).toBeUndefined();
+  });
+
+  it("mixes specific hints and generic fallback in one message", () => {
+    const fs = makeFs({
+      "/site/src/lib/vtex-transform.ts":
+        "export function toProduct(p: any): unknown { return p as unknown; }\n",
+      "/site/src/lib/vtex-mystery.ts":
+        "export function unknownStub(): null { return null; }\n",
+      "/site/src/loaders/x.ts":
+        'import { toProduct } from "~/lib/vtex-transform";\n' +
+        'import { unknownStub } from "~/lib/vtex-mystery";\n',
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "vtex-shim-regression")!;
+    const f = r.findings[0];
+    expect(f.fix).toContain("toProduct → @decocms/apps/vtex/utils/transform");
+    expect(f.fix).toContain("unknownStub → repoint");
+    // Only the known symbol shows up in fixHints.
+    expect(f.meta?.fixHints).toEqual({
+      toProduct: expect.objectContaining({ kind: "swap" }),
+    });
+  });
+});
+
 describe("rule: local-widgets-types", () => {
   it("flags presence of src/types/widgets.ts and counts imports", () => {
     const fs = makeFs({
