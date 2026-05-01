@@ -212,6 +212,72 @@ Symbols not in the table get the generic guidance ("repoint to
 a new one worth pinning down, add it to `STUB_FIX_HINTS` in
 [`scripts/migrate/post-cleanup/rules.ts`](https://github.com/decocms/deco-start/blob/main/scripts/migrate/post-cleanup/rules.ts).
 
+### Recipe: expanding 1-arg `toProduct(p)` call sites
+
+Two real-world patterns surface, requiring different fixes:
+
+**Pattern A — call site already passes 4 args under `as any`** (e.g.
+`smartShelfForYou.ts` on casaevideo): the dev wrote the call for
+canonical, the import pointed at the stub. Fix is **import-only**:
+
+```diff
+-import { toProduct } from "~/lib/vtex-transform";
++import { toProduct } from "@decocms/apps/vtex/utils/transform";
+
+ const normalizedProducts = rawProducts.data.map((p: VTEXProduct) =>
+   (toProduct as any)(p, p.items?.[0], 0, {
+     baseUrl: baseURL,
+     priceCurrency: "BRL",
+   }),
+ );
+```
+
+The `as any` cast may stay if local `~/types/vtex.Product` and
+canonical `LegacyProductVTEX | ProductVTEX` differ structurally — that's
+a separate refactor.
+
+**Pattern B — call site uses true 1-arg form** (e.g.
+`intelligenseSearch.ts` on casaevideo): the dev relied on the stub's
+identity-cast behaviour. Fix is to **expand the call** mirroring the
+canonical pattern in
+[`apps-start/vtex/loaders/autocomplete.ts`](https://github.com/decocms/apps-start/blob/main/vtex/loaders/autocomplete.ts):
+
+```diff
+-import { toProduct } from "~/lib/vtex-transform";
++import { pickSku, toProduct } from "@decocms/apps/vtex/utils/transform";
+
+ const baseURL = new URL(req.url).origin;
+ return {
+   searches,
+-  products: (products ?? []).map((p) => toProduct(p)).slice(0, count),
++  products: (products ?? []).slice(0, count).map((p: any) => {
++    const sku = pickSku(p);
++    return toProduct(p, sku, 0, { baseUrl: baseURL, priceCurrency: "BRL" });
++  }),
+ };
+```
+
+`pickSku` handles the IS-shape SKU selection; without it, downstream
+fields like `productID`, `gtin`, `additionalProperty[]` come back
+empty.
+
+**Pattern C — keep the stub deliberately**: rare, but valid when the
+upstream API already returns canonical `Product[]` shape and the call
+is purely a type-narrowing cast. Replace with a typed cast at the
+boundary instead of importing a stub:
+
+```diff
+-import { toProduct } from "~/lib/vtex-transform";
++import type { Product } from "@decocms/apps/commerce/types";
+
+-products: (products ?? []).map((p) => toProduct(p)).slice(0, count),
++products: ((products ?? []) as Product[]).slice(0, count),
+```
+
+This silences the audit (the stub import is gone) without changing
+behaviour. Only do this if you've **verified** the upstream payload is
+already schema.org-shaped.
+
 Manual sweep (still useful if you don't have the audit handy):
 
 ```bash
