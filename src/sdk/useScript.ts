@@ -150,21 +150,61 @@ export function inlineScript(js: string) {
  * See: deco-to-tanstack-migration skill, "useComponent / partial sections"
  * section, for the per-pattern recipes.
  *
- * Both stubs throw at runtime (and at import time, if you call them at
- * module top level) so legacy code surfaces a clear error instead of a
- * silent no-op.
+ * ## SSR-safe stub behavior (since 2.27)
+ *
+ * Earlier versions threw on call. That broke SSR for the *entire page* if a
+ * single section still imported `useSection` — even sections that the user
+ * never interacts with (e.g. legacy login form on the homepage). React's
+ * error boundary would catch the throw and degrade the whole route to
+ * client rendering.
+ *
+ * The current behavior:
+ *   - returns a stable placeholder URL (`HTMX_LEGACY_URL`) so it can be
+ *     embedded in `hx-get` / `hx-post` attributes without crashing the
+ *     SSR pass,
+ *   - logs a deduped `console.warn` (in dev only) per call site so the
+ *     migration signal stays loud,
+ *   - the `htmx-residue` audit rule still catalogues every call site for
+ *     systematic rewrite.
+ *
+ * This is a deliberate trade-off: SSR success > strict-throw enforcement.
+ * Audit + skill docs do the enforcement instead.
  */
 const DEPRECATION_MESSAGE =
   "[@decocms/start] useSection / usePartialSection were removed. " +
   "The Fresh/Deno HTMX partial-section pattern does not apply on " +
   "TanStack Start / Cloudflare Workers. Replace call-sites with " +
   "createServerFn + useMutation, or local React state. See the " +
-  "deco-to-tanstack-migration skill for per-pattern recipes.";
+  "deco-to-tanstack-migration skill for per-pattern recipes. " +
+  "Run `deco-post-cleanup` and look for rule [9] htmx-residue to find " +
+  "every site call-site that still depends on this.";
 
-export function usePartialSection(_props?: Record<string, unknown>): never {
-  throw new Error(DEPRECATION_MESSAGE);
+/**
+ * Stable placeholder URL returned by the legacy `useSection` /
+ * `usePartialSection` stubs. Hitting this URL surfaces a clear error.
+ * Exported so frameworks/tests can match against it.
+ */
+export const HTMX_LEGACY_URL = "/__deco_legacy_htmx_section__";
+
+function warnLegacyHtmx(name: string) {
+  if (typeof process !== "undefined" && process.env?.NODE_ENV === "production") {
+    return;
+  }
+  if (typeof (globalThis as any).__DECO_LEGACY_HTMX_WARNED === "undefined") {
+    (globalThis as any).__DECO_LEGACY_HTMX_WARNED = new Set<string>();
+  }
+  const set = (globalThis as any).__DECO_LEGACY_HTMX_WARNED as Set<string>;
+  if (set.has(name)) return;
+  set.add(name);
+  console.warn(`[${name}] ${DEPRECATION_MESSAGE}`);
 }
 
-export function useSection(_props?: Record<string, unknown>): never {
-  throw new Error(DEPRECATION_MESSAGE);
+export function usePartialSection(_props?: Record<string, unknown>): string {
+  warnLegacyHtmx("usePartialSection");
+  return HTMX_LEGACY_URL;
+}
+
+export function useSection(_props?: Record<string, unknown>): string {
+  warnLegacyHtmx("useSection");
+  return HTMX_LEGACY_URL;
 }

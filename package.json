@@ -19,6 +19,9 @@
     "./sdk/useScript": "./src/sdk/useScript.ts",
     "./sdk/signal": "./src/sdk/signal.ts",
     "./sdk/clx": "./src/sdk/clx.ts",
+    "./sdk/cn": "./src/sdk/cn.ts",
+    "./sdk/encoding": "./src/sdk/encoding.ts",
+    "./sdk/http": "./src/sdk/http.ts",
     "./sdk/useSuggestions": "./src/sdk/useSuggestions.ts",
     "./sdk/retry": "./src/sdk/retry.ts",
     "./sdk/useId": "./src/sdk/useId.ts",
@@ -96,7 +99,9 @@
   },
   "dependencies": {
     "@deco-cx/warp-node": "^0.3.16",
+    "clsx": "^2.1.1",
     "fast-json-patch": "^3.1.0",
+    "tailwind-merge": "^3.3.1",
     "tsx": "^4.19.0",
     "ws": "^8.18.0"
   },
