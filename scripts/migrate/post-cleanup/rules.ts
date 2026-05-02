@@ -1078,6 +1078,32 @@ export const FRAMEWORK_DUPLICATES: FrameworkDuplicate[] = [
     description:
       "src/sdk/url.ts overlaps with @decocms/apps/commerce/sdk/url → relative() (extended in @decocms/apps@1.9+)",
   },
+  {
+    id: "use-suggestions",
+    sitePath: "src/sdk/useSuggestions.ts",
+    canonicalImport: "@decocms/start/sdk/useSuggestions",
+    // Fingerprint: hand-rolled hook with the module-level signal +
+    // serial-queue + latestQuery cancel pattern. Both casaevideo and
+    // baggagio independently invented this exact shape. Sites that
+    // already adopted `createUseSuggestions(…)` factory calls won't
+    // match this signature.
+    contentSignature: [
+      /export\s+const\s+useSuggestions\s*=/,
+      /\/deco\/invoke\//,
+      /latestQuery/,
+    ],
+    safeToAutoFix: false,
+    reason:
+      "rewrite to a 5-line factory shim: " +
+      "`export const { useSuggestions } = createUseSuggestions<MySuggestion>({ onError });` " +
+      "where MySuggestion is the site's payload type. The call sites " +
+      "(`const { setQuery, payload, loading } = useSuggestions(loader)`) are unchanged. " +
+      "Then delete src/sdk/useSuggestions.ts. Auto-fix is gated because " +
+      "the per-site type parameter and onError wiring need site-specific " +
+      "decisions. See references/platform-hooks-factories.md § useSuggestions.",
+    description:
+      "src/sdk/useSuggestions.ts duplicates @decocms/start/sdk/useSuggestions → createUseSuggestions() (added in @decocms/start@2.25+)",
+  },
 ];
 
 const ruleLocalFrameworkDuplicate: Rule = {

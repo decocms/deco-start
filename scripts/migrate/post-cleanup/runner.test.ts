@@ -1267,6 +1267,50 @@ describe("rule: local-framework-duplicate", () => {
     expect(r.findings[0].fix).toContain("stripSearchParams");
   });
 
+  it("flags src/sdk/useSuggestions.ts as warn-only (factory rewrite needed)", () => {
+    const fs = makeFs({
+      "/site/src/sdk/useSuggestions.ts":
+        'import { signal } from "~/sdk/signal";\n' +
+        "let queue = Promise.resolve();\n" +
+        'let latestQuery = "";\n' +
+        "export const useSuggestions = (loader) => {\n" +
+        "  const setQuery = (query) => {\n" +
+        "    latestQuery = query;\n" +
+        '    queue = queue.then(() => fetch(`/deco/invoke/${loader.__resolveType}`));\n' +
+        "  };\n" +
+        "  return { setQuery };\n" +
+        "};\n",
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "local-framework-duplicate")!;
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].file).toBe("src/sdk/useSuggestions.ts");
+    expect(r.findings[0].meta?.id).toBe("use-suggestions");
+    expect(r.findings[0].meta?.safeToAutoFix).toBe(false);
+    expect(r.findings[0].meta?.canonicalImport).toBe(
+      "@decocms/start/sdk/useSuggestions",
+    );
+    expect(r.findings[0].fix).toContain("createUseSuggestions");
+  });
+
+  it("does NOT flag a useSuggestions.ts that already adopted the factory shim", () => {
+    // Sites that completed the W15-B-2 migration end up with a
+    // 5-line factory shim — no `latestQuery` or `/deco/invoke/`
+    // strings. The rule's signature must NOT fire on the shim.
+    const fs = makeFs({
+      "/site/src/sdk/useSuggestions.ts":
+        'import { createUseSuggestions } from "@decocms/start/sdk/useSuggestions";\n' +
+        'import * as Sentry from "@sentry/react";\n' +
+        "export const { useSuggestions } = createUseSuggestions({\n" +
+        "  onError: (err) => Sentry.captureException(err),\n" +
+        "});\n",
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "local-framework-duplicate")!;
+    const finding = r.findings.find((f) => f.meta?.id === "use-suggestions");
+    expect(finding).toBeUndefined();
+  });
+
   it("does NOT flag a forked url.ts that no longer carries the removeIdSku flag", () => {
     // A site that already adopted an options-object-shaped local helper
     // should not be flagged — the rule's signature is anchored on the

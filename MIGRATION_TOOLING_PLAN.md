@@ -1205,11 +1205,6 @@ copy-paste regression on any future site gets caught automatically.
 
 **Still in the cross-site backlog (sequenced behind 15-B-1):**
 
-- **15-B-2** — `useSuggestions` framework helper (new export in
-  `@decocms/start/sdk` typed by `Resolved<T>`, optional Sentry
-  hook). Sites adopt incrementally; once 2+ adopt, add a registry
-  entry pointing the legacy hand-rolled implementations at the
-  canonical via `local-framework-duplicate`.
 - **15-B-3** — `useOffer` factory (D4 candidate; needs design pass
   for PIX/installment plugin slots).
 - **15-B-4** — `Picture` API unification (breaking; needs a
@@ -1285,6 +1280,94 @@ must merge first so the deco-start audit registry can point at
 the released canonical. The skill doc explicitly version-pins the
 canonical (`@decocms/apps@1.9+`) so engineers reading the audit
 output know whether they need to bump apps before adopting.
+
+### Wave 15-B-2 (canonical `useSuggestions` factory + audit registry entry) — 🟡 **IN FLIGHT**
+
+`useSuggestions` was the next D4 candidate after the `clx` /
+`useSendEvent` / `location-matcher` audit. Both casaevideo and
+baggagio independently invented the *exact same* shape — module-level
+signal for payload + loading, FIFO promise queue, "is this still the
+latest query?" cancel guard, post to `/deco/invoke/<__resolveType>`.
+Differences were minor (Sentry hook in casaevideo, the cancel guard
+in `finally` only in baggagio's version — actually the correct
+behaviour, casaevideo's omission is a latent bug).
+
+Verified state (2026-05-01 grep):
+- casaevideo `src/sdk/useSuggestions.ts` — 58 LOC, typed via local
+  `IntelligenseSearch`, Sentry-wrapped errors, missing latest-query
+  guard in `finally`
+- baggagio `src/sdk/useSuggestions.ts` — 55 LOC, typed via VTEX
+  `Suggestion`, no observability, has the latest-query guard
+  (correct behaviour)
+- Single call site each (`Searchbar`/`Searchbar/Form`)
+
+**Decision: framework, not apps.** The hook is a debounce/cancel/
+coalesce primitive; the commerce-flavoured usage is incidental.
+Apps depends on framework, not the other way around — putting it in
+`@decocms/start/sdk` is the right layering.
+
+**Decision: factory pattern.** Matches `createUseCart` /
+`createUseUser` / `createUseWishlist` (D4 done right). State
+isolation per call, type narrowing at the factory boundary, sites
+get a 5-line shim.
+
+**Shipped (one PR):**
+
+41. `feat(sdk): createUseSuggestions factory + audit registry entry` 🟡 **WAITING ON CI**.
+    - **`src/sdk/useSuggestions.ts`** (new, 158 LOC) — exports
+      `createUseSuggestions<T>(options?)` returning
+      `{ useSuggestions, _internal }`. Options: `onError(err, query)`
+      Sentry/OTEL hook, `fetchImpl` for tests. The `_internal` field
+      exposes the raw signals + a non-React `setQuery(query, loader)`
+      and a `drain()` promise for SSR pre-fetch helpers and unit
+      tests.
+    - **Bug fix included**: the canonical adopts baggagio's
+      `if (latestQuery === query) loading.value = false` guard in
+      `finally`. casaevideo's version cleared loading
+      unconditionally — meaning rapid keystrokes could leave the
+      UI in an "older fetch wins" state. The factory closes that
+      gap by default.
+    - **`src/sdk/useSuggestions.test.ts`** (new) — 11 tests. Factory
+      shape + isolation; happy-path fetch (correct URL, body, response
+      mapping); loading-flag invariants; cancel guard verified by an
+      echo-fetch mock that proves only the latest query reaches the
+      network; serial-queue verified by a race detector that asserts
+      `maxInflight === 1`; error path verified for `onError`
+      forwarding, console fallback when no `onError` is wired,
+      non-2xx responses, payload preservation across errors.
+    - **`scripts/migrate/post-cleanup/rules.ts`** — 5th entry in
+      `FRAMEWORK_DUPLICATES` registry for `src/sdk/useSuggestions.ts`
+      → `@decocms/start/sdk/useSuggestions`. Content signature
+      anchored on the legacy hand-rolled shape (`export const
+      useSuggestions =`, `/deco/invoke/`, `latestQuery`). Sites that
+      already adopted the factory shim are NOT flagged — proven by
+      a negative test case.
+    - **`safeToAutoFix: false`** — the per-site type parameter
+      (`Suggestion` vs `IntelligenseSearch` vs custom) and `onError`
+      wiring need site-specific decisions, so the rule emits a
+      detailed `fix:` recipe instead of trying to auto-rewrite.
+    - **Skill doc updates**:
+      - `references/platform-hooks-factories.md` — new section
+        documenting `createUseSuggestions` (site shim, factory
+        ownership table, migrating-off recipe).
+      - `references/post-migration-cleanup.md` § 8 — 5th row in the
+        registry table with version pin (`@decocms/start@2.25+`).
+      - `SKILL.md` architecture map — adds the `~/sdk/useSuggestions
+        (hand-rolled) → @decocms/start/sdk/useSuggestions
+        createUseSuggestions<T>()` row.
+    - **`package.json`** — exposes `./sdk/useSuggestions` export.
+    - 368/368 tests pass (was 355 — +11 factory tests, +2 audit
+      registry tests). typecheck clean. Smoke output:
+      - baggagio: 4 findings (was 3) — clx, useSendEvent, url-relative,
+        **use-suggestions** (new)
+      - casaevideo: 2 findings (was 1) — location-matcher,
+        **use-suggestions** (new)
+
+**Architectural note**: `useSuggestions` is the first framework-side
+factory (the rest live in `@decocms/apps/vtex/hooks`). Future
+generic primitives that match the "module-level signal + queue +
+React hook" pattern can adopt the same `_internal`-with-non-React-
+setter shape — useful for SSR pre-fetch and tests.
 
 ### Wave 15+ (htmx cleanup PRs on als + propagation to other sites) — Priority 3 / 4
 

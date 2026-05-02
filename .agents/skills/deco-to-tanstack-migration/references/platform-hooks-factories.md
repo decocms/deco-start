@@ -175,12 +175,94 @@ actions, custom analytics events) rather than ripping out the factory and going 
 
 ---
 
+## `useSuggestions` (search autocomplete) — the same pattern at framework layer
+
+`createUseSuggestions` lives in `@decocms/start/sdk/useSuggestions`
+(not apps), because the queue + cancel + invoke-fetch primitive is
+not commerce-specific. It debounces and serialises calls to
+`/deco/invoke/<__resolveType>` and exposes signal-shaped state —
+exactly the shape both casaevideo and baggagio independently
+invented in their site-local `src/sdk/useSuggestions.ts`.
+
+### Site-local shim (the entire file)
+
+```ts
+// src/sdk/useSuggestions.ts
+import { createUseSuggestions } from "@decocms/start/sdk/useSuggestions";
+import * as Sentry from "@sentry/react";
+import type { Suggestion } from "@decocms/apps/commerce/types";
+
+export const { useSuggestions } = createUseSuggestions<Suggestion>({
+  onError: (err) => Sentry.captureException(err),
+});
+```
+
+The call sites stay byte-identical:
+
+```ts
+const { setQuery, payload, loading } = useSuggestions(loader);
+```
+
+### Why a factory and not a plain hook
+
+Same two reasons as the apps factories:
+
+1. **State isolation per call.** Each `createUseSuggestions()`
+   instantiates a fresh `payload` / `loading` / queue tuple. Sites
+   with multiple independent suggestion streams (e.g. searchbar +
+   category jumper) each call the factory and bind their own
+   `useSuggestions`.
+2. **Type narrowing at the boundary.** The factory takes `<T>` once;
+   the returned hook is already specialised, so callers don't re-pass
+   generics. Sites pick `Suggestion` (VTEX), `Suggestions` (Shopify),
+   or any custom shape at the factory boundary.
+
+### What the factory owns
+
+| Concern | Where it lives |
+|---|---|
+| Module-level signals (`payload`, `loading`) per stream | Factory closure |
+| Serial in-flight queue | Factory closure |
+| Latest-query cancel guard | Factory closure |
+| `fetch('/deco/invoke/<resolveType>', { body: { query, …extraProps } })` | Factory |
+| `onError(error, query)` Sentry/OTEL hook | Site (passed at instantiation) |
+| `console.error('[useSuggestions] fetch failed:', error)` | Factory (always runs) |
+| Suggestion payload type | Site (factory generic `<T>`) |
+
+### Migrating off the hand-rolled hook
+
+If your site has a 50-line `src/sdk/useSuggestions.ts` with module-level
+`signal`s and a `latestQuery` variable, the post-cleanup audit's
+`local-framework-duplicate` rule flags it (warn-only, since the
+per-site type parameter and `onError` wiring need site-specific
+decisions). The mechanical migration:
+
+1. Replace the entire file with the 5-line factory shim above.
+2. Pick the right `<T>` for your site:
+   - VTEX: `Suggestion` from `@decocms/apps/commerce/types`
+   - Sites with custom intelligent-search loaders: the loader's
+     payload type (e.g. `IntelligenseSearch`)
+3. Decide on `onError` — pass `(err) => Sentry.captureException(err)`
+   if you wired Sentry; omit it otherwise. The factory always logs
+   to console after `onError` returns, so unhandled cases stay
+   visible.
+4. Run `npm run typecheck` — call sites stay byte-identical.
+
+The advanced `_internal` field on the factory return value exposes
+the raw signals + a non-React `setQuery` and a `drain()` promise.
+Sites use it for SSR pre-fetch helpers and tests; you almost never
+need it.
+
+---
+
 ## Related
 
 - `scripts/migrate/templates/hooks.ts` — the template that emits the
-  shims above.
+  cart/user/wishlist shims.
 - `apps-start/vtex/hooks/createUseCart.ts` /
-  `createUseUser.ts` / `createUseWishlist.ts` — the factories
+  `createUseUser.ts` / `createUseWishlist.ts` — the platform factories
   themselves; each docstring is the authoritative API reference.
+- `deco-start/src/sdk/useSuggestions.ts` — the
+  `createUseSuggestions` factory (framework layer, platform-agnostic).
 - `references/platform-hooks/README.md` — historical reference for the
   pre-W12 manual approach (kept for sites that haven't migrated yet).

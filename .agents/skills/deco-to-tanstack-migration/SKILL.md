@@ -31,6 +31,7 @@ Phase-based playbook for converting `deco-sites/*` storefronts from Fresh/Preact
 | ~/sdk/useOffer | @decocms/apps/commerce/sdk/useOffer |
 | ~/sdk/useScript | @decocms/start/sdk/useScript |
 | ~/sdk/signal | @decocms/start/sdk/signal |
+| ~/sdk/useSuggestions (hand-rolled) | @decocms/start/sdk/useSuggestions → `createUseSuggestions<T>()` factory |
 
 ## Migration Phases
 
