@@ -1528,3 +1528,64 @@ What's still ahead:
 - **C8 (state persistence between migration phases)**: moderate effort, value mostly in skipping `npm install` on phase-9 retries. Polish.
 - **`vibe-dex/*` orphan branches in apps-start**: ✅ all 5 cleaned this wave.
 - **Apps registry (apps-start#18 + deco-start#81)**: defer until clear consumer.
+
+### Wave 16 (2026-05-02 — baggagio as production canary, stacked-PR pitfall RECURRENCE)
+
+User merged baggagio's PRs B1–B6 to use as guinea pig before applying the same patterns to casaevideo + lebiscuit (which ARE in production). Live validation found a critical fact: **only B1 (the bump) actually reached `main`**. PRs #13–#17 were all merged in GitHub UI but their merge commits ended up on the **previous PR's branch**, never on `main`.
+
+#### What happened (the same pitfall as Wave 8, recurring)
+
+Each PR was opened with `base = previous PR's branch`:
+
+| PR | Title | base | Merge commit landed on |
+|---|---|---|---|
+| #12 | bump 2.10→2.26 + apps 1.7→1.9 | `main` | ✅ `main` |
+| #13 | drop `src/sdk/clx.ts` | `chore/bump-deco-2.26-apps-1.9` | ❌ that branch |
+| #14 | createUseSuggestions factory | `chore/drop-local-clx` | ❌ that branch |
+| #15 | canonical `relative()` | `chore/use-framework-suggestions-factory` | ❌ that branch |
+| #16 | canonical `Picture` | `refactor/use-canonical-relative-url` | ❌ that branch |
+| #17 | drop dead `useUser` stub | `refactor/use-canonical-picture` | ❌ that branch |
+
+Each PR shows `state: MERGED` in GitHub. But the merge commit physically landed on each PR's source-branch tip, not on main. Result: all 5 cleanup PRs were silently orphaned.
+
+Detection method that worked: file-existence check on `git show main:<deleted-file>` — `clx.ts`, `url.ts`, `Picture.tsx`, `useUser.ts` were all still present on main despite their PRs being "merged". Exists/absent is a faster signal than diff browsing.
+
+#### Recovery: PR #18 — single consolidation
+
+The deepest stacked branch (`chore/drop-dead-local-useuser`) cumulatively contained all 5 cleanups (B2–B6) linearly stacked on B1. Opened [`baggagio-tanstack#18`](https://github.com/deco-sites/baggagio-tanstack/pull/18) as `chore/consolidate-b2-b6-to-main` → `main`, replaying the exact contents of #13–#17 in order. Diff vs main: **59 files changed, +70 / −240, 4 files deleted**. Typecheck + build clean. Preview at `pr-18-baggagio-tanstack.deco-cx.workers.dev` rendered identical homepage / PLP / PDP / search to current main with zero new console errors. Merged to main, deploy succeeded.
+
+#### Live validation post-merge (cumulative state on main)
+
+Tested via Playwright (cursor-ide-browser MCP) on `https://baggagio-tanstack.deco-cx.workers.dev/`:
+
+| Surface | Result | Notes |
+|---|---|---|
+| Homepage | ✅ Renders | Banner, categories, product carousel, footer all intact |
+| PLP `/s?q=mochila` | ✅ 927 produtos | Filter + sort UI present, all images load |
+| PDP `/mochila-masculina-executiva-para-notebook-horizonte/p` | ✅ Renders | Image gallery, prices, COMPRAR, frete calc, descrição all present |
+| Search suggestions endpoint | ✅ 200 | Empty `searches[]` confirmed pre-existing (matches www.bagaggio.com.br) |
+| `<picture>` HTML | ✅ 18 picture / 36 source | composable canonical pattern |
+| Console errors (filtered 3rd-party) | ✅ Same as before | `[inline-script polyfill]` + image preload warnings pre-existing on main |
+
+**Bonus discovery**: PR-B5 (canonical Picture) now correctly emits `<link rel="preload" as="image" media="(max-width: 767px)" imageSrcSet="..." fetchPriority="high">` for LCP banners — a real Web Vitals improvement that was NOT visible before the consolidation because Picture.tsx (the local wrapper without preload) was still on main.
+
+#### Each PR's safety verdict (for casaevideo + lebiscuit replay)
+
+| PR | Status | Safe to replay? |
+|---|---|---|
+| B1 — bump 2.x → 2.26 + apps 1.x → 1.9 | ✅ | YES — zero regressions on real site |
+| B2 — drop `src/sdk/clx.ts` | ✅ | YES — pure rewrite, framework export is byte-equivalent |
+| B3 — `createUseSuggestions` factory | ✅ | YES — wiring works end-to-end (200 status, payload reaches store) |
+| B4 — canonical `relative()` with `stripSearchParams` | ✅ | YES — only affects PLPs with `?skuId=` URL params, no functional regression |
+| B5 — canonical `Picture` from apps | ✅ + bonus | YES — adds proper `<link rel="preload" as="image" media>` for LCP |
+| B6 — drop dead `src/hooks/useUser.ts` | ✅ | YES — file had 0 external imports |
+
+**For casaevideo + lebiscuit**: same set of PRs is validated as safe. The replays (`C1`–`C11`, `L1`–`L11`) can proceed on production sites with confidence.
+
+### Wave 16 — discoveries
+
+- **Stacked-PR pitfall recurred even after Wave 8 documented it.** The Wave 8 mitigation ("verify base is main before merging") was not enforced; the user merged B2–B6 with original stacked bases. Stronger mitigation needed: when opening a stacked PR, **default to a single consolidating PR at the end** rather than 5 separate stacked merges. Single PR is one merge button, one CI run, one deploy — not 5 chances to mis-target the base.
+- **File-existence check is the fastest "did the merge actually land on main?" probe.** Faster than reading PR-stats, faster than diffing branches. `git show main:<deleted-file> 2>&1` — empty stderr means the deletion didn't reach main.
+- **Preview deploys via `wrangler versions upload --preview-alias` are cheap, fast (90 s), and PR-scoped.** Used `https://pr-N-baggagio-tanstack.deco-cx.workers.dev` to validate cumulative state BEFORE merging. Should be the default validation step for any consolidation PR.
+- **The canonical Picture component's per-source `<link rel="preload" as="image" media="...">` injection is a real LCP win** — but it only triggers when `<Picture preload={true}>` is set on the call site. Baggagio's `BannerCarousel.tsx` already passes `preload={lcp}` from the CMS config; the local Picture.tsx wrapper just didn't honor it. Migration to canonical IS a perf upgrade, not just a code-cleanup.
+- **Canary-driven validation matters even when the changes are mechanical.** I had high confidence the cumulative state would work (typecheck + build clean), but the live test is what surfaced the "PR-B5 actually emits preload links now" finding. Without the canary loop the perf delta would have been invisible.
