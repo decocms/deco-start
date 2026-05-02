@@ -1589,3 +1589,118 @@ Tested via Playwright (cursor-ide-browser MCP) on `https://baggagio-tanstack.dec
 - **Preview deploys via `wrangler versions upload --preview-alias` are cheap, fast (90 s), and PR-scoped.** Used `https://pr-N-baggagio-tanstack.deco-cx.workers.dev` to validate cumulative state BEFORE merging. Should be the default validation step for any consolidation PR.
 - **The canonical Picture component's per-source `<link rel="preload" as="image" media="...">` injection is a real LCP win** — but it only triggers when `<Picture preload={true}>` is set on the call site. Baggagio's `BannerCarousel.tsx` already passes `preload={lcp}` from the CMS config; the local Picture.tsx wrapper just didn't honor it. Migration to canonical IS a perf upgrade, not just a code-cleanup.
 - **Canary-driven validation matters even when the changes are mechanical.** I had high confidence the cumulative state would work (typecheck + build clean), but the live test is what surfaced the "PR-B5 actually emits preload links now" finding. Without the canary loop the perf delta would have been invisible.
+
+### Wave 17 (2026-05-02 — als clean migration: end-to-end first time, with discoveries) — ✅ **SHIPPED**
+
+User opted to wipe `als-tanstack` and re-import `als-storefront` from
+scratch, then run our migration tooling end-to-end on a real, htmx-heavy
+site for the first time. Goal stop-point: dev server boots + homepage
+SSR returns 200. Stretch: "the right way, not the fast way" — port the
+real things, then backport the learnings.
+
+#### What landed on als-tanstack `main` (force-pushed, fresh history)
+
+| Commit | What |
+|---|---|
+| `f1b6a11` | Import `als-storefront` baseline at origin/main `096686ab` |
+| `3af54d4` | Run `@decocms/start migrate.ts` (analyze/scaffold/transform/cleanup) |
+| `69727a0` | `npm install` + run codegens (blocks/sections/loaders/schema/routes) |
+| `85d5317` | Worker boots — homepage SSR returns HTTP 200 |
+| `2123516` | Port casaevideo CI/CD; bump deco-start `^2.27` + apps `^1.10`; rename worker |
+| `c6f9dcb` | Defensive guards + restored site-local utils (`format`, `formatPhoneNumber`, `formatStatusName`) |
+| `e6a1fd8` | Rewire 16 section loaders + restore Tailwind v4 theme tokens (`als` palette + custom fonts) |
+
+End state: `npm run dev` boots, homepage renders 2592 DOM nodes (full
+shell, navigation, content, footer), no Invalid URL / undefined.invoke
+crashes. CSP and `clogger` warnings are non-fatal residue from the
+pre-migration site (catalog as known follow-up).
+
+#### Framework changes back-ported to deco-start (this PR)
+
+The als run surfaced THREE migrator regressions that previous sites
+(casaevideo / lebiscuit / baggagio) didn't trip because their section
+authors happened to wire `loader` exports differently. Three real fixes:
+
+| Fix | File | Why |
+|---|---|---|
+| **`withSectionLoader` helper** | `src/cms/sectionMixins.ts` | Lets `compose(withDevice(), withSearchParam(), withSectionLoader(() => import("~/sections/Foo")))` chain mixins WITH the section's own `loader` export. Previously the migrator's template chose mixins XOR own-loader and silently dropped the section's loader when both were present. |
+| **Migrator template fix** | `scripts/migrate/templates/section-loaders.ts` | Always emit `withSectionLoader(...)` last in the chain when `meta.hasLoader === true`, alongside any `withDevice / withMobile / withSearchParam` mixins. Eliminates the silent-drop bug for future migrations. |
+| **`gotcha #50` + `setup-ts.md` template + `css-styling.md` #48–#49** | `.agents/skills/deco-to-tanstack-migration/` | Documents both the section-loader composition pattern AND the Tailwind v4 custom-palette / `@layer components → @utility` migration pitfalls discovered during als CSS restoration. |
+
+`withSectionLoader` is defensive by design — if the module has no
+`loader`, returns props unchanged; if the loader throws (e.g. legacy
+`(props, req, ctx)` signature with `ctx === undefined`), logs once via
+`[withSectionLoader] section loader threw` and returns the original
+props. One broken section never takes the page down.
+
+#### Wave 17 — discoveries (added to gotcha catalog)
+
+- **The migrator template was XOR-ing mixins vs section loaders.** This
+  is a class of bug, not just one section. Across als 16 sections were
+  affected. Detection on a fresh migration is hard because everything
+  builds and SSR renders — sections just silently drop their data.
+  Symptoms: empty product carousels, `Cannot read properties of
+  undefined (reading 'X')` cascades from downstream components that
+  expected the loader's data. Now detected at template-generation time
+  by always composing both.
+- **Tailwind v4 `@theme` token loss.** The migrator's scaffold writes a
+  minimal `app.css` with grays + base colors only. Sites with custom
+  brand palettes in `tailwind.config.ts theme.extend.colors` (als had
+  `als: { gray, blue, red, ... }` namespace) lose ALL of those tokens.
+  Symptom: Vite HMR overlay `Cannot apply unknown utility class
+  'font-bebas-neue' / 'bg-als-blue-500'`, page DOM correct but visually
+  unstyled. Plus a v4-specific second hop: `theme(colors.als.gray.50)`
+  in `.css` files no longer resolves — must rewrite as
+  `var(--color-als-gray-50)`. Plus `@layer components` custom classes
+  (`.container-pdp`) can't be `@apply`d in v4 — must promote to
+  `@utility`. All three documented in [css-styling.md #48–49](.agents/skills/deco-to-tanstack-migration/references/css-styling.md).
+- **Site-local format utilities should NOT be hoisted to the apps SDK.**
+  The migrator's overly-aggressive import-rewriting routed
+  `formatPhoneNumber` / `formatStatusName` / `capitalize` to
+  `@decocms/apps/commerce/sdk/formatPrice` (which doesn't export
+  them). Only true commerce primitives (price formatting, currency,
+  installments) belong in the apps SDK. Site-specific text formatting
+  stays site-local in `src/sdk/`. Restored als-local versions and
+  fixed import paths.
+- **`HttpError` was the third common shim.** Already promoted `cn`,
+  `cookie`, `encoding`, `STATUS_CODE`, `UserAgent` to `@decocms/start/sdk/`
+  in Wave 15. `HttpError` joined them in [deco-start#138](https://github.com/decocms/deco-start/pull/138).
+  als-tanstack ships with a temporary local shim until the next apps
+  release picks up the framework export — TODO is checked into
+  `src/lib/http-utils.ts`.
+- **CI/CD porting from casaevideo to a new TanStack site is a 1-minute
+  copy.** `deploy.yml`, `preview.yml`, `regen-blocks.yml`, plus
+  `wrangler.jsonc` worker `name` rename, plus `account_id` paste from
+  another site. No template needed yet — three sites is too few. Will
+  template if a fourth migration needs it.
+
+#### Counter-evidence the user-rule asks for
+
+Going "the right way" added ~3 hours over going "the fast way" (the
+fast way was: defer the 16 section-loader rewiring, accept empty
+shelves, ship the boot SSR-200 commit and stop). The fast way would
+have hidden two of the three discoveries above, because:
+
+1. The migrator template fix only became obvious AFTER manually
+   rewiring 16 sections by hand and noticing the pattern. If we had
+   stopped at boot, the next site to migrate would have hit the same
+   silent-drop bug.
+2. The Tailwind v4 token-loss issue was only visible after the page
+   rendered enough DOM to see "this should be branded." Boot
+   verification (HTTP 200) would have passed without it.
+
+So: 3 hours of "right way" produced one framework helper, one migrator
+fix, three documented gotchas, and a working canary site. The next
+htmx-heavy migration starts with these problems already solved. Net
+positive.
+
+#### What this PR does NOT do (deliberately)
+
+- Migrate als's htmx surface to React (deferred per Wave 14 plan; the
+  codemod handled the mechanical 47% — the rest is per-component
+  product work and depends on des-system decisions for things like
+  filter sidebars + minicart drawer animation)
+- Validate als visually against production (visual-parity is a Phase 5+
+  task; we're at Phase 4 dev-boots)
+- Ship `HttpError` consumption in als or apps — als has a local shim,
+  apps will pick up the framework export on next release

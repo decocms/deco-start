@@ -74,3 +74,58 @@ export function compose(...mixins: SectionLoaderFn[]): SectionLoaderFn {
     return result;
   };
 }
+
+/**
+ * Wraps a section module's exported `loader` so it can be composed alongside
+ * mixins like {@link withDevice}, {@link withMobile}, {@link withSearchParam}.
+ *
+ * The `modImport` argument is a lazy factory (typically `() => import("~/sections/...")`)
+ * — the module is loaded on first call. If the module does not export a
+ * `loader`, the original `props` are returned unchanged (no-op).
+ *
+ * Why this exists: the migrator and many sites lifted from Fresh declare a
+ * `loader` export on the section file (often re-exported from the inner
+ * component). That loader sets things like `url: req.url`, runs platform
+ * invocations, or calls the section's domain logic. If the section is wired
+ * in `registerSectionLoaders` with mixin-only (e.g. `withSearchParam()`),
+ * the section's own loader is silently *replaced* — its work never runs and
+ * its returned props are dropped.
+ *
+ * Compose this helper FIRST in the chain so mixin-injected props
+ * (`device`, `currentSearchParam`, …) are available to the section's loader,
+ * then the section's loader has the final word over what is returned.
+ *
+ * @example
+ * ```ts
+ * import {
+ *   compose,
+ *   withMobile,
+ *   withSearchParam,
+ *   withSectionLoader,
+ * } from "@decocms/start/cms";
+ *
+ * registerSectionLoaders({
+ *   "site/sections/Product/SearchContainerV2.tsx": compose(
+ *     withMobile(),
+ *     withSearchParam(),
+ *     withSectionLoader(() => import("~/sections/Product/SearchContainerV2")),
+ *   ),
+ * });
+ * ```
+ */
+export function withSectionLoader(
+  modImport: () => Promise<unknown>,
+): SectionLoaderFn {
+  return async (props, req) => {
+    const mod = (await modImport()) as { loader?: unknown } | undefined;
+    const loader = mod?.loader;
+    if (typeof loader !== "function") return props;
+    try {
+      const result = await (loader as SectionLoaderFn)(props, req);
+      return result ?? props;
+    } catch (error) {
+      console.error("[withSectionLoader] section loader threw:", error);
+      return props;
+    }
+  };
+}

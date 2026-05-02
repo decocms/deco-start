@@ -13,6 +13,7 @@ import { setBlocks } from "@decocms/start/cms/loader";
 import { setMetaData, setInvokeLoaders, setRenderShell } from "@decocms/start/admin";
 import { registerSections, registerSectionsSync, setResolvedComponent } from "@decocms/start/cms/registry";
 import { registerSectionLoaders, registerLayoutSections } from "@decocms/start/cms/sectionLoaders";
+import { compose, withDevice, withMobile, withSearchParam, withSectionLoader } from "@decocms/start/cms";
 import { registerCommerceLoaders, setAsyncRenderingConfig, onBeforeResolve } from "@decocms/start/cms/resolve";
 import { createCachedLoader } from "@decocms/start/sdk/cachedLoader";
 import appCss from "./styles/app.css?url";
@@ -77,13 +78,39 @@ registerLayoutSections([
 // 4. SECTION LOADERS
 // ==========================================================================
 
-// Section loaders enrich CMS props with server-side data (e.g., VTEX API calls).
-// Only needed for sections that export `const loader`.
+// Section loaders enrich CMS props with server-side data.
+//
+// Composition pattern — mixins inject helpers (device, isMobile,
+// currentSearchParam) BEFORE the section's own loader, then the
+// section's loader has the final say:
+//
+//   compose(
+//     withMobile(),
+//     withSearchParam(),
+//     withSectionLoader(() => import("~/sections/Foo")),  // must be last
+//   )
+//
+// withSectionLoader is a no-op if the module has no `loader` export and
+// catches loader exceptions (legacy `(props, req, ctx)` signatures throw
+// because we no longer pass ctx) — so a single broken loader never takes
+// the page down. Errors are logged via `[withSectionLoader] section
+// loader threw`.
+//
+// Anti-pattern (silently drops the section's loader):
+//
+//   "site/sections/Product/SearchContainer.tsx": withSearchParam(),
+//   // ❌ SearchContainer's own loader (which sets `props.url`, runs
+//   // VTEX queries, etc.) is REPLACED by the mixin — page renders
+//   // with stale props.
 registerSectionLoaders({
-  "site/sections/Product/ProductShelf.tsx": (props: any, req: Request) =>
-    import("./components/product/ProductShelf").then((m) => m.loader(props, req)),
-  "site/sections/Product/SearchResult.tsx": (props: any, req: Request) =>
-    import("./components/search/SearchResult").then((m) => m.loader(props, req)),
+  "site/sections/Product/ProductShelf.tsx": withSectionLoader(
+    () => import("./components/product/ProductShelf"),
+  ),
+  "site/sections/Product/SearchResult.tsx": compose(
+    withMobile(),
+    withSearchParam(),
+    withSectionLoader(() => import("./components/search/SearchResult")),
+  ),
   // ... add for each section that has `export const loader`
 });
 

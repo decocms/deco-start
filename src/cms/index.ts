@@ -75,6 +75,12 @@ export {
   runSectionLoaders,
   runSingleSectionLoader,
 } from "./sectionLoaders";
-export { compose, withDevice, withMobile, withSearchParam } from "./sectionMixins";
+export {
+  compose,
+  withDevice,
+  withMobile,
+  withSearchParam,
+  withSectionLoader,
+} from "./sectionMixins";
 export type { ApplySectionConventionsInput, SectionMetaEntry } from "./applySectionConventions";
 export { applySectionConventions } from "./applySectionConventions";

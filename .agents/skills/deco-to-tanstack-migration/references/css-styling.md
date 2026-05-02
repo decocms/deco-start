@@ -154,3 +154,85 @@ c = Color("#EE4F31")
 l, c_val, h = c.convert("oklch").coords()
 print(f"{l*100:.2f}% {c_val:.2f} {h:.0f}deg")  # 64.42% 0.20 33deg
 ```
+
+
+## 48. Custom Color Palette + fontFamily Dropped on Migration
+
+**Severity**: HIGH — entire pages render unstyled and Vite throws "unknown utility class" hot-overlay errors
+
+The migrator's scaffold writes a minimal `app.css` with `@theme` containing only the gray scale + a couple of colors. Sites that defined custom palettes in `tailwind.config.ts` `theme.extend.colors` (e.g. an `als: { gray: {...}, blue: {...} }` namespace, or seasonal/brand maps) lose ALL of those tokens on migration. Same for `theme.extend.fontFamily`.
+
+**Symptom**:
+- Vite HMR overlay: `Cannot apply unknown utility class 'font-bebas-neue'` / `'bg-als-blue-500'`
+- Or for CSS files using the v3 `theme()` helper: `Could not resolve value for theme function: theme(colors.als.gray.50)`
+- Page DOM renders correctly but visually unstyled — no colors, default fonts.
+
+**Detection** (run before booting dev for a fresh migration):
+```bash
+# Find all <prefix>-{custom-name}-* tailwind classes used in the codebase
+grep -rEo '\b(bg|text|border|fill|stroke|ring|outline|divide|placeholder|caret|accent|shadow|from|to|via)-[a-z]+-[a-z-]+(-[0-9]+)?\b' src/ \
+  | awk -F: '{print $2}' | sort -u
+
+# Find theme() calls in CSS that need v4 vars
+grep -rE 'theme\(colors\.|theme\(fontFamily\.' src/styles/
+```
+
+Cross-reference against the original `tailwind.config.ts` `theme.extend.colors` / `theme.extend.fontFamily` keys.
+
+**Fix** — port the missing tokens into `@theme`:
+
+```css
+/* src/styles/app.css */
+@theme {
+  --color-*: initial;
+  /* gray scale + std colors ... */
+
+  /* Custom brand palette (ported from tailwind.config.ts) */
+  --color-als-gray-50: #E4E4E4;
+  --color-als-gray-100: #BBBBBB;
+  /* ...etc */
+  --color-als-blue-500: #1C4DA1;
+
+  /* Custom fonts (ported from tailwind.config.ts) */
+  --font-bebas-neue: "Bebas Neue", sans-serif;
+  --font-bebas-neue-pro: "bebas-neue-pro", sans-serif;
+  --font-suisse-intl: "SuisseIntl", sans-serif;
+}
+```
+
+Tailwind v4 auto-generates `bg-als-blue-500`, `font-bebas-neue` etc. from these vars.
+
+**For raw `theme()` calls in CSS files** — Tailwind v4's `theme()` resolver accepts the dot path but only for tokens registered under `@theme`. Easier and more idiomatic: rewrite as `var(--color-...)`:
+
+```css
+/* v3 → v4 */
+background-color: theme(colors.als.gray.50);   /* old */
+background-color: var(--color-als-gray-50);    /* new */
+```
+
+
+## 49. `@layer components` Custom Classes Can't Be `@apply`d in v4
+
+**Severity**: MEDIUM — Vite overlay error `Cannot apply unknown utility class 'container-pdp'`
+
+Tailwind v4 only allows `@apply` to reference *utility classes* (built-ins or those declared with `@utility`). Custom classes declared inside `@layer components { .my-class { ... } }` are not utilities and can't be `@apply`d from elsewhere.
+
+**Symptom**:
+```css
+@layer components {
+  .container-pdp { @apply max-w-[1920px] md:!ml-[83px]; }
+}
+
+/* Later: */
+.product-details ~ .pdt-div { @apply container-pdp w-full; }
+/* ❌ "Cannot apply unknown utility class 'container-pdp'" */
+```
+
+**Fix** — promote the helper to a `@utility` directive:
+```css
+@utility container-pdp {
+  @apply max-w-[1920px] md:!ml-[83px] lg:!ml-[167px] ml-0;
+}
+```
+
+Then `@apply container-pdp` works, and so do variants (`hover:container-pdp`).

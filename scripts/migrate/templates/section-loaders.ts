@@ -69,6 +69,7 @@ export function generateSectionLoaders(ctx: MigrationContext): string {
   lines.push(`  withDevice,`);
   lines.push(`  withMobile,`);
   lines.push(`  withSearchParam,`);
+  lines.push(`  withSectionLoader,`);
   lines.push(`  compose,`);
   lines.push(`} from "@decocms/start/cms";`);
 
@@ -117,20 +118,36 @@ export function generateSectionLoaders(ctx: MigrationContext): string {
   for (const meta of ctx.sectionMetas) {
     if (!meta.isHeader || !meta.hasLoader) continue;
     const sectionKey = `site/${meta.path}`;
-    entries.push(`  // Header: device + search param`);
+    const importPath = `~/` + meta.path.replace(/\.tsx?$/, "");
+    entries.push(`  // Header: device + search param + section's own loader`);
     entries.push(`  "${sectionKey}": async (props, req) => ({`);
-    entries.push(`    ...(await compose(withDevice(), withSearchParam())(props, req)),`);
+    entries.push(`    ...(await compose(`);
+    entries.push(`      withDevice(),`);
+    entries.push(`      withSearchParam(),`);
+    entries.push(`      withSectionLoader(() => import("${importPath}")),`);
+    entries.push(`    )(props, req)),`);
     entries.push(`    userName: "",`);
     entries.push(`  }),`);
   }
 
-  // ---------- Device/mobile sections ----------
+  // ---------- Device/mobile/url + own-loader composition ----------
+  //
+  // Rule of thumb: if a section exports its own `loader`, ALWAYS run it.
+  // Mixins (withDevice/withMobile/withSearchParam) are composed BEFORE the
+  // section loader so they can inject device/search-param props the section
+  // loader may read; the section loader has the final say over what is
+  // returned.
+  //
+  // The previous template chose mixins XOR own-loader and silently dropped
+  // the section's loader when both were present — see als-tanstack
+  // SearchContainerV2 SSR regression.
   for (const meta of ctx.sectionMetas) {
     if (meta.isHeader || meta.isAccountSection || meta.isStatusOnly) continue;
     // Skip sections with no loader AND no device needs
     if (!meta.hasLoader && !meta.loaderUsesDevice) continue;
     const sectionKey = `site/${meta.path}`;
     const basename = meta.path.split("/").pop()?.replace(/\.\w+$/, "") || "";
+    const importPath = `~/` + meta.path.replace(/\.tsx?$/, "");
 
     // Skip sections handled specially below
     const specialSections = [
@@ -141,27 +158,22 @@ export function generateSectionLoaders(ctx: MigrationContext): string {
     ];
     if (specialSections.includes(basename)) continue;
 
-    if (meta.loaderUsesDevice && meta.loaderUsesUrl) {
-      const deviceMixin = meta.usesMobileBoolean ? "withMobile()" : "withDevice()";
-      entries.push(`  "${sectionKey}": compose(${deviceMixin}, withSearchParam()),`);
-    } else if (meta.loaderUsesDevice) {
-      if (meta.usesMobileBoolean) {
-        entries.push(`  "${sectionKey}": withMobile(),`);
-      } else {
-        entries.push(`  "${sectionKey}": withDevice(),`);
-      }
-    } else if (meta.loaderUsesUrl) {
-      entries.push(`  "${sectionKey}": withSearchParam(),`);
-    } else if (meta.hasLoader) {
-      const importPath = `~/` + meta.path.replace(/\.tsx?$/, "");
-      entries.push(`  "${sectionKey}": async (props: any, req: Request) => {`);
-      entries.push(`    const mod = await import("${importPath}");`);
-      // Cast to any: legacy Fresh/Deno section loaders are typed `(props, req, ctx)`.
-      // We invoke with 2 args; any ctx-dependent code path inside the loader will throw
-      // at runtime and must be refactored — the migration phase-transform flags these.
-      entries.push(`    if (typeof mod.loader === "function") return (mod.loader as any)(props, req);`);
-      entries.push(`    return props;`);
-      entries.push(`  },`);
+    const mixins: string[] = [];
+    if (meta.loaderUsesDevice) {
+      mixins.push(meta.usesMobileBoolean ? "withMobile()" : "withDevice()");
+    }
+    if (meta.loaderUsesUrl) mixins.push("withSearchParam()");
+    if (meta.hasLoader) {
+      mixins.push(`withSectionLoader(() => import("${importPath}"))`);
+    }
+
+    if (mixins.length === 0) continue;
+    if (mixins.length === 1) {
+      entries.push(`  "${sectionKey}": ${mixins[0]},`);
+    } else {
+      entries.push(`  "${sectionKey}": compose(`);
+      for (const m of mixins) entries.push(`    ${m},`);
+      entries.push(`  ),`);
     }
   }
 
