@@ -18,6 +18,12 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import {
+  blockHasPath,
+  type Candidate,
+  decodeBlockNameWithPasses,
+  mergeCandidates,
+} from "./lib/blocks-dedupe";
 
 const args = process.argv.slice(2);
 function arg(name: string, fallback: string): string {
@@ -28,20 +34,6 @@ function arg(name: string, fallback: string): string {
 const blocksDir = path.resolve(process.cwd(), arg("blocks-dir", ".deco/blocks"));
 const outFile = path.resolve(process.cwd(), arg("out-file", "src/server/cms/blocks.gen.ts"));
 const jsonFile = outFile.replace(/\.ts$/, ".json");
-
-function decodeBlockName(filename: string): string {
-  let name = filename.replace(/\.json$/, "");
-  while (name.includes("%")) {
-    try {
-      const next = decodeURIComponent(name);
-      if (next === name) break;
-      name = next;
-    } catch {
-      break; // literal % in the decoded name — nothing left to decode
-    }
-  }
-  return name;
-}
 
 const TS_STUB = [
   "// Auto-generated — thin wrapper around blocks.gen.json.",
@@ -62,30 +54,53 @@ if (!fs.existsSync(blocksDir)) {
 
 const files = fs.readdirSync(blocksDir).filter((f) => f.endsWith(".json"));
 
-// Deduplicate: when multiple files decode to the same key, prefer the one
-// with actual content (largest file size wins over empty {} stubs).
-const blockFiles: Record<string, string> = {};
+// Read each file into a Candidate, then let the dedupe lib pick the winner
+// per decoded key and report any collisions. See `lib/blocks-dedupe.ts` for
+// the priority order and the rationale behind it (TL;DR: never use file size,
+// don't trust mtime alone in CI clones).
+const candidatesWithKeys: Array<{ candidate: Candidate; key: string }> = [];
 for (const file of files) {
-  const name = decodeBlockName(file);
-  if (blockFiles[name]) {
-    const existingSize = fs.statSync(path.join(blocksDir, blockFiles[name])).size;
-    const newSize = fs.statSync(path.join(blocksDir, file)).size;
-    if (newSize > existingSize) {
-      blockFiles[name] = file;
-    }
+  const { name, passes } = decodeBlockNameWithPasses(file);
+  const fp = path.join(blocksDir, file);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(fp, "utf-8"));
+  } catch (e) {
+    console.warn(`Failed to parse ${file}:`, e);
     continue;
   }
-  blockFiles[name] = file;
+  candidatesWithKeys.push({
+    key: name,
+    candidate: {
+      file,
+      passes,
+      mtimeMs: fs.statSync(fp).mtimeMs,
+      hasPath: blockHasPath(parsed),
+      parsed,
+    },
+  });
+}
+
+const { winners, collisions } = mergeCandidates(candidatesWithKeys);
+
+if (collisions.length > 0) {
+  console.warn(
+    `Detected ${collisions.length} filename collision(s) in ${path.relative(process.cwd(), blocksDir)}:`,
+  );
+  for (const c of collisions) {
+    const losers = c.files.filter((f) => f !== c.winner);
+    console.warn(`  - ${c.key}`);
+    console.warn(`      winner: ${c.winner}`);
+    for (const l of losers) console.warn(`      ignore: ${l}`);
+  }
+  console.warn("    Cause: multiple writers (manual sync vs deco-sync-bot) producing");
+  console.warn("    different filename encodings for the same logical key. Delete the");
+  console.warn("    stale file(s) listed under 'ignore' to silence this warning.");
 }
 
 const blocks: Record<string, unknown> = {};
-for (const [name, file] of Object.entries(blockFiles)) {
-  try {
-    const content = fs.readFileSync(path.join(blocksDir, file), "utf-8");
-    blocks[name] = JSON.parse(content);
-  } catch (e) {
-    console.warn(`Failed to parse ${file}:`, e);
-  }
+for (const [name, c] of Object.entries(winners)) {
+  blocks[name] = c.parsed;
 }
 
 fs.mkdirSync(path.dirname(outFile), { recursive: true });
