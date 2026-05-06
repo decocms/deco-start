@@ -1,124 +1,219 @@
-# @decocms/start 
+# @decocms/start
 
 [![npm version](https://img.shields.io/npm/v/@decocms/start.svg)](https://www.npmjs.com/package/@decocms/start)
 [![license](https://img.shields.io/npm/l/@decocms/start.svg)](https://github.com/decocms/deco-start/blob/main/LICENSE)
 
-Framework layer for [Deco](https://deco.cx) storefronts built on **TanStack Start + React 19 + Cloudflare Workers**.
+Framework layer for [deco.cx](https://deco.cx) storefronts on **TanStack Start + React 19 + Cloudflare Workers**.
 
-Provides CMS block resolution, admin protocol handlers, section rendering, schema generation, edge caching, and SDK utilities. This is **not** a storefront — it's the npm package that storefronts depend on.
+`@decocms/start` is the npm package that storefronts depend on. It provides the CMS bridge, admin protocol, section registry, schema generation, edge caching, the Vite plugin, and a small SDK. It is **not** itself a storefront — it is what storefronts build on top of.
 
-## Install
+📖 **[Read the full documentation →](https://docs.deco.cx/v2/en/getting-started/overview)**
 
-```bash
-npm install @decocms/start
-```
+---
 
-## Architecture
+## What's in the box
 
 ```
-@decocms/start        ← Framework (this package)
-  └─ @decocms/apps    ← Commerce integrations (VTEX, Shopify)
-       └─ site repo   ← UI components, routes, styles
+┌─────────────────────────────────────────────────┐
+│   Site repo (your storefront)                    │  ← Components, sections, routes
+├─────────────────────────────────────────────────┤
+│   @decocms/apps  (commerce integrations)         │  ← VTEX, Shopify, Resend
+├─────────────────────────────────────────────────┤
+│   @decocms/start  (framework — this package)     │  ← CMS bridge, admin, caching
+└─────────────────────────────────────────────────┘
+              ↓ runs on ↓
+   TanStack Start  +  React 19  +  Cloudflare Workers
 ```
 
-### Package Exports
+`@decocms/start` exports cover four surfaces:
 
-| Import | Purpose |
-|--------|---------|
-| `@decocms/start` | Barrel export |
-| `@decocms/start/cms` | Block loading, page resolution, section registry |
-| `@decocms/start/admin` | Admin protocol (meta, decofile, invoke, render, schema) |
-| `@decocms/start/hooks` | DecoPageRenderer, LiveControls, LazySection |
-| `@decocms/start/routes` | CMS route config, admin routes |
-| `@decocms/start/middleware` | Observability, deco state, liveness probe |
-| `@decocms/start/sdk/workerEntry` | Cloudflare Worker entry with edge caching |
-| `@decocms/start/sdk/cacheHeaders` | URL-to-profile cache detection |
-| `@decocms/start/sdk/cachedLoader` | In-flight dedup for loaders |
-| `@decocms/start/sdk/useScript` | Inline `<script>` with minification |
-| `@decocms/start/sdk/useDevice` | SSR-safe device detection |
-| `@decocms/start/sdk/analytics` | Analytics event types |
-| `@decocms/start/matchers/*` | Feature flag matchers (PostHog, built-ins) |
-| `@decocms/start/types` | Section, App, FnContext type definitions |
-| `@decocms/start/scripts/*` | Code generation (blocks, schema, invoke) |
+- **Worker entry** — `createDecoWorkerEntry` wraps your Cloudflare Worker with admin routes, edge cache, and asset bypass.
+- **CMS bridge** — `loadCmsPage`, `resolveDecoPage`, `registerSectionLoaders`, `registerLayoutSections`.
+- **Admin protocol** — `handleMeta`, `handleDecofile`, `handleRender`, `handleInvoke`.
+- **SDK** — `createCachedLoader`, `createInstrumentedFetch`, `createInvoke`, `decoVitePlugin`, plus utilities (cookies, redirects, sitemap, A/B testing).
 
-### Worker Entry Request Flow
+Full export reference: [docs.deco.cx/v2/en/reference/package-exports](https://docs.deco.cx/v2/en/reference/package-exports).
 
+---
+
+## Hello, World
+
+A minimal v2 storefront has six files. Here they are.
+
+### `package.json`
+
+```jsonc
+{
+  "name": "my-store",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@decocms/start": "^2.28.0",
+    "@decocms/apps": "^1.11.0",
+    "@tanstack/react-start": "^1.166.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0",
+    "wrangler": "^4.72.0"
+  }
+}
 ```
-Request → createDecoWorkerEntry()
- ├─ Admin routes (/live/_meta, /.decofile, /deco/render, /deco/invoke)
- ├─ Cache purge check
- ├─ Static asset bypass (/assets/*, favicon)
- ├─ Cloudflare edge cache (profile-based TTLs)
- └─ TanStack Start server entry
+
+### `vite.config.ts`
+
+```ts
+import { defineConfig } from "vite";
+import { cloudflare } from "@cloudflare/vite-plugin";
+import { tanstackStart } from "@tanstack/react-start/plugin/vite";
+import react from "@vitejs/plugin-react";
+import decoVitePlugin from "@decocms/start/vite";
+
+export default defineConfig({
+  plugins: [
+    cloudflare({ viteEnvironment: { name: "ssr" } }),
+    tanstackStart({ server: { entry: "server" } }),
+    react({ babel: { plugins: ["babel-plugin-react-compiler"] } }),
+    decoVitePlugin(),
+  ],
+  resolve: {
+    alias: { "~": "/src" },
+    deduplicate: ["react", "react-dom", "@decocms/start", "@decocms/apps"],
+  },
+});
 ```
 
-### Edge Cache Profiles
+### `wrangler.jsonc`
 
-| URL Pattern | Profile | Edge TTL |
-|-------------|---------|----------|
-| `/` | static | 1 day |
-| `*/p` | product | 5 min |
-| `/s`, `?q=` | search | 60s |
-| `/cart`, `/checkout` | private | none |
-| Everything else | listing | 2 min |
+```jsonc
+{
+  "name": "my-store",
+  "main": "./src/worker-entry.ts",
+  "compatibility_date": "2026-02-14",
+  "compatibility_flags": [
+    "nodejs_compat",
+    "no_handle_cross_request_promise_resolution"
+  ],
+  "assets": { "directory": "./dist/client" }
+}
+```
 
-## Migrating from Fresh/Preact/Deno
+### `src/setup.ts`
 
-`@decocms/start` includes an Agent Skill that handles migration for you. It works with Claude Code, Cursor, Codex, and other AI coding tools. Install the skill, open your Fresh storefront, and tell the AI to migrate:
+```ts
+import { createSiteSetup } from "@decocms/start/setup";
+import { applySectionConventions } from "@decocms/start/cms";
+
+import blocks from "./server/cms/blocks.gen";
+import sectionsGen from "./server/cms/sections.gen";
+import meta from "./server/cms/meta.gen.json";
+
+createSiteSetup({
+  sections: import.meta.glob("./sections/**/*.tsx", { eager: true }),
+  blocks,
+  meta: () => meta,
+  productionOrigins: ["https://my-store.com"],
+});
+
+applySectionConventions(sectionsGen);
+```
+
+### `src/worker-entry.ts`
+
+```ts
+import "./setup";   // MUST be first
+
+import { createDecoWorkerEntry } from "@decocms/start/sdk/workerEntry";
+import {
+  handleMeta,
+  handleDecofile,
+  handleRender,
+  handleInvoke,
+} from "@decocms/start/admin";
+import serverEntry from "./server";
+
+export default createDecoWorkerEntry(serverEntry, {
+  admin: { handleMeta, handleDecofile, handleRender, handleInvoke },
+});
+```
+
+### `src/routes/$.tsx`
+
+```tsx
+import { createFileRoute } from "@tanstack/react-router";
+import { cmsRouteConfig } from "@decocms/start/routes";
+
+export const Route = createFileRoute("/$")(
+  cmsRouteConfig({ siteName: "my-store" }),
+);
+```
+
+That is the entire skeleton. `npm install`, `npm run dev`, point `admin.deco.cx` at it, and you have a working CMS-driven site.
+
+For commerce integrations (VTEX, Shopify) see [`@decocms/apps`](https://www.npmjs.com/package/@decocms/apps).
+
+---
+
+## Migrating from Fresh / Preact / Deno
+
+`@decocms/start` ships an Agent Skill that handles the migration for you. It works with Claude Code, Cursor, Codex, and any tool that supports skills.
 
 ```bash
 npx skills add decocms/deco-start
 ```
 
-Then open your project in any supported tool and say:
+Then, in your editor, point at your Fresh storefront and prompt:
 
 > migrate this project to TanStack Start
 
-The skill handles compatibility checking, import rewrites, config generation, section registry setup, and worker entry creation. It knows what `@decocms/start` supports and will flag anything that needs manual attention.
+The skill runs the migration script, walks you through `MIGRATION_REPORT.md`, fixes typecheck/build errors interactively, and shows the diff before committing.
 
-### Or run the script manually
+### Or run the script directly
 
 ```bash
-# From your Fresh site directory (nothing to install beforehand):
+# from inside the v1 storefront directory
 npx -p @decocms/start deco-migrate
 ```
 
-**Options:**
+The script runs seven phases (analyze → scaffold → transform → cleanup → report → verify → bootstrap), produces `MIGRATION_REPORT.md` with manual TODOs, and gets you to "compiles clean, builds clean".
 
-| Flag | Description |
-|------|-------------|
-| `--source <dir>` | Source directory (default: current directory) |
-| `--dry-run` | Preview changes without writing files |
-| `--verbose` | Show detailed output |
-| `--help`, `-h` | Show help message |
+Full migration playbook: [docs.deco.cx/v2/en/migration/overview](https://docs.deco.cx/v2/en/migration/overview).
 
-The script runs 7 phases automatically:
+---
 
-1. **Analyze** — scan source, detect Preact/Fresh/Deco patterns
-2. **Scaffold** — generate `vite.config.ts`, `wrangler.jsonc`, routes, `setup.ts`, worker entry
-3. **Transform** — rewrite imports (70+ rules), JSX attrs, Fresh APIs, Deno-isms, Tailwind v3→v4
-4. **Cleanup** — delete `islands/`, old routes, `deno.json`, move `static/` → `public/`
-5. **Report** — generate `MIGRATION_REPORT.md` with manual review items
-6. **Verify** — 18+ smoke tests (zero old imports, scaffolded files exist)
-7. **Bootstrap** — `npm install`, generate CMS blocks, generate routes
+## Documentation
 
-Your existing `src/sections/`, `src/components/`, and `.deco/blocks/` work as-is. The script gets you to "builds clean with zero old imports" — manual work starts at platform hooks (`useCart`) and runtime tuning.
+The full v2 docs live at **[docs.deco.cx/v2](https://docs.deco.cx/v2/en/getting-started/overview)**:
 
-### Agent Skills
+- [Getting started](https://docs.deco.cx/v2/en/getting-started/overview) — install paths, project structure, stack overview.
+- [Concepts](https://docs.deco.cx/v2/en/concepts/sections) — sections, loaders, blocks, routes, deferred rendering.
+- [Framework reference](https://docs.deco.cx/v2/en/framework/overview) — every export of `@decocms/start`, page by page.
+- [Migration](https://docs.deco.cx/v2/en/migration/overview) — v1 → v2 playbook + script + skill.
+- [Case studies](https://docs.deco.cx/v2/en/case-studies/overview) — three production stores end-to-end.
 
-Skills live in [`.agents/skills/`](.agents/skills/) and provide deep context to AI coding tools:
+---
 
-| Skill | What it covers |
-|-------|---------------|
-| `deco-to-tanstack-migration` | Full 12-phase migration playbook with 22 reference docs and 6 templates |
-| `deco-migrate-script` | How the automated `scripts/migrate.ts` works, how to extend it |
+## Peer dependencies
 
-## Peer Dependencies
+```json
+{
+  "@tanstack/react-start": ">=1.0.0",
+  "@tanstack/store": ">=0.7.0",
+  "@tanstack/react-query": ">=5.0.0",
+  "react": "^19.0.0",
+  "react-dom": "^19.0.0",
+  "vite": ">=6.0.0"
+}
+```
 
-- `@tanstack/react-start` >= 1.0.0
-- `@tanstack/store` >= 0.7.0
-- `react` ^19.0.0
-- `react-dom` ^19.0.0
+OpenTelemetry is optional but recommended: `@microlabs/otel-cf-workers >=1.0.0-rc.0`, `@opentelemetry/api >=1.9.0`.
+
+---
 
 ## Development
 
@@ -128,7 +223,11 @@ npm run lint        # biome check
 npm run check       # typecheck + lint + unused exports
 ```
 
-This is a library — no dev server. Consumer sites run their own `vite dev`.
+This is a library — there is no dev server here. Consumer storefronts run their own `vite dev`.
+
+Contributing? See `CLAUDE.md` for the architectural decisions, and `MIGRATION_TOOLING_PLAN.md` for the append-only history of the migration tooling.
+
+---
 
 ## License
 
