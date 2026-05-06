@@ -8,6 +8,8 @@
  * This runs AFTER resolveDecoPage and BEFORE React rendering,
  * inside the TanStack Start server function.
  */
+
+import { withTracing } from "../middleware/observability";
 import { getCacheProfile } from "../sdk/cacheHeaders";
 import { djb2 } from "../sdk/djb2";
 import type { ResolvedSection } from "./resolve";
@@ -324,6 +326,15 @@ function withPageContext(loader: SectionLoaderFn): SectionLoaderFn {
  * manually walk + invoke `runSingleSectionLoader` on children.
  */
 export async function runSingleSectionLoader(
+  section: ResolvedSection,
+  request: Request,
+): Promise<ResolvedSection> {
+  return withTracing("deco.section.loader", () => runSingleSectionLoaderImpl(section, request), {
+    "deco.section": section.component,
+  });
+}
+
+async function runSingleSectionLoaderImpl(
   section: ResolvedSection,
   request: Request,
 ): Promise<ResolvedSection> {

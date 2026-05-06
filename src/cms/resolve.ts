@@ -1,9 +1,15 @@
+import {
+  type ActionConfig,
+  type LoaderConfig,
+  registerActionSchemas,
+  registerLoaderSchemas,
+} from "../admin/schema";
+import { getMeter, MetricNames, withTracing } from "../middleware/observability";
+import { djb2Hex } from "../sdk/djb2";
+import { normalizeUrlsInObject } from "../sdk/normalizeUrls";
 import { findPageByPath, loadBlocks } from "./loader";
 import { getOnBeforeResolveProps, getSection, registerOnBeforeResolveProps } from "./registry";
 import { isLayoutSection, runSingleSectionLoader } from "./sectionLoaders";
-import { normalizeUrlsInObject } from "../sdk/normalizeUrls";
-import { djb2Hex } from "../sdk/djb2";
-import { registerLoaderSchemas, registerActionSchemas, type LoaderConfig, type ActionConfig } from "../admin/schema";
 
 // globalThis-backed: share state across Vite server function split modules
 const G = globalThis as any;
@@ -134,10 +140,7 @@ export function setAsyncRenderingConfig(config?: {
   respectCmsLazy?: boolean;
 }): void {
   const existing = getAsyncConfig();
-  const merged = new Set([
-    ...(existing?.alwaysEager ?? []),
-    ...(config?.alwaysEager ?? []),
-  ]);
+  const merged = new Set([...(existing?.alwaysEager ?? []), ...(config?.alwaysEager ?? [])]);
   G.__deco.asyncConfig = {
     respectCmsLazy: config?.respectCmsLazy ?? existing?.respectCmsLazy ?? true,
     foldThreshold: config?.foldThreshold ?? existing?.foldThreshold ?? Infinity,
@@ -321,7 +324,13 @@ export function registerCommerceLoaders(loaders: Record<string, CommerceLoader>)
     if (key.includes("/actions/")) {
       actionConfigs.push({ key, title: key, namespace, propsSchema: schema });
     } else {
-      loaderConfigs.push({ key, title: key, namespace, propsSchema: schema, tags: inferLoaderTags(key) });
+      loaderConfigs.push({
+        key,
+        title: key,
+        namespace,
+        propsSchema: schema,
+        tags: inferLoaderTags(key),
+      });
     }
   }
 
@@ -374,18 +383,24 @@ export function registerMatcher(
 if (!G.__deco._builtinMatchersRegistered) {
   G.__deco._builtinMatchersRegistered = true;
 
-  const builtinMatchers: Record<string, (rule: Record<string, unknown>, ctx: MatcherContext) => boolean> = {
+  const builtinMatchers: Record<
+    string,
+    (rule: Record<string, unknown>, ctx: MatcherContext) => boolean
+  > = {
     "website/matchers/always.ts": () => true,
     "$live/matchers/MatchAlways.ts": () => true,
     "website/matchers/never.ts": () => false,
     "website/matchers/device.ts": (rule, ctx) => {
       const ua = (ctx.userAgent || "").toLowerCase();
       const isTablet = /ipad|android(?!.*mobile)|tablet/i.test(ua);
-      const isMobile = !isTablet && /mobile|android|iphone|ipod|webos|blackberry|opera mini|iemobile/i.test(ua);
+      const isMobile =
+        !isTablet && /mobile|android|iphone|ipod|webos|blackberry|opera mini|iemobile/i.test(ua);
       const isDesktop = !isMobile && !isTablet;
       // If no flags are set, match everything (permissive default)
       if (!rule.mobile && !rule.tablet && !rule.desktop) return true;
-      return !!(rule.mobile && isMobile) || !!(rule.tablet && isTablet) || !!(rule.desktop && isDesktop);
+      return (
+        !!(rule.mobile && isMobile) || !!(rule.tablet && isTablet) || !!(rule.desktop && isDesktop)
+      );
     },
     "website/matchers/random.ts": (rule) => {
       const traffic = typeof rule.traffic === "number" ? rule.traffic : 0.5;
@@ -457,7 +472,10 @@ function ensureInitialized() {
 // Matcher evaluation
 // ---------------------------------------------------------------------------
 
-export function evaluateMatcher(rule: Record<string, unknown> | undefined, ctx: MatcherContext): boolean {
+export function evaluateMatcher(
+  rule: Record<string, unknown> | undefined,
+  ctx: MatcherContext,
+): boolean {
   if (!rule) return true;
 
   const resolveType = rule.__resolveType as string | undefined;
@@ -828,10 +846,7 @@ export async function resolvePageSeoBlock(
     }
 
     // Multivariate flag — evaluate matcher and follow matched variant
-    if (
-      rt === "website/flags/multivariate.ts" ||
-      rt === "website/flags/multivariate/section.ts"
-    ) {
+    if (rt === "website/flags/multivariate.ts" || rt === "website/flags/multivariate/section.ts") {
       const variants = current.variants as Array<{ value: unknown; rule?: unknown }> | undefined;
       if (!variants?.length) return null;
       let matched: unknown = null;
@@ -909,10 +924,7 @@ function isRawSectionLayout(section: unknown): string | null {
  * unwrapping Lazy/Deferred wrappers, and evaluating multivariate flags.
  * Returns null if not determinable.
  */
-function resolveFinalSectionKey(
-  section: unknown,
-  matcherCtx?: MatcherContext,
-): string | null {
+function resolveFinalSectionKey(section: unknown, matcherCtx?: MatcherContext): string | null {
   if (!section || typeof section !== "object") return null;
 
   const blocks = loadBlocks();
@@ -946,13 +958,8 @@ function resolveFinalSectionKey(
       continue;
     }
 
-    if (
-      rt === WELL_KNOWN_TYPES.MULTIVARIATE ||
-      rt === WELL_KNOWN_TYPES.MULTIVARIATE_SECTION
-    ) {
-      const variants = current.variants as
-        | Array<{ value: unknown; rule?: unknown }>
-        | undefined;
+    if (rt === WELL_KNOWN_TYPES.MULTIVARIATE || rt === WELL_KNOWN_TYPES.MULTIVARIATE_SECTION) {
+      const variants = current.variants as Array<{ value: unknown; rule?: unknown }> | undefined;
       if (!variants?.length) return null;
 
       let matched: unknown = null;
@@ -999,21 +1006,13 @@ function isCmsDeferralWrapped(section: unknown, matcherCtx?: MatcherContext): bo
     const rt = current.__resolveType as string | undefined;
     if (!rt) return false;
 
-    if (
-      rt === WELL_KNOWN_TYPES.LAZY ||
-      rt === WELL_KNOWN_TYPES.DEFERRED
-    ) {
+    if (rt === WELL_KNOWN_TYPES.LAZY || rt === WELL_KNOWN_TYPES.DEFERRED) {
       return true;
     }
 
     // Walk through multivariate flags to check the matched variant
-    if (
-      rt === WELL_KNOWN_TYPES.MULTIVARIATE ||
-      rt === WELL_KNOWN_TYPES.MULTIVARIATE_SECTION
-    ) {
-      const variants = current.variants as
-        | Array<{ value: unknown; rule?: unknown }>
-        | undefined;
+    if (rt === WELL_KNOWN_TYPES.MULTIVARIATE || rt === WELL_KNOWN_TYPES.MULTIVARIATE_SECTION) {
+      const variants = current.variants as Array<{ value: unknown; rule?: unknown }> | undefined;
       if (!variants?.length) return false;
 
       let matched: unknown = null;
@@ -1125,13 +1124,8 @@ function resolveSectionShallow(
     }
 
     // Multivariate flags — evaluate matchers and continue with matched variant
-    if (
-      rt === WELL_KNOWN_TYPES.MULTIVARIATE ||
-      rt === WELL_KNOWN_TYPES.MULTIVARIATE_SECTION
-    ) {
-      const variants = current.variants as
-        | Array<{ value: unknown; rule?: unknown }>
-        | undefined;
+    if (rt === WELL_KNOWN_TYPES.MULTIVARIATE || rt === WELL_KNOWN_TYPES.MULTIVARIATE_SECTION) {
+      const variants = current.variants as Array<{ value: unknown; rule?: unknown }> | undefined;
       if (!variants?.length) return null;
 
       let matched: unknown = null;
@@ -1332,6 +1326,30 @@ export async function resolveDecoPage(
   targetPath: string,
   matcherCtx?: MatcherContext,
 ): Promise<DecoPageResult | null> {
+  const startedAt = performance.now();
+  return withTracing(
+    "deco.cms.resolvePage",
+    async () => {
+      const result = await resolveDecoPageImpl(targetPath, matcherCtx);
+      try {
+        getMeter()?.histogramRecord?.(
+          MetricNames.RESOLVE_DURATION_MS,
+          performance.now() - startedAt,
+          { path: targetPath },
+        );
+      } catch {
+        /* observability never fails the request */
+      }
+      return result;
+    },
+    { "deco.route": targetPath },
+  );
+}
+
+async function resolveDecoPageImpl(
+  targetPath: string,
+  matcherCtx?: MatcherContext,
+): Promise<DecoPageResult | null> {
   ensureInitialized();
 
   const match = findPageByPath(targetPath);
@@ -1378,7 +1396,12 @@ export async function resolveDecoPage(
           // Cache rawProps server-side and strip from the deferred object
           // so they are NOT serialized into the HTML payload.
           if (deferred.rawProps) {
-            cacheDeferredRawProps(targetPath, deferred.component, currentFlatIndex, deferred.rawProps);
+            cacheDeferredRawProps(
+              targetPath,
+              deferred.component,
+              currentFlatIndex,
+              deferred.rawProps,
+            );
             delete deferred.rawProps;
           }
 
@@ -1430,10 +1453,12 @@ export async function resolveDecoPage(
       })();
 
       const idx = currentFlatIndex;
-      eagerResults.push(promise.then((sections) => {
-        for (const s of sections) s.index = idx;
-        return sections;
-      }));
+      eagerResults.push(
+        promise.then((sections) => {
+          for (const s of sections) s.index = idx;
+          return sections;
+        }),
+      );
       flatIndex++;
     }
   }
@@ -1445,10 +1470,7 @@ export async function resolveDecoPage(
   let seoSection: ResolvedSection | null = null;
   if (page.seo) {
     try {
-      seoSection = await resolvePageSeoBlock(
-        page.seo as Record<string, unknown>,
-        rctx,
-      );
+      seoSection = await resolvePageSeoBlock(page.seo as Record<string, unknown>, rctx);
     } catch (e) {
       onResolveError(e, "page.seo", "Page SEO block resolution");
     }
@@ -1588,18 +1610,14 @@ export async function resolveDeferredSectionFull(
   matcherCtx?: MatcherContext,
 ): Promise<ResolvedSection | null> {
   // rawProps may be stripped from the client payload — resolve from cache or page
-  const rawProps = ds.rawProps
-    ?? getDeferredRawProps(pagePath, ds.component, ds.index)
-    ?? await reExtractRawProps(pagePath, ds.component, ds.index, matcherCtx);
+  const rawProps =
+    ds.rawProps ??
+    getDeferredRawProps(pagePath, ds.component, ds.index) ??
+    (await reExtractRawProps(pagePath, ds.component, ds.index, matcherCtx));
 
   if (!rawProps) return null;
 
-  const section = await resolveDeferredSection(
-    ds.component,
-    rawProps,
-    pagePath,
-    matcherCtx,
-  );
+  const section = await resolveDeferredSection(ds.component, rawProps, pagePath, matcherCtx);
   if (!section) return null;
   section.index = ds.index;
   const enriched = await runSingleSectionLoader(section, request);

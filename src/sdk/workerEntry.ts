@@ -25,6 +25,12 @@
  * ```
  */
 
+import { getRenderShellConfig } from "../admin/setup";
+import { loadBlocks } from "../cms/loader";
+import type { MatcherContext } from "../cms/resolve";
+import { resolveDecoPage } from "../cms/resolve";
+import { runSectionLoaders, runSingleSectionLoader } from "../cms/sectionLoaders";
+import { logRequest, recordRequestMetric, withTracing } from "../middleware/observability";
 import {
   type CacheProfileName,
   cacheHeaders,
@@ -33,15 +39,11 @@ import {
   getCacheProfile,
 } from "./cacheHeaders";
 import { buildHtmlShell } from "./htmlShell";
-import { cleanPathForCacheKey } from "./urlUtils";
-import { type Device, isMobileUA } from "./useDevice";
-import { getRenderShellConfig } from "../admin/setup";
+import { setRuntimeEnv } from "./otelAdapters";
 import { RequestContext } from "./requestContext";
 import { getAppMiddleware } from "./setupApps";
-import type { MatcherContext, ResolvedSection } from "../cms/resolve";
-import { resolveDecoPage } from "../cms/resolve";
-import { runSectionLoaders, runSingleSectionLoader } from "../cms/sectionLoaders";
-import { loadBlocks } from "../cms/loader";
+import { cleanPathForCacheKey } from "./urlUtils";
+import { type Device, isMobileUA } from "./useDevice";
 
 /**
  * Append Link preload headers for CSS and fonts so the browser starts
@@ -671,7 +673,10 @@ export function createDecoWorkerEntry(
     return parts.join("|");
   }
 
-  function buildCacheKey(request: Request, env: Record<string, unknown>): { key: Request; segment?: SegmentKey } {
+  function buildCacheKey(
+    request: Request,
+    env: Record<string, unknown>,
+  ): { key: Request; segment?: SegmentKey } {
     const url = new URL(request.url);
 
     if (shouldStripTracking) {
@@ -795,7 +800,9 @@ export function createDecoWorkerEntry(
             const key = new Request(url.toString(), { method: "GET" });
             try {
               if (await cache.delete(key)) {
-                const label = cc ? `${p} (${hashSegment(seg)}, ${cc})` : `${p} (${hashSegment(seg)})`;
+                const label = cc
+                  ? `${p} (${hashSegment(seg)}, ${cc})`
+                  : `${p} (${hashSegment(seg)})`;
                 purged.push(label);
               }
             } catch {
@@ -924,6 +931,10 @@ export function createDecoWorkerEntry(
       env: Record<string, unknown>,
       ctx: WorkerExecutionContext,
     ): Promise<Response> {
+      const startedAt = performance.now();
+      const reqUrl = new URL(request.url);
+      const method = request.method;
+
       // Inject CF geo data as cookies for location matchers (before anything reads cookies)
       if (geoOpt) {
         request = injectGeoCookies(request);
@@ -933,20 +944,55 @@ export function createDecoWorkerEntry(
       // in the call stack (loaders, invoke handlers, vtexFetchWithCookies)
       // can access the request and write response headers.
       const response = await RequestContext.run(request, async () => {
-      // Run app middleware (injects app state into RequestContext.bag,
-      // runs registered middleware like VTEX cookie forwarding).
-      const appMw = getAppMiddleware();
-      if (appMw) {
-        return appMw(request, () => handleRequest(request, env, ctx));
-      }
-      return handleRequest(request, env, ctx);
+        // Stash env so request-scoped adapters (Workers Analytics Engine,
+        // future binding-driven destinations) can resolve their bindings
+        // via getRuntimeEnv() in sdk/otelAdapters.ts.
+        setRuntimeEnv(env);
+
+        // Wrap inner handler in a single root span. `@microlabs/otel-cf-workers`
+        // already creates an outer span via its `instrument()` wrapper; this
+        // adds a nested span carrying our normalized path/status attributes
+        // that microlabs doesn't capture (it uses url.path verbatim).
+        return withTracing(
+          "deco.http.request",
+          async () => {
+            // Run app middleware (injects app state into RequestContext.bag,
+            // runs registered middleware like VTEX cookie forwarding).
+            const appMw = getAppMiddleware();
+            if (appMw) {
+              return appMw(request, () => handleRequest(request, env, ctx));
+            }
+            return handleRequest(request, env, ctx);
+          },
+          {
+            "http.method": method,
+            "url.path": reqUrl.pathname,
+          },
+        );
       });
 
       // Deduplicate Set-Cookie headers — multiple layers (VTEX middleware,
       // invoke handlers, etc.) may independently append the same cookie.
       deduplicateSetCookies(response);
 
-      return applySecurityHeaders(response);
+      const finalResponse = applySecurityHeaders(response);
+
+      // Metrics + structured request log. Done after security headers so
+      // the recorded status reflects what the client actually receives.
+      // Both calls are no-ops when no meter / logger is configured.
+      const durationMs = performance.now() - startedAt;
+      try {
+        recordRequestMetric(method, reqUrl.pathname, finalResponse.status, durationMs);
+      } catch {
+        /* swallow — observability must never fail the request */
+      }
+      try {
+        logRequest(request, finalResponse.status, durationMs);
+      } catch {
+        /* swallow */
+      }
+
+      return finalResponse;
     },
   };
 
@@ -957,356 +1003,170 @@ export function createDecoWorkerEntry(
     env: Record<string, unknown>,
     ctx: WorkerExecutionContext,
   ): Promise<Response> {
-      const url = new URL(request.url);
+    const url = new URL(request.url);
 
-      // Admin routes (/_meta, /.decofile, /live/previews) — always handled first
-      const adminResponse = await tryAdminRoute(request);
-      if (adminResponse) return adminResponse;
+    // Admin routes (/_meta, /.decofile, /live/previews) — always handled first
+    const adminResponse = await tryAdminRoute(request);
+    if (adminResponse) return adminResponse;
 
-      // Purge endpoint
-      if (url.pathname === "/_cache/purge" && request.method === "POST") {
-        return handlePurge(request, env);
+    // Purge endpoint
+    if (url.pathname === "/_cache/purge" && request.method === "POST") {
+      return handlePurge(request, env);
+    }
+
+    // ?asJson — return resolved page data as JSON (legacy deco compat)
+    if (url.searchParams.has("asJson") && request.method === "GET") {
+      const basePath = url.pathname;
+      const cookies: Record<string, string> = {};
+      for (const pair of (request.headers.get("cookie") ?? "").split(";")) {
+        const [k, ...v] = pair.split("=");
+        if (k?.trim()) cookies[k.trim()] = v.join("=").trim();
       }
-
-      // ?asJson — return resolved page data as JSON (legacy deco compat)
-      if (url.searchParams.has("asJson") && request.method === "GET") {
-        const basePath = url.pathname;
-        const cookies: Record<string, string> = {};
-        for (const pair of (request.headers.get("cookie") ?? "").split(";")) {
-          const [k, ...v] = pair.split("=");
-          if (k?.trim()) cookies[k.trim()] = v.join("=").trim();
-        }
-        const matcherCtx: MatcherContext = {
-          userAgent: request.headers.get("user-agent") ?? "",
-          url: url.toString(),
-          path: basePath,
-          cookies,
-          request,
-        };
-        const page = await resolveDecoPage(basePath, matcherCtx);
-        if (!page) {
-          return Response.json(null, { status: 404, headers: { "Access-Control-Allow-Origin": "*" } });
-        }
-        const enrichedSections = await runSectionLoaders(page.resolvedSections, request);
-
-        // Run SEO section loader if registered
-        let seoResult = page.seoSection;
-        if (seoResult) {
-          try {
-            seoResult = await runSingleSectionLoader(seoResult, request);
-          } catch {
-            // use unloaded seoSection
-          }
-        }
-
-        // Merge site-wide SEO defaults into seo props
-        const blocks = loadBlocks();
-        const site = blocks["Site"] as Record<string, unknown> | undefined;
-        const fullSiteSeo = (site?.seo as Record<string, unknown>) ?? {};
-
-        // When SeoV2 loader ran, use its output as base (preserves key order)
-        // and only fill in missing fields from the site-wide SEO config.
-        const loaderProps = seoResult?.props ?? {};
-        const seoProps: Record<string, unknown> = { ...loaderProps };
-        for (const [k, v] of Object.entries(fullSiteSeo)) {
-          if (!(k in seoProps)) seoProps[k] = v;
-        }
-        // Strip internal template fields
-        delete seoProps.titleTemplate;
-        delete seoProps.descriptionTemplate;
-
-        // Build resolveChain statically to match legacy deco-cx/deco format.
-        type FieldResolver = { type: string; value: string | number };
-        const rawKey = page.blockKey ?? `pages-${page.name}`;
-        const encodedKey = rawKey.replace(
-          /^(pages-)(.+)$/,
-          (_m, prefix, rest) => prefix + encodeURIComponent(rest),
-        );
-        const pageChain: FieldResolver[] = [
-          { type: "resolver", value: "website/handlers/fresh.ts" },
-          { type: "prop", value: "page" },
-          { type: "resolver", value: "resolved" },
-          { type: "resolvable", value: encodedKey },
-          { type: "resolver", value: "website/pages/Page.tsx" },
-        ];
-
-        const seoChain: FieldResolver[] = [
-          ...pageChain,
-          { type: "prop", value: "seo" },
-          { type: "resolver", value: seoResult?.component ?? "website/sections/Seo/SeoV2.tsx" },
-        ];
-
-        const result = {
-          props: {
-            name: page.name,
-            path: page.path,
-            seo: {
-              props: seoProps,
-              metadata: {
-                resolveChain: seoChain,
-                component: seoResult?.component ?? "website/sections/Seo/SeoV2.tsx",
-              },
-            },
-            sections: enrichedSections.map((s, i) => ({
-              props: s.props,
-              metadata: {
-                resolveChain: [
-                  ...pageChain,
-                  { type: "prop", value: "sections" },
-                  { type: "prop", value: String(i) },
-                  { type: "resolver", value: s.component },
-                ],
-                component: s.component,
-              },
-            })),
-            devMode: false,
-            unindexedDomain: false,
-          },
-          metadata: {
-            resolveChain: pageChain,
-            component: "website/pages/Page.tsx",
-          },
-        };
-        return Response.json(result, {
-          headers: {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization",
-            "Access-Control-Allow-Methods": "GET, OPTIONS",
-          },
+      const matcherCtx: MatcherContext = {
+        userAgent: request.headers.get("user-agent") ?? "",
+        url: url.toString(),
+        path: basePath,
+        cookies,
+        request,
+      };
+      const page = await resolveDecoPage(basePath, matcherCtx);
+      if (!page) {
+        return Response.json(null, {
+          status: 404,
+          headers: { "Access-Control-Allow-Origin": "*" },
         });
       }
+      const enrichedSections = await runSectionLoaders(page.resolvedSections, request);
 
-      // Commerce proxy (checkout, account, API, etc.)
-      if (options.proxyHandler) {
-        const proxyResponse = await options.proxyHandler(request, url);
-        if (proxyResponse) return proxyResponse;
+      // Run SEO section loader if registered
+      let seoResult = page.seoSection;
+      if (seoResult) {
+        try {
+          seoResult = await runSingleSectionLoader(seoResult, request);
+        } catch {
+          // use unloaded seoSection
+        }
       }
 
-      // Static fingerprinted assets — serve from origin with immutable headers
-      if (isStaticAsset(url.pathname)) {
-        const origin = await serverEntry.fetch(request, env, ctx);
-        if (origin.status === 200) {
-          const ct = origin.headers.get("content-type") ?? "";
-          if (ct.includes("text/html")) {
-            return new Response("Not Found", { status: 404 });
-          }
-          const resp = new Response(origin.body, origin);
-          for (const [k, v] of Object.entries(IMMUTABLE_HEADERS)) {
-            resp.headers.set(k, v);
-          }
-          return resp;
-        }
-        return origin;
+      // Merge site-wide SEO defaults into seo props
+      const blocks = loadBlocks();
+      const site = blocks["Site"] as Record<string, unknown> | undefined;
+      const fullSiteSeo = (site?.seo as Record<string, unknown>) ?? {};
+
+      // When SeoV2 loader ran, use its output as base (preserves key order)
+      // and only fill in missing fields from the site-wide SEO config.
+      const loaderProps = seoResult?.props ?? {};
+      const seoProps: Record<string, unknown> = { ...loaderProps };
+      for (const [k, v] of Object.entries(fullSiteSeo)) {
+        if (!(k in seoProps)) seoProps[k] = v;
       }
+      // Strip internal template fields
+      delete seoProps.titleTemplate;
+      delete seoProps.descriptionTemplate;
 
-      // -----------------------------------------------------------------
-      // POST _serverFn — edge-cacheable using body-hash as cache key.
-      // These carry public CMS section data (shelves, deferred sections)
-      // that benefits from edge caching despite being POST requests.
-      // -----------------------------------------------------------------
-      if (
-        request.method === "POST" &&
-        (url.pathname.startsWith("/_serverFn/") || url.pathname.startsWith("/_server/"))
-      ) {
-        const serverFnCache =
-          typeof caches !== "undefined"
-            ? ((caches as unknown as { default?: Cache }).default ?? null)
-            : null;
+      // Build resolveChain statically to match legacy deco-cx/deco format.
+      type FieldResolver = { type: string; value: string | number };
+      const rawKey = page.blockKey ?? `pages-${page.name}`;
+      const encodedKey = rawKey.replace(
+        /^(pages-)(.+)$/,
+        (_m, prefix, rest) => prefix + encodeURIComponent(rest),
+      );
+      const pageChain: FieldResolver[] = [
+        { type: "resolver", value: "website/handlers/fresh.ts" },
+        { type: "prop", value: "page" },
+        { type: "resolver", value: "resolved" },
+        { type: "resolvable", value: encodedKey },
+        { type: "resolver", value: "website/pages/Page.tsx" },
+      ];
 
-        // Build segment once — used for logged-in check and cache key
-        const sfnSegment = buildSegment ? buildSegment(request) : undefined;
+      const seoChain: FieldResolver[] = [
+        ...pageChain,
+        { type: "prop", value: "seo" },
+        { type: "resolver", value: seoResult?.component ?? "website/sections/Seo/SeoV2.tsx" },
+      ];
 
-        // Logged-in users always bypass — personalized content must not leak
-        if (sfnSegment?.loggedIn) {
-          const origin = await serverEntry.fetch(request, env, ctx);
-          const resp = new Response(origin.body, origin);
-          resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
-          resp.headers.set("X-Cache", "BYPASS");
-          resp.headers.set("X-Cache-Reason", "logged-in");
-          return resp;
+      const result = {
+        props: {
+          name: page.name,
+          path: page.path,
+          seo: {
+            props: seoProps,
+            metadata: {
+              resolveChain: seoChain,
+              component: seoResult?.component ?? "website/sections/Seo/SeoV2.tsx",
+            },
+          },
+          sections: enrichedSections.map((s, i) => ({
+            props: s.props,
+            metadata: {
+              resolveChain: [
+                ...pageChain,
+                { type: "prop", value: "sections" },
+                { type: "prop", value: String(i) },
+                { type: "resolver", value: s.component },
+              ],
+              component: s.component,
+            },
+          })),
+          devMode: false,
+          unindexedDomain: false,
+        },
+        metadata: {
+          resolveChain: pageChain,
+          component: "website/pages/Page.tsx",
+        },
+      };
+      return Response.json(result, {
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+        },
+      });
+    }
+
+    // Commerce proxy (checkout, account, API, etc.)
+    if (options.proxyHandler) {
+      const proxyResponse = await options.proxyHandler(request, url);
+      if (proxyResponse) return proxyResponse;
+    }
+
+    // Static fingerprinted assets — serve from origin with immutable headers
+    if (isStaticAsset(url.pathname)) {
+      const origin = await serverEntry.fetch(request, env, ctx);
+      if (origin.status === 200) {
+        const ct = origin.headers.get("content-type") ?? "";
+        if (ct.includes("text/html")) {
+          return new Response("Not Found", { status: 404 });
         }
-
-        // Clone request before consuming body — the clone goes to origin
-        // untouched so TanStack Start internals (cookie passthrough, etc.)
-        // work correctly. We only read the body for the cache key hash.
-        const originClone = request.clone();
-        const body = await request.text();
-        const bodyHash = await hashText(body);
-
-        // Build a synthetic GET cache key from the URL + body hash + segment
-        // Includes device, salesChannel, regionId, flags — so users in
-        // different regions or channels get separate cache entries.
-        const cacheKeyUrl = new URL(request.url);
-        cacheKeyUrl.searchParams.set("__body", bodyHash);
-        if (cacheVersionEnv !== false) {
-          const version = (env[cacheVersionEnv] as string) || "";
-          if (version) cacheKeyUrl.searchParams.set("__v", version);
-        }
-        if (sfnSegment) {
-          cacheKeyUrl.searchParams.set("__seg", hashSegment(sfnSegment));
-        } else if (deviceSpecificKeys) {
-          const device = isMobileUA(request.headers.get("user-agent") ?? "") ? "mobile" : "desktop";
-          cacheKeyUrl.searchParams.set("__cf_device", device);
-        }
-        // Include CF geo data so location-based content doesn't leak across geos
-        const cf = (request as unknown as { cf?: Record<string, string> }).cf;
-        if (cf) {
-          const geoParts: string[] = [];
-          if (cf.country) geoParts.push(cf.country);
-          if (cf.region) geoParts.push(cf.region);
-          if (cf.city) geoParts.push(cf.city);
-          if (geoParts.length) cacheKeyUrl.searchParams.set("__cf_geo", geoParts.join("|"));
-        }
-        const sfnCacheKey = new Request(cacheKeyUrl.toString(), { method: "GET" });
-
-        // Use "listing" profile for server function responses
-        const sfnProfile: CacheProfileName = "listing";
-        const sfnEdge = edgeCacheConfig(sfnProfile);
-
-        // Check edge cache
-        let sfnCached: Response | undefined;
-        if (serverFnCache) {
-          try {
-            sfnCached = await serverFnCache.match(sfnCacheKey) ?? undefined;
-          } catch { /* Cache API unavailable */ }
-        }
-
-        if (sfnCached && sfnEdge.fresh > 0) {
-          const storedAt = Number(sfnCached.headers.get("X-Deco-Stored-At") || "0");
-          const ageSec = storedAt > 0 ? (Date.now() - storedAt) / 1000 : Infinity;
-
-          if (ageSec < sfnEdge.fresh) {
-            const out = new Response(sfnCached.body, sfnCached);
-            const hdrs = cacheHeaders(sfnProfile);
-            for (const [k, v] of Object.entries(hdrs)) out.headers.set(k, v);
-            out.headers.set("X-Cache", "HIT");
-            out.headers.set("X-Cache-Profile", sfnProfile);
-            return out;
-          }
-
-          if (ageSec < sfnEdge.fresh + sfnEdge.swr) {
-            // Stale-while-revalidate: serve stale, refresh in background
-            ctx.waitUntil(
-              (async () => {
-                try {
-                  const bgReq = new Request(request, { body, method: "POST" });
-                  const bgOrigin = await serverEntry.fetch(bgReq, env, ctx);
-                  if (
-                    bgOrigin.status === 200 &&
-                    bgOrigin.headers.get("X-Deco-Cacheable") === "true" &&
-                    !bgOrigin.headers.has("set-cookie") &&
-                    serverFnCache
-                  ) {
-                    const ttl = sfnEdge.fresh + Math.max(sfnEdge.swr, sfnEdge.sie);
-                    const toStore = bgOrigin.clone();
-                    toStore.headers.set("Cache-Control", `public, max-age=${ttl}`);
-                    toStore.headers.set("X-Deco-Stored-At", String(Date.now()));
-                    toStore.headers.delete("CDN-Cache-Control");
-                    toStore.headers.delete("X-Deco-Cacheable");
-                    await serverFnCache.put(sfnCacheKey, toStore);
-                  }
-                } catch { /* background revalidation failed */ }
-              })(),
-            );
-            const out = new Response(sfnCached.body, sfnCached);
-            const hdrs = cacheHeaders(sfnProfile);
-            for (const [k, v] of Object.entries(hdrs)) out.headers.set(k, v);
-            out.headers.set("X-Cache", "STALE-HIT");
-            out.headers.set("X-Cache-Profile", sfnProfile);
-            out.headers.set("X-Cache-Age", String(Math.round(ageSec)));
-            return out;
-          }
-        }
-
-        // Cache MISS — fetch origin with the body we already read
-        const origin = await serverEntry.fetch(originClone, env, ctx);
-
-        // Only cache responses explicitly marked as cacheable by the handler
-        // (loadDeferredSection sets X-Deco-Cacheable: true). Checkout actions,
-        // invoke mutations, and other server functions are passed through.
-        const isCacheableResponse =
-          origin.headers.get("X-Deco-Cacheable") === "true" &&
-          !origin.headers.has("set-cookie") &&
-          origin.status === 200;
-
-        if (!isCacheableResponse) {
-          const resp = new Response(origin.body, origin);
-          resp.headers.delete("X-Deco-Cacheable");
-          resp.headers.set("X-Cache", "BYPASS");
-          resp.headers.set("X-Cache-Reason", origin.headers.has("set-cookie")
-            ? "set-cookie"
-            : "not-cacheable");
-          return resp;
-        }
-
-        // Store in edge cache
-        if (serverFnCache) {
-          try {
-            const ttl = sfnEdge.fresh + Math.max(sfnEdge.swr, sfnEdge.sie);
-            const toStore = origin.clone();
-            toStore.headers.set("Cache-Control", `public, max-age=${ttl}`);
-            toStore.headers.set("X-Deco-Stored-At", String(Date.now()));
-            toStore.headers.delete("CDN-Cache-Control");
-            toStore.headers.delete("X-Deco-Cacheable");
-            ctx.waitUntil(serverFnCache.put(sfnCacheKey, toStore));
-          } catch { /* Cache API unavailable */ }
-        }
-
         const resp = new Response(origin.body, origin);
-        resp.headers.delete("X-Deco-Cacheable");
-        const hdrs = cacheHeaders(sfnProfile);
-        for (const [k, v] of Object.entries(hdrs)) resp.headers.set(k, v);
-        resp.headers.set("X-Cache", "MISS");
-        resp.headers.set("X-Cache-Profile", sfnProfile);
+        for (const [k, v] of Object.entries(IMMUTABLE_HEADERS)) {
+          resp.headers.set(k, v);
+        }
         return resp;
       }
+      return origin;
+    }
 
-      // Non-cacheable requests — pass through but protect against accidental caching
-      if (!isCacheable(request, url)) {
-        const origin = await serverEntry.fetch(request, env, ctx);
-        const profile = getProfile(url);
+    // -----------------------------------------------------------------
+    // POST _serverFn — edge-cacheable using body-hash as cache key.
+    // These carry public CMS section data (shelves, deferred sections)
+    // that benefits from edge caching despite being POST requests.
+    // -----------------------------------------------------------------
+    if (
+      request.method === "POST" &&
+      (url.pathname.startsWith("/_serverFn/") || url.pathname.startsWith("/_server/"))
+    ) {
+      const serverFnCache =
+        typeof caches !== "undefined"
+          ? ((caches as unknown as { default?: Cache }).default ?? null)
+          : null;
 
-        if (profile === "private" || profile === "none" || profile === "cart") {
-          const resp = new Response(origin.body, origin);
-          resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
-          resp.headers.delete("CDN-Cache-Control");
-          resp.headers.set("X-Cache", "BYPASS");
-          resp.headers.set("X-Cache-Reason", `non-cacheable:${profile}`);
-          return resp;
-        }
+      // Build segment once — used for logged-in check and cache key
+      const sfnSegment = buildSegment ? buildSegment(request) : undefined;
 
-        const resp = new Response(origin.body, origin);
-
-        // Responses with private Set-Cookie headers carry per-user tokens —
-        // never expose them with public cache headers.
-        // Safe/public cookies (e.g., vtex_is_session) are allowed through.
-        if (origin.headers.has("set-cookie") && !hasOnlySafeCookies(origin, safeCookieSet)) {
-          resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
-          resp.headers.delete("CDN-Cache-Control");
-          resp.headers.set("X-Cache", "BYPASS");
-          resp.headers.set("X-Cache-Reason", "private-set-cookie");
-          return resp;
-        }
-
-        // Set cache headers from the detected profile so the response
-        // is explicit about cacheability (avoids ambiguous empty header).
-        const hdrsNc = cacheHeaders(profile);
-        for (const [k, v] of Object.entries(hdrsNc)) resp.headers.set(k, v);
-
-        const reason = request.method !== "GET"
-          ? `method:${request.method}`
-          : "bypass-path";
-        resp.headers.set("X-Cache", "BYPASS");
-        resp.headers.set("X-Cache-Profile", profile);
-        resp.headers.set("X-Cache-Reason", reason);
-        return resp;
-      }
-
-      // Cacheable request — build segment-aware cache key
-      const { key: cacheKey, segment } = buildCacheKey(request, env);
-
-      // Logged-in users always bypass the cache (personalized content)
-      if (segment?.loggedIn) {
+      // Logged-in users always bypass — personalized content must not leak
+      if (sfnSegment?.loggedIn) {
         const origin = await serverEntry.fetch(request, env, ctx);
         const resp = new Response(origin.body, origin);
         resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
@@ -1315,67 +1175,266 @@ export function createDecoWorkerEntry(
         return resp;
       }
 
-      // Check Cache API (may not be available in local dev / miniflare)
-      const cache =
-        typeof caches !== "undefined"
-          ? ((caches as unknown as { default?: Cache }).default ?? null)
-          : null;
+      // Clone request before consuming body — the clone goes to origin
+      // untouched so TanStack Start internals (cookie passthrough, etc.)
+      // work correctly. We only read the body for the cache key hash.
+      const originClone = request.clone();
+      const body = await request.text();
+      const bodyHash = await hashText(body);
 
-      const profile = getProfile(url);
-      const edgeConfig = edgeCacheConfig(profile);
+      // Build a synthetic GET cache key from the URL + body hash + segment
+      // Includes device, salesChannel, regionId, flags — so users in
+      // different regions or channels get separate cache entries.
+      const cacheKeyUrl = new URL(request.url);
+      cacheKeyUrl.searchParams.set("__body", bodyHash);
+      if (cacheVersionEnv !== false) {
+        const version = (env[cacheVersionEnv] as string) || "";
+        if (version) cacheKeyUrl.searchParams.set("__v", version);
+      }
+      if (sfnSegment) {
+        cacheKeyUrl.searchParams.set("__seg", hashSegment(sfnSegment));
+      } else if (deviceSpecificKeys) {
+        const device = isMobileUA(request.headers.get("user-agent") ?? "") ? "mobile" : "desktop";
+        cacheKeyUrl.searchParams.set("__cf_device", device);
+      }
+      // Include CF geo data so location-based content doesn't leak across geos
+      const cf = (request as unknown as { cf?: Record<string, string> }).cf;
+      if (cf) {
+        const geoParts: string[] = [];
+        if (cf.country) geoParts.push(cf.country);
+        if (cf.region) geoParts.push(cf.region);
+        if (cf.city) geoParts.push(cf.city);
+        if (geoParts.length) cacheKeyUrl.searchParams.set("__cf_geo", geoParts.join("|"));
+      }
+      const sfnCacheKey = new Request(cacheKeyUrl.toString(), { method: "GET" });
 
-      // Helper: dress a response with proper client-facing headers
-      function dressResponse(resp: Response, xCache: string, extra?: Record<string, string>): Response {
-        const out = new Response(resp.body, resp);
-        const hdrs = cacheHeaders(profile);
-        for (const [k, v] of Object.entries(hdrs)) out.headers.set(k, v);
+      // Use "listing" profile for server function responses
+      const sfnProfile: CacheProfileName = "listing";
+      const sfnEdge = edgeCacheConfig(sfnProfile);
 
-        // CDN-Cache-Control: controls Cloudflare's automatic CDN layer
-        // (separate from Cache API which the worker manages directly).
-        if (cdnCacheControlOpt === "no-store") {
-          out.headers.set("CDN-Cache-Control", "no-store");
-        } else if (cdnCacheControlOpt === "match-profile") {
-          if (edgeConfig.isPublic && edgeConfig.fresh > 0) {
-            out.headers.set("CDN-Cache-Control", `public, max-age=${edgeConfig.fresh}`);
-          } else {
-            out.headers.set("CDN-Cache-Control", "no-store");
-          }
-        } else if (typeof cdnCacheControlOpt === "function") {
-          const val = cdnCacheControlOpt(profile);
-          out.headers.set("CDN-Cache-Control", val ?? "no-store");
+      // Check edge cache
+      let sfnCached: Response | undefined;
+      if (serverFnCache) {
+        try {
+          sfnCached = (await serverFnCache.match(sfnCacheKey)) ?? undefined;
+        } catch {
+          /* Cache API unavailable */
         }
-
-        out.headers.set("X-Cache", xCache);
-        out.headers.set("X-Cache-Profile", profile);
-        if (segment) out.headers.set("X-Cache-Segment", hashSegment(segment));
-        if (cacheVersionEnv !== false) {
-          const v = (env[cacheVersionEnv] as string) || "";
-          if (v) out.headers.set("X-Cache-Version", v);
-        }
-        if (extra) for (const [k, v] of Object.entries(extra)) out.headers.set(k, v);
-        appendResourceHints(out);
-        return out;
       }
 
-      // Helper: store a response in Cache API with the full retention window
-      function storeInCache(resp: Response) {
-        if (!cache) return;
+      if (sfnCached && sfnEdge.fresh > 0) {
+        const storedAt = Number(sfnCached.headers.get("X-Deco-Stored-At") || "0");
+        const ageSec = storedAt > 0 ? (Date.now() - storedAt) / 1000 : Infinity;
+
+        if (ageSec < sfnEdge.fresh) {
+          const out = new Response(sfnCached.body, sfnCached);
+          const hdrs = cacheHeaders(sfnProfile);
+          for (const [k, v] of Object.entries(hdrs)) out.headers.set(k, v);
+          out.headers.set("X-Cache", "HIT");
+          out.headers.set("X-Cache-Profile", sfnProfile);
+          return out;
+        }
+
+        if (ageSec < sfnEdge.fresh + sfnEdge.swr) {
+          // Stale-while-revalidate: serve stale, refresh in background
+          ctx.waitUntil(
+            (async () => {
+              try {
+                const bgReq = new Request(request, { body, method: "POST" });
+                const bgOrigin = await serverEntry.fetch(bgReq, env, ctx);
+                if (
+                  bgOrigin.status === 200 &&
+                  bgOrigin.headers.get("X-Deco-Cacheable") === "true" &&
+                  !bgOrigin.headers.has("set-cookie") &&
+                  serverFnCache
+                ) {
+                  const ttl = sfnEdge.fresh + Math.max(sfnEdge.swr, sfnEdge.sie);
+                  const toStore = bgOrigin.clone();
+                  toStore.headers.set("Cache-Control", `public, max-age=${ttl}`);
+                  toStore.headers.set("X-Deco-Stored-At", String(Date.now()));
+                  toStore.headers.delete("CDN-Cache-Control");
+                  toStore.headers.delete("X-Deco-Cacheable");
+                  await serverFnCache.put(sfnCacheKey, toStore);
+                }
+              } catch {
+                /* background revalidation failed */
+              }
+            })(),
+          );
+          const out = new Response(sfnCached.body, sfnCached);
+          const hdrs = cacheHeaders(sfnProfile);
+          for (const [k, v] of Object.entries(hdrs)) out.headers.set(k, v);
+          out.headers.set("X-Cache", "STALE-HIT");
+          out.headers.set("X-Cache-Profile", sfnProfile);
+          out.headers.set("X-Cache-Age", String(Math.round(ageSec)));
+          return out;
+        }
+      }
+
+      // Cache MISS — fetch origin with the body we already read
+      const origin = await serverEntry.fetch(originClone, env, ctx);
+
+      // Only cache responses explicitly marked as cacheable by the handler
+      // (loadDeferredSection sets X-Deco-Cacheable: true). Checkout actions,
+      // invoke mutations, and other server functions are passed through.
+      const isCacheableResponse =
+        origin.headers.get("X-Deco-Cacheable") === "true" &&
+        !origin.headers.has("set-cookie") &&
+        origin.status === 200;
+
+      if (!isCacheableResponse) {
+        const resp = new Response(origin.body, origin);
+        resp.headers.delete("X-Deco-Cacheable");
+        resp.headers.set("X-Cache", "BYPASS");
+        resp.headers.set(
+          "X-Cache-Reason",
+          origin.headers.has("set-cookie") ? "set-cookie" : "not-cacheable",
+        );
+        return resp;
+      }
+
+      // Store in edge cache
+      if (serverFnCache) {
         try {
-          const storageTtl = edgeConfig.fresh + Math.max(edgeConfig.swr, edgeConfig.sie);
-          const toStore = resp.clone();
-          toStore.headers.set("Cache-Control", `public, max-age=${storageTtl}`);
+          const ttl = sfnEdge.fresh + Math.max(sfnEdge.swr, sfnEdge.sie);
+          const toStore = origin.clone();
+          toStore.headers.set("Cache-Control", `public, max-age=${ttl}`);
           toStore.headers.set("X-Deco-Stored-At", String(Date.now()));
           toStore.headers.delete("CDN-Cache-Control");
-          ctx.waitUntil(cache.put(cacheKey, toStore));
+          toStore.headers.delete("X-Deco-Cacheable");
+          ctx.waitUntil(serverFnCache.put(sfnCacheKey, toStore));
         } catch {
-          // Cache API unavailable
+          /* Cache API unavailable */
         }
       }
 
-      // Helper: background revalidation (fetch origin, store result)
-      function revalidateInBackground() {
-        ctx.waitUntil(
-          Promise.resolve(serverEntry.fetch(request, env, ctx)).then((origin) => {
+      const resp = new Response(origin.body, origin);
+      resp.headers.delete("X-Deco-Cacheable");
+      const hdrs = cacheHeaders(sfnProfile);
+      for (const [k, v] of Object.entries(hdrs)) resp.headers.set(k, v);
+      resp.headers.set("X-Cache", "MISS");
+      resp.headers.set("X-Cache-Profile", sfnProfile);
+      return resp;
+    }
+
+    // Non-cacheable requests — pass through but protect against accidental caching
+    if (!isCacheable(request, url)) {
+      const origin = await serverEntry.fetch(request, env, ctx);
+      const profile = getProfile(url);
+
+      if (profile === "private" || profile === "none" || profile === "cart") {
+        const resp = new Response(origin.body, origin);
+        resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
+        resp.headers.delete("CDN-Cache-Control");
+        resp.headers.set("X-Cache", "BYPASS");
+        resp.headers.set("X-Cache-Reason", `non-cacheable:${profile}`);
+        return resp;
+      }
+
+      const resp = new Response(origin.body, origin);
+
+      // Responses with private Set-Cookie headers carry per-user tokens —
+      // never expose them with public cache headers.
+      // Safe/public cookies (e.g., vtex_is_session) are allowed through.
+      if (origin.headers.has("set-cookie") && !hasOnlySafeCookies(origin, safeCookieSet)) {
+        resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
+        resp.headers.delete("CDN-Cache-Control");
+        resp.headers.set("X-Cache", "BYPASS");
+        resp.headers.set("X-Cache-Reason", "private-set-cookie");
+        return resp;
+      }
+
+      // Set cache headers from the detected profile so the response
+      // is explicit about cacheability (avoids ambiguous empty header).
+      const hdrsNc = cacheHeaders(profile);
+      for (const [k, v] of Object.entries(hdrsNc)) resp.headers.set(k, v);
+
+      const reason = request.method !== "GET" ? `method:${request.method}` : "bypass-path";
+      resp.headers.set("X-Cache", "BYPASS");
+      resp.headers.set("X-Cache-Profile", profile);
+      resp.headers.set("X-Cache-Reason", reason);
+      return resp;
+    }
+
+    // Cacheable request — build segment-aware cache key
+    const { key: cacheKey, segment } = buildCacheKey(request, env);
+
+    // Logged-in users always bypass the cache (personalized content)
+    if (segment?.loggedIn) {
+      const origin = await serverEntry.fetch(request, env, ctx);
+      const resp = new Response(origin.body, origin);
+      resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
+      resp.headers.set("X-Cache", "BYPASS");
+      resp.headers.set("X-Cache-Reason", "logged-in");
+      return resp;
+    }
+
+    // Check Cache API (may not be available in local dev / miniflare)
+    const cache =
+      typeof caches !== "undefined"
+        ? ((caches as unknown as { default?: Cache }).default ?? null)
+        : null;
+
+    const profile = getProfile(url);
+    const edgeConfig = edgeCacheConfig(profile);
+
+    // Helper: dress a response with proper client-facing headers
+    function dressResponse(
+      resp: Response,
+      xCache: string,
+      extra?: Record<string, string>,
+    ): Response {
+      const out = new Response(resp.body, resp);
+      const hdrs = cacheHeaders(profile);
+      for (const [k, v] of Object.entries(hdrs)) out.headers.set(k, v);
+
+      // CDN-Cache-Control: controls Cloudflare's automatic CDN layer
+      // (separate from Cache API which the worker manages directly).
+      if (cdnCacheControlOpt === "no-store") {
+        out.headers.set("CDN-Cache-Control", "no-store");
+      } else if (cdnCacheControlOpt === "match-profile") {
+        if (edgeConfig.isPublic && edgeConfig.fresh > 0) {
+          out.headers.set("CDN-Cache-Control", `public, max-age=${edgeConfig.fresh}`);
+        } else {
+          out.headers.set("CDN-Cache-Control", "no-store");
+        }
+      } else if (typeof cdnCacheControlOpt === "function") {
+        const val = cdnCacheControlOpt(profile);
+        out.headers.set("CDN-Cache-Control", val ?? "no-store");
+      }
+
+      out.headers.set("X-Cache", xCache);
+      out.headers.set("X-Cache-Profile", profile);
+      if (segment) out.headers.set("X-Cache-Segment", hashSegment(segment));
+      if (cacheVersionEnv !== false) {
+        const v = (env[cacheVersionEnv] as string) || "";
+        if (v) out.headers.set("X-Cache-Version", v);
+      }
+      if (extra) for (const [k, v] of Object.entries(extra)) out.headers.set(k, v);
+      appendResourceHints(out);
+      return out;
+    }
+
+    // Helper: store a response in Cache API with the full retention window
+    function storeInCache(resp: Response) {
+      if (!cache) return;
+      try {
+        const storageTtl = edgeConfig.fresh + Math.max(edgeConfig.swr, edgeConfig.sie);
+        const toStore = resp.clone();
+        toStore.headers.set("Cache-Control", `public, max-age=${storageTtl}`);
+        toStore.headers.set("X-Deco-Stored-At", String(Date.now()));
+        toStore.headers.delete("CDN-Cache-Control");
+        ctx.waitUntil(cache.put(cacheKey, toStore));
+      } catch {
+        // Cache API unavailable
+      }
+    }
+
+    // Helper: background revalidation (fetch origin, store result)
+    function revalidateInBackground() {
+      ctx.waitUntil(
+        Promise.resolve(serverEntry.fetch(request, env, ctx))
+          .then((origin) => {
             if (origin.status === 200) {
               // Only cache if response has no cookies or only safe cookies.
               // Strip safe cookies from the cached copy.
@@ -1386,120 +1445,126 @@ export function createDecoWorkerEntry(
                 storeInCache(cleanOrigin);
               }
             }
-          }).catch(() => {
+          })
+          .catch(() => {
             // Background revalidation failed — stale entry stays until SIE expires
           }),
-        );
+      );
+    }
+
+    // --- Edge cache check with SWR + SIE ---
+    let cached: Response | undefined;
+    if (cache) {
+      try {
+        cached = (await cache.match(cacheKey)) ?? undefined;
+      } catch {
+        // Cache API unavailable
+      }
+    }
+
+    if (cached && edgeConfig.isPublic && edgeConfig.fresh > 0) {
+      const storedAtStr = cached.headers.get("X-Deco-Stored-At");
+      const storedAt = storedAtStr ? Number(storedAtStr) : 0;
+      const ageMs = storedAt > 0 ? Date.now() - storedAt : Infinity;
+      const ageSec = ageMs / 1000;
+
+      if (ageSec < edgeConfig.fresh) {
+        // FRESH HIT — serve immediately
+        return dressResponse(cached, "HIT");
       }
 
-      // --- Edge cache check with SWR + SIE ---
-      let cached: Response | undefined;
-      if (cache) {
-        try {
-          cached = await cache.match(cacheKey) ?? undefined;
-        } catch {
-          // Cache API unavailable
-        }
+      if (ageSec < edgeConfig.fresh + edgeConfig.swr) {
+        // STALE-HIT within SWR window — serve stale, revalidate in background
+        revalidateInBackground();
+        return dressResponse(cached, "STALE-HIT", { "X-Cache-Age": String(Math.round(ageSec)) });
       }
 
-      if (cached && edgeConfig.isPublic && edgeConfig.fresh > 0) {
+      // Past SWR window but still in cache (within SIE window) — keep reference
+      // for potential error fallback below
+    }
+
+    // Cache MISS or past SWR window — fetch from origin
+    let origin: Response;
+    try {
+      origin = await serverEntry.fetch(request, env, ctx);
+    } catch (err) {
+      // Origin fetch threw — SIE fallback if we have a stale entry
+      if (cached && edgeConfig.sie > 0) {
         const storedAtStr = cached.headers.get("X-Deco-Stored-At");
         const storedAt = storedAtStr ? Number(storedAtStr) : 0;
-        const ageMs = storedAt > 0 ? Date.now() - storedAt : Infinity;
-        const ageSec = ageMs / 1000;
-
-        if (ageSec < edgeConfig.fresh) {
-          // FRESH HIT — serve immediately
-          return dressResponse(cached, "HIT");
+        const ageSec = storedAt > 0 ? (Date.now() - storedAt) / 1000 : Infinity;
+        if (ageSec < edgeConfig.fresh + edgeConfig.sie) {
+          console.warn(
+            `[edge-cache] Origin threw, serving stale (age=${Math.round(ageSec)}s, sie=${edgeConfig.sie}s)`,
+          );
+          return dressResponse(cached, "STALE-ERROR", {
+            "X-Cache-Age": String(Math.round(ageSec)),
+          });
         }
-
-        if (ageSec < edgeConfig.fresh + edgeConfig.swr) {
-          // STALE-HIT within SWR window — serve stale, revalidate in background
-          revalidateInBackground();
-          return dressResponse(cached, "STALE-HIT", { "X-Cache-Age": String(Math.round(ageSec)) });
-        }
-
-        // Past SWR window but still in cache (within SIE window) — keep reference
-        // for potential error fallback below
       }
+      throw err;
+    }
 
-      // Cache MISS or past SWR window — fetch from origin
-      let origin: Response;
-      try {
-        origin = await serverEntry.fetch(request, env, ctx);
-      } catch (err) {
-        // Origin fetch threw — SIE fallback if we have a stale entry
+    if (origin.status !== 200) {
+      // Non-200 origin — SIE fallback on 5xx/429
+      if (origin.status >= 500 || origin.status === 429) {
         if (cached && edgeConfig.sie > 0) {
           const storedAtStr = cached.headers.get("X-Deco-Stored-At");
           const storedAt = storedAtStr ? Number(storedAtStr) : 0;
           const ageSec = storedAt > 0 ? (Date.now() - storedAt) / 1000 : Infinity;
           if (ageSec < edgeConfig.fresh + edgeConfig.sie) {
-            console.warn(`[edge-cache] Origin threw, serving stale (age=${Math.round(ageSec)}s, sie=${edgeConfig.sie}s)`);
-            return dressResponse(cached, "STALE-ERROR", { "X-Cache-Age": String(Math.round(ageSec)) });
+            console.warn(
+              `[edge-cache] Origin ${origin.status}, serving stale (age=${Math.round(ageSec)}s)`,
+            );
+            return dressResponse(cached, "STALE-ERROR", {
+              "X-Cache-Age": String(Math.round(ageSec)),
+              "X-Cache-Origin-Status": String(origin.status),
+            });
           }
         }
-        throw err;
       }
+      const resp = new Response(origin.body, origin);
+      resp.headers.set("X-Cache", "BYPASS");
+      resp.headers.set("X-Cache-Reason", `status:${origin.status}`);
+      appendResourceHints(resp);
+      return resp;
+    }
 
-      if (origin.status !== 200) {
-        // Non-200 origin — SIE fallback on 5xx/429
-        if (origin.status >= 500 || origin.status === 429) {
-          if (cached && edgeConfig.sie > 0) {
-            const storedAtStr = cached.headers.get("X-Deco-Stored-At");
-            const storedAt = storedAtStr ? Number(storedAtStr) : 0;
-            const ageSec = storedAt > 0 ? (Date.now() - storedAt) / 1000 : Infinity;
-            if (ageSec < edgeConfig.fresh + edgeConfig.sie) {
-              console.warn(`[edge-cache] Origin ${origin.status}, serving stale (age=${Math.round(ageSec)}s)`);
-              return dressResponse(cached, "STALE-ERROR", {
-                "X-Cache-Age": String(Math.round(ageSec)),
-                "X-Cache-Origin-Status": String(origin.status),
-              });
-            }
-          }
-        }
-        const resp = new Response(origin.body, origin);
-        resp.headers.set("X-Cache", "BYPASS");
-        resp.headers.set("X-Cache-Reason", `status:${origin.status}`);
-        appendResourceHints(resp);
-        return resp;
-      }
+    // Responses with private Set-Cookie headers must never be cached —
+    // they carry per-user session/auth tokens that would leak to other users.
+    // Safe/public cookies (IS session, segment, etc.) are stripped from the
+    // cached copy but kept on the response served to the current user.
+    if (origin.headers.has("set-cookie") && !hasOnlySafeCookies(origin, safeCookieSet)) {
+      const resp = new Response(origin.body, origin);
+      resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
+      resp.headers.delete("CDN-Cache-Control");
+      resp.headers.set("X-Cache", "BYPASS");
+      resp.headers.set("X-Cache-Reason", "private-set-cookie");
+      appendResourceHints(resp);
+      return resp;
+    }
 
-      // Responses with private Set-Cookie headers must never be cached —
-      // they carry per-user session/auth tokens that would leak to other users.
-      // Safe/public cookies (IS session, segment, etc.) are stripped from the
-      // cached copy but kept on the response served to the current user.
-      if (origin.headers.has("set-cookie") && !hasOnlySafeCookies(origin, safeCookieSet)) {
-        const resp = new Response(origin.body, origin);
-        resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
-        resp.headers.delete("CDN-Cache-Control");
-        resp.headers.set("X-Cache", "BYPASS");
-        resp.headers.set("X-Cache-Reason", "private-set-cookie");
-        appendResourceHints(resp);
-        return resp;
-      }
+    const profileConfig = getCacheProfile(profile);
 
-      const profileConfig = getCacheProfile(profile);
+    if (!profileConfig.isPublic || profileConfig.edge.fresh === 0) {
+      const resp = new Response(origin.body, origin);
+      resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
+      resp.headers.set("X-Cache", "BYPASS");
+      resp.headers.set("X-Cache-Reason", `profile:${profile}`);
+      appendResourceHints(resp);
+      return resp;
+    }
 
-      if (!profileConfig.isPublic || profileConfig.edge.fresh === 0) {
-        const resp = new Response(origin.body, origin);
-        resp.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate");
-        resp.headers.set("X-Cache", "BYPASS");
-        resp.headers.set("X-Cache-Reason", `profile:${profile}`);
-        appendResourceHints(resp);
-        return resp;
-      }
-
-      // Clone for cache BEFORE dressResponse consumes the body stream.
-      // dressResponse() calls new Response(resp.body, resp) which locks
-      // the ReadableStream. Calling clone() on a locked body corrupts
-      // the stream in Workers runtime, causing Error 1101.
-      // Strip safe cookies from the cached copy so they don't leak
-      // to other users, but the current user still gets them.
-      const cacheOrigin = origin.headers.has("set-cookie")
-        ? stripSafeCookiesForCache(origin, safeCookieSet)
-        : origin;
-      storeInCache(cacheOrigin);
-      return dressResponse(origin, "MISS");
+    // Clone for cache BEFORE dressResponse consumes the body stream.
+    // dressResponse() calls new Response(resp.body, resp) which locks
+    // the ReadableStream. Calling clone() on a locked body corrupts
+    // the stream in Workers runtime, causing Error 1101.
+    // Strip safe cookies from the cached copy so they don't leak
+    // to other users, but the current user still gets them.
+    const cacheOrigin = origin.headers.has("set-cookie")
+      ? stripSafeCookiesForCache(origin, safeCookieSet)
+      : origin;
+    storeInCache(cacheOrigin);
+    return dressResponse(origin, "MISS");
   }
 }
-

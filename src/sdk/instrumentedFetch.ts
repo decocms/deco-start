@@ -16,6 +16,26 @@
  */
 
 import { getTracer } from "../middleware/observability";
+import { logger } from "./logger";
+
+/**
+ * Cloudflare / VTEX response headers that operators want to see as span
+ * attributes when debugging cache behavior. Mirrors `applyCustomAttributesOnSpan`
+ * in `deco-cx/deco/observability/otel/`.
+ */
+const CACHE_HEADERS_TO_SPAN: Array<{ header: string; attr: string }> = [
+  { header: "cf-cache-status", attr: "cf.cache.status" },
+  { header: "cf-ray", attr: "cf.ray" },
+  { header: "x-vtex-io-cluster-id", attr: "vtex.io.cluster.id" },
+  { header: "x-edge-cache-status", attr: "edge.cache.status" },
+];
+
+const TRUE_LITERAL = "true";
+
+function envFlag(name: string): boolean {
+  const env = typeof globalThis.process !== "undefined" ? globalThis.process.env : undefined;
+  return env?.[name] === TRUE_LITERAL;
+}
 
 export interface FetchInstrumentationOptions {
   /** Tag for log/trace grouping (e.g., "vtex", "shopify"). */
@@ -85,6 +105,32 @@ export function createInstrumentedFetch(
         );
       }
 
+      // Structured outgoing-fetch breadcrumb. Same field shape as the Fresh
+      // `@deco/deco/o11y` impl so log pipelines built off the old stack
+      // keep working unchanged. Off by default to avoid log explosion;
+      // enable with `OTEL_LOG_OUTGOING_FETCH=true`.
+      if (envFlag("OTEL_LOG_OUTGOING_FETCH")) {
+        let host = "";
+        let path = "";
+        try {
+          const u = new URL(url);
+          host = u.host;
+          path = u.pathname;
+        } catch {
+          /* unparseable URL — leave host/path blank */
+        }
+        logger.info("outgoing fetch", {
+          app: name,
+          host,
+          path,
+          method,
+          status: response.status,
+          ok: response.ok,
+          durationMs: Math.round(durationMs),
+          cached,
+        });
+      }
+
       onComplete?.({
         name,
         url,
@@ -108,6 +154,16 @@ export function createInstrumentedFetch(
 
         try {
           const response = await doFetch();
+          // Promote CF / VTEX cache headers as span attributes — the plan
+          // calls out these four. `@microlabs/otel-cf-workers` does not
+          // expose the response inside its own fetch span lifecycle, so
+          // capturing them here on our wrapper span is the practical
+          // place to do it.
+          for (const { header, attr } of CACHE_HEADERS_TO_SPAN) {
+            const value = response.headers.get(header);
+            if (value) span.setAttribute?.(attr, value);
+          }
+          span.setAttribute?.("http.status_code", response.status);
           span.end();
           return response;
         } catch (error) {

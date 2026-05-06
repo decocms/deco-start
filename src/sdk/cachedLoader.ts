@@ -11,7 +11,8 @@
  * (e.g. "product") which derives timing from the unified profile system.
  */
 
-import { loaderCacheOptions, type CacheProfileName } from "./cacheHeaders";
+import { recordCacheMetric, withTracing } from "../middleware/observability";
+import { type CacheProfileName, loaderCacheOptions } from "./cacheHeaders";
 
 export type CachePolicy = "no-store" | "no-cache" | "stale-while-revalidate";
 
@@ -85,12 +86,7 @@ export function createCachedLoader<TProps, TResult>(
   optionsOrProfile: CachedLoaderOptions | CacheProfileName,
 ): (props: TProps) => Promise<TResult> {
   const resolved = resolveOptions(optionsOrProfile);
-  const {
-    policy,
-    maxAge = DEFAULT_MAX_AGE,
-    staleIfError = 0,
-    keyFn = JSON.stringify,
-  } = resolved;
+  const { policy, maxAge = DEFAULT_MAX_AGE, staleIfError = 0, keyFn = JSON.stringify } = resolved;
 
   const env = typeof globalThis.process !== "undefined" ? globalThis.process.env : undefined;
   const isDev = env?.DECO_CACHE_DISABLE === "true" || env?.NODE_ENV === "development";
@@ -101,10 +97,20 @@ export function createCachedLoader<TProps, TResult>(
     const cacheKey = `${name}::${keyFn(props)}`;
 
     const inflight = inflightRequests.get(cacheKey);
-    if (inflight) return inflight as Promise<TResult>;
+    if (inflight) {
+      // Treat in-flight dedup as a cache hit — avoided the origin call.
+      recordCacheMetric(true, name);
+      return inflight as Promise<TResult>;
+    }
 
     if (isDev) {
-      const promise = loaderFn(props).finally(() => inflightRequests.delete(cacheKey));
+      // Dev mode: no caching, but still useful to count attempts.
+      recordCacheMetric(false, name);
+      const promise = withTracing(
+        "deco.cachedLoader",
+        () => loaderFn(props).finally(() => inflightRequests.delete(cacheKey)),
+        { "deco.loader": name, "deco.cache.policy": "no-cache-dev" },
+      );
       inflightRequests.set(cacheKey, promise);
       return promise;
     }
@@ -114,13 +120,21 @@ export function createCachedLoader<TProps, TResult>(
     const isStale = entry ? now - entry.createdAt > maxAge : true;
 
     if (policy === "no-cache") {
-      if (entry && !isStale) return entry.value;
+      if (entry && !isStale) {
+        recordCacheMetric(true, name);
+        return entry.value;
+      }
     }
 
     if (policy === "stale-while-revalidate") {
-      if (entry && !isStale) return entry.value;
+      if (entry && !isStale) {
+        recordCacheMetric(true, name);
+        return entry.value;
+      }
 
       if (entry && isStale && !entry.refreshing) {
+        // Stale-while-revalidate hit: serve stale, refresh in background.
+        recordCacheMetric(true, name);
         entry.refreshing = true;
         loaderFn(props)
           .then((result) => {
@@ -141,10 +155,19 @@ export function createCachedLoader<TProps, TResult>(
         return entry.value;
       }
 
-      if (entry) return entry.value;
+      if (entry) {
+        recordCacheMetric(true, name);
+        return entry.value;
+      }
     }
 
-    const promise = loaderFn(props)
+    // Cache miss — emit metric, then run loader inside a span so individual
+    // slow loaders are visible in traces.
+    recordCacheMetric(false, name);
+    const promise = withTracing("deco.cachedLoader", () => loaderFn(props), {
+      "deco.loader": name,
+      "deco.cache.policy": policy,
+    })
       .then((result) => {
         cache.set(cacheKey, {
           value: result,
