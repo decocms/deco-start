@@ -147,10 +147,13 @@ export function decoVitePlugin() {
       });
 
       // Tunnel + daemon: connect local dev to admin.deco.cx
-      // Activated when DECO_SITE_NAME is set (e.g. DECO_SITE_NAME=mysite vite dev)
+      // Activated only when both DECO_SITE_NAME and DECO_ENV_NAME are set.
+      // Omitting DECO_ENV_NAME runs Vite fully local (no tunnel registration),
+      // since DECO_SITE_NAME alone is also consumed by site builds via vite's
+      // `define` for `process.env.DECO_SITE_NAME` and shouldn't force a tunnel.
       const siteName = process.env.DECO_SITE_NAME;
-      if (siteName) {
-        const envName = process.env.DECO_ENV_NAME || "dev";
+      const envName = process.env.DECO_ENV_NAME;
+      if (siteName && envName) {
 
         // Daemon files are .ts and live inside node_modules. Node's
         // experimental strip-types refuses to transpile node_modules, so
