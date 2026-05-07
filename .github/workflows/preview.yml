@@ -20,14 +20,12 @@ name: preview (central)
 #     preview:
 #       uses: decocms/deco-start/.github/workflows/preview.yml@v2
 #       secrets: inherit
+#
+# Same secret model as deploy.yml: `CLOUDFLARE_*` resolve from this repo's
+# `production` environment, not from the caller. See deploy.yml for details.
 
 on:
-  workflow_call:
-    secrets:
-      CLOUDFLARE_API_TOKEN:
-        required: true
-      CLOUDFLARE_ACCOUNT_ID:
-        required: true
+  workflow_call: {}
 
 permissions:
   contents: read
@@ -41,6 +39,7 @@ concurrency:
 jobs:
   preview:
     runs-on: ubuntu-latest
+    environment: production
     steps:
       - name: Resolve ref
         id: resolve

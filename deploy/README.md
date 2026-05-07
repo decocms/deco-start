@@ -28,6 +28,29 @@ no other way to identify a site.
 `deploy/**` is CODEOWNERS-protected. Only the platform team can change site
 manifests or the template.
 
+### Where Cloudflare credentials live
+
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` live in **this repo's
+`production` GitHub Environment**, never in any storefront repo. The reusable
+workflows declare `environment: production` on the deploy / preview /
+sync-secrets jobs, which is what GitHub uses to resolve `secrets.CLOUDFLARE_*`
+against the called repo (deco-start) instead of the caller (the storefront).
+
+This is the second half of the trust property: even if a storefront repo were
+fully compromised, the attacker has no path to the Cloudflare token. The
+storefront repo only holds its own `SECRET_*` runtime secrets, which are
+inherited by `sync-secrets.yml` and pushed to its own worker as runtime
+secrets — never reaching another site's worker because the central workflow
+resolves `worker_name` from this registry, not from caller input.
+
+| Secret class | Lives in | Reaches worker via |
+|---|---|---|
+| `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` | this repo's `production` environment | central workflow's `environment:` binding (no caller passthrough) |
+| `SECRET_*` runtime secrets (per site) | each storefront repo | `sync-secrets.yml` inherits via `secrets: inherit` and pushes via `wrangler secret put` |
+
+To rotate the Cloudflare credentials, edit the environment in this repo only.
+No storefront PR needed.
+
 ## How wrangler.jsonc is generated
 
 At deploy time, the central workflow runs
@@ -55,8 +78,11 @@ which:
    `@v2` major tag (the major-tag advance step lives inline in
    [`.github/workflows/release.yml`](../.github/workflows/release.yml)).
 3. In the new repo, add the four caller workflows from
-   [`.github/workflows/`](../.github/workflows/) and set the org-level
-   `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` GitHub secrets.
+   [`.github/workflows/`](../.github/workflows/). **Do not** add
+   `CLOUDFLARE_*` to the storefront — those live in this repo's `production`
+   environment and reach the runner via the central workflow's `environment:`
+   binding. The storefront only needs `SECRET_*` entries for its own worker
+   runtime secrets.
 4. Push to `main` and verify the deploy lands on the right worker.
 
 ## Per-site override schema

@@ -88,12 +88,26 @@ boundary: the central workflow ignores caller `inputs:` for identity and
 derives the site name from `${{ github.repository }}`. `deploy/**` is
 CODEOWNERS-protected.
 
+**Cloudflare credentials live in `decocms/deco-start` only**, in the
+`production` GitHub Environment. The reusable workflows declare
+`environment: production`, which makes `${{ secrets.CLOUDFLARE_* }}`
+resolve from the called repo (deco-start) instead of the caller. A
+storefront repo only ever holds its own `SECRET_*` runtime secrets
+(pushed to its worker by the central `sync-secrets.yml` via
+`secrets: inherit`). Two-tier secret model is the second half of the
+trust boundary — even a fully compromised storefront repo has no path
+to the Cloudflare token.
+
 **Agent behavior**: when adding or migrating a site, do **not** generate a
 per-site `wrangler.jsonc` or per-site `deploy.yml` / `preview.yml` /
 `sync-secrets.yml` / `regen-blocks.yml`. The site repo gets the four
 ~5-line caller stubs only. Per-site config goes in a PR to
 `decocms/deco-start` adding `deploy/sites/<repo>.jsonc`. Do not commit
-`wrangler.jsonc` or any wrangler config to a site repo.
+`wrangler.jsonc` or any wrangler config to a site repo. Do **not** add
+`CLOUDFLARE_*` to a storefront repo's secrets — the central workflow's
+`environment:` binding overrides anything passed from the caller, so an
+accidental copy on a site is dead code at best and a credential leak
+risk at worst.
 
 ## Priority order
 

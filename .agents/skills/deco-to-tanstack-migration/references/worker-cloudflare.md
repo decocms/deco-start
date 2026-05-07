@@ -287,6 +287,16 @@ execs the real `wrangler` with that config in cwd.
   untamperable by user code) and looked up in `deploy/sites/<repo>.jsonc`.
 - A customer cannot misroute their deploy onto another site's worker
   because they can't write to `decocms/deco-start` (CODEOWNERS-protected).
+- `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` live ONLY in
+  `decocms/deco-start`'s `production` GitHub Environment. The reusable
+  workflow declares `environment: production`, which makes
+  `${{ secrets.CLOUDFLARE_* }}` resolve from the called repo's environment
+  instead of the caller's repo secrets. Storefront repos never hold the
+  Cloudflare credential.
+- Per-site runtime secrets in storefront repos are prefixed `SECRET_*` and
+  flow into the worker via the central `sync-secrets.yml`, which inherits
+  them via `secrets: inherit`, validates names, and `wrangler secret put`s
+  them under their unprefixed name.
 
 ### Common mistakes (do not do these)
 
@@ -296,9 +306,14 @@ execs the real `wrangler` with that config in cwd.
   Add it to `deco-start/.github/workflows/deploy.yml` instead so every site
   picks it up at once.
 - **Hard-coding `account_id` in a site's wrangler config.** It comes from
-  `CLOUDFLARE_ACCOUNT_ID` (org-level GitHub secret in CI; `wrangler login`
-  locally). Removing it from JSON is the one-way protection against
-  accidentally deploying to the wrong account.
+  `CLOUDFLARE_ACCOUNT_ID` (in `decocms/deco-start`'s `production`
+  Environment in CI; `wrangler login` locally). Removing it from JSON is
+  the one-way protection against accidentally deploying to the wrong
+  account.
+- **Adding `CLOUDFLARE_*` to a storefront repo's secrets.** They belong
+  in `decocms/deco-start` only, in the `production` environment. The
+  central workflow's `environment:` binding overrides anything passed
+  from the caller, so an accidental copy on a site is dead code.
 - **Setting `worker_name` to anything other than the repo name** without
   a strong reason. The 1:1 binding makes audit (and incident response)
   trivial. Exceptions today: `casaevideo-storefront` -> `casaevideo-tanstack`

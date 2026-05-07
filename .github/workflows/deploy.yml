@@ -20,14 +20,16 @@ name: deploy (central)
 #     deploy:
 #       uses: decocms/deco-start/.github/workflows/deploy.yml@v2
 #       secrets: inherit
+#
+# `secrets: inherit` is intentionally tolerated but UNUSED by the deploy job:
+# `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` resolve from the
+# `production` environment in this repo (via `environment:` below), NOT from
+# the caller. That keeps the Cloudflare credential off every storefront repo
+# entirely. The same env binding is repeated in `preview.yml` and
+# `sync-secrets.yml`.
 
 on:
-  workflow_call:
-    secrets:
-      CLOUDFLARE_API_TOKEN:
-        required: true
-      CLOUDFLARE_ACCOUNT_ID:
-        required: true
+  workflow_call: {}
 
 permissions:
   contents: write
@@ -39,6 +41,11 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # Resolves `secrets.CLOUDFLARE_*` against the `production` environment in
+    # decocms/deco-start (NOT against the caller's repo secrets). Setup:
+    # decocms/deco-start > Settings > Environments > production >
+    # CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID.
+    environment: production
     steps:
       - name: Checkout caller repo
         uses: actions/checkout@v4
