@@ -1,111 +1,121 @@
-# `deploy/` — central deploy registry
+# `deploy/` — central wrangler template
 
-This directory is the single source of truth for **what gets deployed where**
-across every storefront on the platform. It is consumed by the reusable GitHub
-workflows under [`.github/workflows/`](../.github/workflows/) (`deploy.yml`,
-`preview.yml`, `sync-secrets.yml`) and by the local `deco-wrangler` CLI.
+This directory holds **`wrangler-template.jsonc`** — the canonical wrangler config
+that every storefront on the platform inherits. It is consumed by the reusable
+GitHub workflows under [`.github/workflows/`](../.github/workflows/)
+(`deploy.yml`, `preview.yml`, `sync-secrets.yml`) and by the local
+`deco-wrangler` CLI.
 
-## Files
-
-| File | Purpose |
-|------|---------|
-| `wrangler-template.jsonc` | Canonical wrangler config that every site inherits. Compatibility flags, worker-entry path, observability — everything that is the same for every site. |
-| `sites/<repo-name>.jsonc` | Per-site overrides. Only the keys that genuinely vary per-site live here (`worker_name` always; `routes`, `kv_namespaces`, `analytics_engine_datasets`, `version_metadata` when used). |
-
-The repository name (the part of `${{ github.repository }}` after the `/`) is
-the lookup key. `als-tanstack` deploys via `sites/als-tanstack.jsonc`. There is
-no other way to identify a site.
+There is **no per-site registry**. Worker name is the storefront repo basename
+by convention (`deco-sites/baggagio-tanstack` → worker `baggagio-tanstack`).
+Anything that must vary deterministically per worker (like the Analytics Engine
+dataset name) is encoded as a substitution token in the template — see
+[Substitution tokens](#substitution-tokens) below.
 
 ## Trust model
 
-- Customer caller workflows pass **no inputs** to the central reusable workflow.
-- The central workflow derives the site name from `${{ github.repository }}`
-  (set by GitHub, untamperable by user code) and looks up
-  `sites/<repo-name>.jsonc` from this registry.
-- A customer cannot misroute a deploy onto another customer's worker because
-  they can't write to `decocms/deco-start`.
+The deploy is gated by the `decocms-deployer` **GitHub App** being installed on
+the target storefront repo:
 
-`deploy/**` is CODEOWNERS-protected. Only the platform team can change site
-manifests or the template.
+1. The storefront's caller workflow mints a short-lived App-installation token.
+2. It calls `gh workflow run deploy.yml --repo decocms/deco-start -f site_owner=… -f site_name=…`.
+3. The central deploy workflow runs **in this repo's context** and itself mints
+   another short-lived App-installation token to check out the storefront. If
+   the App isn't installed on `<site_owner>/<site_name>`, the mint fails and
+   the deploy never starts.
+4. The central workflow then runs build + `wrangler deploy` using
+   `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from this repo's plain
+   repo secrets.
+
+Properties this gives:
+
+- **CF credentials never leave decocms/deco-start.** The storefront repo holds
+  zero Cloudflare credentials — it only has the GitHub App credentials, which
+  can be used solely to trigger workflows on this repo.
+- **Worker naming is convention-based and not customer-controlled.** A
+  customer with push access to their own storefront cannot rename the worker
+  their deploy lands on (the central workflow always uses
+  `inputs.site_name` as the worker name; modifying the caller stub to pass a
+  different `site_name` would also require the App to be installed on that
+  other repo).
+- **Force-rollback is impossible for production.** The central deploy
+  workflow ignores any caller-supplied sha and always resolves the
+  storefront's current default-branch HEAD itself. The worst a compromised
+  storefront can do across tenants is trigger a no-op redeploy of another
+  storefront's current main.
+
+`deploy/` and `scripts/deploy/` and the central workflow files are
+CODEOWNERS-protected — only the platform team approves changes.
 
 ### Where Cloudflare credentials live
 
-`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` live in **this repo's
-`production` GitHub Environment**, never in any storefront repo. The reusable
-workflows declare `environment: production` on the deploy / preview /
-sync-secrets jobs, which is what GitHub uses to resolve `secrets.CLOUDFLARE_*`
-against the called repo (deco-start) instead of the caller (the storefront).
-
-This is the second half of the trust property: even if a storefront repo were
-fully compromised, the attacker has no path to the Cloudflare token. The
-storefront repo only holds its own `SECRET_*` runtime secrets, which are
-inherited by `sync-secrets.yml` and pushed to its own worker as runtime
-secrets — never reaching another site's worker because the central workflow
-resolves `worker_name` from this registry, not from caller input.
-
-| Secret class | Lives in | Reaches worker via |
+| Secret class | Lives in | How it reaches the worker |
 |---|---|---|
-| `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` | this repo's `production` environment | central workflow's `environment:` binding (no caller passthrough) |
-| `SECRET_*` runtime secrets (per site) | each storefront repo | `sync-secrets.yml` inherits via `secrets: inherit` and pushes via `wrangler secret put` |
+| `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` | this repo's **repo secrets** | central workflow runs in this repo's context, env-var resolves natively |
+| `DECOCMS_DEPLOYER_APP_ID` / `DECOCMS_DEPLOYER_APP_PRIVATE_KEY` | this repo's repo secrets AND deco-sites org-level secrets | mints short-lived installation tokens for both directions of the dispatch flow |
+| `SECRET_*` runtime secrets (per site) | this repo's `<site_name>-secrets` GitHub Environment | `sync-secrets.yml` binds to that environment, reads `SECRET_*` from `${{ secrets }}`, runs `wrangler secret put` |
 
-To rotate the Cloudflare credentials, edit the environment in this repo only.
-No storefront PR needed.
+To rotate Cloudflare credentials, edit them in this repo only. To rotate a
+runtime secret for one storefront, edit the corresponding environment in this
+repo only. No storefront PR needed for either.
 
-## How wrangler.jsonc is generated
+## How `wrangler.jsonc` is generated
 
 At deploy time, the central workflow runs
 [`scripts/deploy/build-wrangler-config.mjs`](../scripts/deploy/build-wrangler-config.mjs),
 which:
 
-1. Loads `deploy/wrangler-template.jsonc` (canonical defaults).
-2. Loads `deploy/sites/<site>.jsonc` (per-site overrides).
-3. Deep-merges: site overrides win. `worker_name` becomes wrangler's `name`.
-   Arrays are replaced, not concatenated.
-4. Writes the result to `./wrangler.jsonc` in the caller checkout.
+1. Loads `deploy/wrangler-template.jsonc`.
+2. Substitutes `$WORKER_*` tokens (see below) using the worker name passed by
+   the central workflow (= storefront repo basename).
+3. Writes the result to `./wrangler.jsonc` in the storefront checkout, with
+   `name` injected as the first key.
 
 `account_id` is never written to JSON — wrangler reads it from
-`CLOUDFLARE_ACCOUNT_ID` (env var in CI; `wrangler login` locally).
+`CLOUDFLARE_ACCOUNT_ID` (env var in CI; `wrangler login` locally). This way a
+typo cannot misroute a deploy to a different Cloudflare account.
+
+### Substitution tokens
+
+Any string in the template containing one of these literals is replaced at
+build time:
+
+| Token | Replacement | Example use |
+|---|---|---|
+| `$WORKER_NAME` | worker name verbatim | rare; mostly available for parity |
+| `$WORKER_UNDERSCORE` | worker name with `-` → `_` | `analytics_engine_datasets[].dataset` (must be a valid Postgres-style identifier) |
+
+To add a new derived field, add the token wherever it makes sense in
+`wrangler-template.jsonc`. Anything not in the substitution table appears
+verbatim in the generated config.
 
 ## Adding a new site
 
-1. Open a PR to this repo adding `deploy/sites/<new-repo>.jsonc`:
-   ```jsonc
-   {
-     "worker_name": "<new-repo>"   // can differ from repo name if needed
-   }
-   ```
-2. After merge, the next `v2.x.y` semantic-release publish auto-moves the
-   `@v2` major tag (the major-tag advance step lives inline in
-   [`.github/workflows/release.yml`](../.github/workflows/release.yml)).
-3. In the new repo, add the four caller workflows from
-   [`.github/workflows/`](../.github/workflows/). **Do not** add
-   `CLOUDFLARE_*` to the storefront — those live in this repo's `production`
-   environment and reach the runner via the central workflow's `environment:`
-   binding. The storefront only needs `SECRET_*` entries for its own worker
-   runtime secrets.
-4. Push to `main` and verify the deploy lands on the right worker.
+1. Install the `decocms-deployer` GitHub App on the new storefront repo
+   (Settings → Integrations → GitHub Apps in the deco-sites org).
+2. Add the four caller workflow stubs to the new repo (copy from any existing
+   storefront's `.github/workflows/{deploy,preview,sync-secrets,regen-blocks}.yml`).
+3. Add `wrangler.jsonc` to the new repo's `.gitignore` and add the
+   `gen:wrangler` / `predev` / `prebuild` / `types` scripts to `package.json`
+   so local dev still works (use any existing storefront as a template).
+4. If the site needs runtime secrets, create a new environment in this repo
+   named `<repo-basename>-secrets` and add the `SECRET_*` values there. Set
+   environment protection rules to grant the site team self-service access to
+   their own environment.
+5. Push to `main` and verify the deploy lands on a worker named after the repo.
 
-## Per-site override schema
+## Migrating an existing site whose worker name doesn't match its repo
 
-```jsonc
-{
-  "worker_name": "string (required, immutable)",
-  "routes": [                          // optional
-    { "pattern": "www.example.com/*", "zone_name": "decocdn.com" }
-  ],
-  "kv_namespaces": [                   // optional
-    { "binding": "SITES_KV", "id": "<cf-kv-id>" }
-  ],
-  "analytics_engine_datasets": [       // optional
-    { "binding": "DECO_METRICS", "dataset": "deco_metrics_<site>" }
-  ],
-  "version_metadata": {                // optional
-    "binding": "CF_VERSION_METADATA"
-  }
-}
-```
+Two cases to be aware of:
 
-All other wrangler keys (compatibility flags, `main`, observability, etc.) come
-from the template — do not duplicate them per-site. If a per-site override is
-genuinely needed for one of those keys, add it to the schema and document the
-reason here.
+- **Worker rename.** The worker created by the first deploy will use the repo
+  basename. If an old worker exists with a different name (e.g.
+  `miess-01-tanstack` repo whose old worker was `miess-tanstack`), you'll need
+  a manual cutover: deploy the new worker, re-attach custom domain routes via
+  the Cloudflare dashboard, copy any wrangler secrets, then delete the old
+  worker. There is intentionally no per-site override for this — these cases
+  are rare and best resolved at the CF layer.
+- **AE dataset rename.** The dataset name is derived from worker name, so a
+  worker rename also changes the AE dataset. Old data remains queryable under
+  the old dataset name; new data goes to the new name. Update Grafana panels
+  and saved queries accordingly.

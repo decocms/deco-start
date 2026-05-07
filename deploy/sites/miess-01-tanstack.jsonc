@@ -1,8 +1,0 @@
-// Per-site overrides for `miess-01-tanstack`.
-//
-// Worker name keeps the historical `miess-tanstack` (no "-01") so the deploy
-// continues to land on the existing Cloudflare worker. The repo name has the
-// `-01-` suffix; the worker name does not.
-{
-  "worker_name": "miess-tanstack"
-}

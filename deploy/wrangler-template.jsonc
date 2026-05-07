@@ -1,15 +1,26 @@
 // Canonical wrangler.jsonc template for every storefront on the platform.
 //
-// Per-site overrides live in `deploy/sites/<repo-name>.jsonc`. The deploy
-// workflow deep-merges site overrides on top of this template at runtime and
-// writes the result to `wrangler.jsonc` in the caller checkout. Site overrides
-// always win. Arrays are replaced (not concatenated).
+// There is no per-site registry. Worker name == storefront repo basename by
+// convention; the central deploy workflows pass `WORKER_NAME` to the build
+// script, which substitutes `$WORKER_*` tokens in this template and writes
+// the result to `wrangler.jsonc` in the caller checkout.
+//
+// Substitution tokens (see scripts/deploy/site-registry.mjs):
+//   $WORKER_NAME        -> worker name verbatim         (e.g. "als-tanstack")
+//   $WORKER_UNDERSCORE  -> worker name, `-` -> `_`      (e.g. "als_tanstack")
+//
+// To upgrade compatibility flags, observability, KV bindings, or any field
+// that should change for every site at once, change this file and tag a new
+// deco-start release.
 //
 // Notes on what is INTENTIONALLY missing here:
 //   - "name" -- always derived from the per-site `worker_name`.
 //   - "account_id" -- never lives in the JSON. Wrangler reads it from the
 //     CLOUDFLARE_ACCOUNT_ID env var in CI and from local config otherwise.
 //     This way, a typo in JSON cannot misroute a deploy.
+//   - "routes" -- production custom domains are managed in the Cloudflare
+//     dashboard, not in JSON. Avoids drift between JSON and CF reality and
+//     means a site going live doesn't need a deco-start PR.
 //
 // To upgrade compatibility flags, observability, or worker-entry path across
 // every site at once, change this file and tag a new deco-start release.
@@ -19,6 +30,13 @@
   "main": "./src/worker-entry.ts",
   "workers_dev": true,
   "preview_urls": true,
+  "kv_namespaces": [
+    { "binding": "SITES_KV", "id": "ad0b74fc4d9341c9af9149c4ab85132f" }
+  ],
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
+  "analytics_engine_datasets": [
+    { "binding": "DECO_METRICS", "dataset": "deco_metrics_$WORKER_UNDERSCORE" }
+  ],
   "observability": {
     "logs": {
       "enabled": true,

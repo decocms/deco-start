@@ -118,7 +118,8 @@ this plan.
 | 2026-05-01 | **D4 — Site-local apps: local by default, promote at 3** | Site-specific apps live in `src/apps/local/` until ≥3 sites use them, then promote to `@decocms/apps`. |
 | 2026-05-01 | **D5 — Failed migrations: rm -rf and re-run** | No `--restart` mode. Half-migrated sites are throwaways. Failure modes get documented in skills, not encoded as escape hatches. |
 | 2026-05-07 | **D6 — Deploy / preview / secrets pipelines: centralize in `deco-start`** | At 6 sites the "1-minute copy" of `deploy.yml` / `preview.yml` / `wrangler.jsonc` had already produced unintended drift (lebiscuit missing 2 workflows, miess missing `account_id`, casaevideo's `loadtest:tail` worker name out of sync with its wrangler config). All sites now consume reusable workflows from `decocms/deco-start@v2` and a per-site registry under [`deploy/sites/<repo>.jsonc`](./deploy/) deep-merged on top of [`deploy/wrangler-template.jsonc`](./deploy/wrangler-template.jsonc) at deploy time. Customer repos hold only ~5-line caller workflows; `wrangler.jsonc` is generated and gitignored. The repo→worker binding is the trust boundary that prevents one site's commits from misrouting onto another site's worker (the central workflow ignores caller `inputs:` for identity and derives the site name from `${{ github.repository }}`). See [`deploy/README.md`](./deploy/README.md) for the contract. |
-| 2026-05-07 | **D6.1 — Cloudflare credentials never leave `deco-start`** | Same-day refinement of D6 after the first central deploy on `baggagio-tanstack` failed with `Secret CLOUDFLARE_API_TOKEN is required, but not provided while calling`. The original D6 design used `secrets: inherit` from the storefront stub and required `CLOUDFLARE_*` to live in the `deco-sites` org, which broke the principle that *the only secrets a storefront repo holds are the secrets that go into wrangler secrets, not the ones used to deploy*. Refinement: the central `deploy.yml` / `preview.yml` / `sync-secrets.yml` jobs declare `environment: production`, which makes `${{ secrets.CLOUDFLARE_* }}` resolve from the called repo (`decocms/deco-start`'s `production` GitHub Environment) instead of the caller's repo secrets. Storefronts now hold only their own `SECRET_*` runtime secrets; `sync-secrets` inherits those via `secrets: inherit` and pushes them as worker secrets. The trust boundary becomes two-tier: even a fully compromised storefront repo has no path to the Cloudflare credential, and even a compromised storefront cannot misroute *its own* deploy onto another site's worker because `worker_name` comes from the CODEOWNERS-protected registry, not caller input. See [`deploy/README.md`](./deploy/README.md) "Where Cloudflare credentials live" section. |
+| 2026-05-07 | **D6.1 — Cloudflare credentials never leave `deco-start`** | Same-day refinement of D6 after the first central deploy on `baggagio-tanstack` failed with `Secret CLOUDFLARE_API_TOKEN is required, but not provided while calling`. The original D6 design used `secrets: inherit` from the storefront stub and required `CLOUDFLARE_*` to live in the `deco-sites` org, which broke the principle that *the only secrets a storefront repo holds are the secrets that go into wrangler secrets, not the ones used to deploy*. First-pass refinement: the central `deploy.yml` / `preview.yml` / `sync-secrets.yml` jobs declared `environment: production` to try to make `${{ secrets.CLOUDFLARE_* }}` resolve from `decocms/deco-start`'s `production` Environment. **Found broken empirically on 2026-05-07** — the deployment registers in the *caller* repo, not the called workflow's repo, so the environment lookup uses the caller's `production` env (auto-created with no secrets). Superseded by D6.2 the same evening. |
+| 2026-05-07 | **D6.2 — App-mediated dispatch + no per-site registry (supersedes D6 + D6.1)** | After D6.1's `environment:` mechanism was empirically shown not to work cross-repo, the architecture pivoted: a `decocms-deployer` GitHub App is installed on `decocms/deco-start` (`actions:write`) and on each storefront repo (`contents:read`, optionally `pull-requests:write`). The storefront caller stub mints a short-lived App-installation token and calls `gh workflow run deploy.yml --repo decocms/deco-start --ref v3 -f site_owner=… -f site_name=…`. The central workflow runs in `decocms/deco-start`'s context, so `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` are ordinary repo secrets. For runtime `SECRET_*` values, each storefront has a `<site_name>-secrets` GitHub Environment in `decocms/deco-start` (S1 design); `sync-secrets.yml` binds to that environment and pushes to `wrangler secret put`. The per-site registry under `deploy/sites/<repo>.jsonc` was dropped entirely (Pure C): worker name = repo basename by convention; the App being installed on the storefront repo is the deploy authorization gate; rare per-worker derived fields (like AE dataset name) use `$WORKER_*` substitution tokens in the template. Force-rollback is impossible for production deploys because the central workflow ignores caller-supplied `site_sha` and resolves the storefront's current default-branch HEAD itself. See [`deploy/README.md`](./deploy/README.md) for the full trust model. **Operational migrations required by Pure C:** `miess-01-tanstack` repo's worker shifts from `miess-tanstack` to `miess-01-tanstack` (CF-side cutover); `lebiscuit-tanstack` AE dataset shifts from `deco_metrics_lebiscuit` to `deco_metrics_lebiscuit_tanstack` (orphans old data). |
 
 The full text of the constitutional rule (loaded into every agent
 session for this repo) lives at
@@ -1677,15 +1678,19 @@ props. One broken section never takes the page down.
   `regen-blocks.yml` and its `wrangler.jsonc` lacked `account_id`,
   lebiscuit's preview workflow swallowed `wrangler` exit codes, and
   casaevideo's `loadtest:tail` referenced a worker name that didn't
-  match its `wrangler.jsonc`. **Resolved 2026-05-07 via D6:** all
-  workflows + wrangler config are centralized in
+  match its `wrangler.jsonc`. **Resolved 2026-05-07 via D6 → D6.1 →
+  D6.2:** all workflows + wrangler config are centralized in
   [`deco-start/.github/workflows/`](./.github/workflows/) and
-  [`deco-start/deploy/`](./deploy/). New-site onboarding is now: open a
-  PR adding `deploy/sites/<repo>.jsonc` to deco-start, then drop the
-  ~5-line caller workflows into the new site's repo. No `wrangler.jsonc`
-  is committed to the site repo — `deco-wrangler gen`
-  (a `bin` shipped from `@decocms/start`) materializes it from the
-  central registry on demand for local dev and CI alike.
+  [`deco-start/deploy/`](./deploy/), and storefront caller stubs use
+  a `decocms-deployer` GitHub App to trigger them via `workflow_dispatch`
+  with no Cloudflare credentials in the storefront repo. New-site
+  onboarding is now: install the `decocms-deployer` App on the new
+  storefront repo, drop the ~15-line caller workflows in, push to main.
+  No `deploy/sites/<repo>.jsonc` PR is needed — worker name is the
+  repo basename by convention. No `wrangler.jsonc` is committed to the
+  site repo — `deco-wrangler gen` (a `bin` shipped from `@decocms/start`)
+  materializes it from the central template on demand for local dev
+  and CI alike.
 
 #### Counter-evidence the user-rule asks for
 

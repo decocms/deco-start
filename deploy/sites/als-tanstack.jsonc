@@ -1,7 +1,0 @@
-// Per-site overrides for `als-tanstack` (immutable repo->worker binding).
-// Renaming `worker_name` is a breaking change: it points the next deploy at a
-// different Cloudflare worker. Only the platform team can change this file
-// (CODEOWNERS-protected).
-{
-  "worker_name": "als-tanstack"
-}

@@ -1,35 +1,22 @@
-// Shared registry helpers for the deploy scripts.
+// Template loader + token substitution for the canonical wrangler config.
 //
-// `loadSiteManifest(decoStartPath, siteName)` returns the validated
-// per-site manifest object. `mergeWithTemplate(template, site)` deep-merges a
-// site manifest on top of the canonical template and returns the wrangler
-// config object ready for serialization.
+// There is no per-site "registry" anymore: every site's wrangler config is
+// produced from `deploy/wrangler-template.jsonc` plus the worker name (which
+// equals the storefront repo basename by convention). To accommodate fields
+// that must vary deterministically per worker, the template can use these
+// substitution tokens, which are replaced at config-build time:
 //
-// Trust model: `siteName` is always derived from `${{ github.repository }}` in
-// CI (or from the local git remote in the wrapper CLI), never from a
-// user-supplied input. A site that is not registered in `deploy/sites/` cannot
-// be deployed -- this is enforced here.
+//   $WORKER_NAME        -> worker name verbatim     (e.g. "als-tanstack")
+//   $WORKER_UNDERSCORE  -> worker name, `-` -> `_`  (e.g. "als_tanstack")
+//
+// Trust model: callers cannot pass a fabricated worker name to the central
+// CI workflows -- the deploy is gated by the `decocms-deployer` GitHub App
+// being installed on the target storefront repo. If the App isn't installed
+// there, the App-token mint fails and the deploy never starts.
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readJsoncFile } from "./jsonc.mjs";
-
-/** @typedef {{
- *   worker_name: string;
- *   routes?: Array<{ pattern: string; zone_name?: string; custom_domain?: boolean }>;
- *   kv_namespaces?: Array<{ binding: string; id: string; preview_id?: string }>;
- *   analytics_engine_datasets?: Array<{ binding: string; dataset: string }>;
- *   version_metadata?: { binding: string };
- * }} SiteManifest
- */
-
-const ALLOWED_SITE_KEYS = new Set([
-  "worker_name",
-  "routes",
-  "kv_namespaces",
-  "analytics_engine_datasets",
-  "version_metadata",
-]);
 
 /**
  * @param {string} decoStartPath
@@ -37,56 +24,6 @@ const ALLOWED_SITE_KEYS = new Set([
  */
 export function templatePath(decoStartPath) {
   return join(decoStartPath, "deploy", "wrangler-template.jsonc");
-}
-
-/**
- * @param {string} decoStartPath
- * @param {string} siteName
- * @returns {string}
- */
-export function siteManifestPath(decoStartPath, siteName) {
-  return join(decoStartPath, "deploy", "sites", `${siteName}.jsonc`);
-}
-
-/**
- * @param {string} decoStartPath
- * @param {string} siteName
- * @returns {SiteManifest}
- */
-export function loadSiteManifest(decoStartPath, siteName) {
-  if (!siteName || !/^[a-z0-9][a-z0-9-]*$/.test(siteName)) {
-    throw new Error(
-      `Refusing to load manifest for invalid site name: ${JSON.stringify(siteName)}. Site names must be lowercase, hyphen-separated.`,
-    );
-  }
-  const path = siteManifestPath(decoStartPath, siteName);
-  if (!existsSync(path)) {
-    throw new Error(
-      `No registry entry for site "${siteName}" at ${path}.\n` +
-        `Add deploy/sites/${siteName}.jsonc to decocms/deco-start before deploying.`,
-    );
-  }
-  const raw = readJsoncFile(path);
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error(`Site manifest at ${path} must be a JSON object.`);
-  }
-  const manifest = /** @type {Record<string, unknown>} */ (raw);
-  if (typeof manifest.worker_name !== "string" || manifest.worker_name.length === 0) {
-    throw new Error(`Site manifest at ${path} is missing the required "worker_name" string.`);
-  }
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(/** @type {string} */ (manifest.worker_name))) {
-    throw new Error(
-      `Site manifest at ${path} has an invalid "worker_name": ${JSON.stringify(manifest.worker_name)}. Use lowercase, hyphen-separated.`,
-    );
-  }
-  for (const key of Object.keys(manifest)) {
-    if (!ALLOWED_SITE_KEYS.has(key)) {
-      throw new Error(
-        `Site manifest at ${path} contains unsupported key "${key}". Allowed: ${[...ALLOWED_SITE_KEYS].join(", ")}.`,
-      );
-    }
-  }
-  return /** @type {SiteManifest} */ (manifest);
 }
 
 /**
@@ -106,37 +43,53 @@ export function loadTemplate(decoStartPath) {
 }
 
 /**
- * Deep-merge `source` on top of `target`. Arrays in `source` REPLACE arrays in
- * `target` (they are not concatenated) -- this matches the semantics wrangler
- * itself expects for `routes`, `kv_namespaces`, etc.
+ * Recursively replace `$WORKER_*` tokens in any string value of an
+ * object/array tree. Returns a new tree.
  *
- * @template T
- * @param {T} target
- * @param {unknown} source
- * @returns {T}
+ * @param {unknown} value
+ * @param {Record<string, string>} replacements
+ * @returns {unknown}
  */
-function deepMerge(target, source) {
-  if (source === null || source === undefined) return target;
-  if (Array.isArray(source)) return /** @type {T} */ (source);
-  if (typeof source !== "object") return /** @type {T} */ (source);
-  const base = target && typeof target === "object" && !Array.isArray(target) ? target : {};
-  const out = /** @type {Record<string, unknown>} */ ({ ...base });
-  for (const [k, v] of Object.entries(source)) {
-    out[k] = deepMerge(out[k], v);
+function substituteTokens(value, replacements) {
+  if (typeof value === "string") {
+    let out = value;
+    for (const [token, repl] of Object.entries(replacements)) {
+      out = out.split(token).join(repl);
+    }
+    return out;
   }
-  return /** @type {T} */ (out);
+  if (Array.isArray(value)) {
+    return value.map((v) => substituteTokens(v, replacements));
+  }
+  if (value && typeof value === "object") {
+    const out = /** @type {Record<string, unknown>} */ ({});
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = substituteTokens(v, replacements);
+    }
+    return out;
+  }
+  return value;
 }
 
 /**
- * Produce the wrangler config object by deep-merging a site manifest on top of
- * the canonical template. The site's `worker_name` becomes wrangler's `name`.
+ * Produce the wrangler config object by substituting `$WORKER_*` tokens in
+ * the template and prepending `name`.
  *
  * @param {Record<string, unknown>} template
- * @param {SiteManifest} site
+ * @param {string} workerName
  * @returns {Record<string, unknown>}
  */
-export function mergeWithTemplate(template, site) {
-  const { worker_name, ...rest } = site;
-  const merged = deepMerge(template, rest);
-  return { name: worker_name, ...merged };
+export function applyWorkerName(template, workerName) {
+  if (typeof workerName !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(workerName)) {
+    throw new Error(
+      `Invalid worker name: ${JSON.stringify(workerName)}. Use lowercase, hyphen-separated.`,
+    );
+  }
+  const substituted = /** @type {Record<string, unknown>} */ (
+    substituteTokens(template, {
+      $WORKER_UNDERSCORE: workerName.replace(/-/g, "_"),
+      $WORKER_NAME: workerName,
+    })
+  );
+  return { name: workerName, ...substituted };
 }

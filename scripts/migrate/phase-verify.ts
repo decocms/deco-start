@@ -13,8 +13,8 @@ const REQUIRED_FILES = [
   "package.json",
   "tsconfig.json",
   "vite.config.ts",
-  // wrangler.jsonc is INTENTIONALLY absent -- D6: it lives in decocms/deco-start
-  // under deploy/sites/<repo>.jsonc and is generated locally by `deco-wrangler gen`.
+  // wrangler.jsonc is INTENTIONALLY absent -- D6.2: it's generated from
+  // decocms/deco-start's deploy/wrangler-template.jsonc by `deco-wrangler gen`.
   ".github/workflows/deploy.yml",
   ".github/workflows/preview.yml",
   ".github/workflows/regen-blocks.yml",

@@ -1,118 +1,168 @@
 name: preview (central)
 
-# Reusable workflow that uploads a preview version (alias) for any storefront
-# repo registered under `deploy/sites/<repo-name>.jsonc`.
+# Reusable workflow that uploads a preview Worker version (alias) for any
+# storefront repo. Worker name is the storefront repo basename by convention;
+# there is no per-site registry. The preview is gated by the `decocms-deployer`
+# GitHub App being installed on the target storefront repo.
 #
-# Caller usage (in customer repo, `.github/workflows/preview.yml`):
+# v3 architecture (D6.2): triggered via `workflow_dispatch` from the storefront,
+# authenticated as the `decocms-deployer` GitHub App. CF secrets resolve from
+# this repo's plain repo secrets and never leave decocms/deco-start.
+#
+# Caller usage (in the storefront repo, `.github/workflows/preview.yml`):
 #
 #   on:
-#     repository_dispatch:
-#       types: [preview-deploy]
 #     pull_request:
 #       types: [opened, synchronize, reopened]
 #     push:
 #       branches: ['env/**']
 #   permissions:
 #     contents: read
-#     pull-requests: write
-#     statuses: write
 #   jobs:
-#     preview:
-#       uses: decocms/deco-start/.github/workflows/preview.yml@v2
-#       secrets: inherit
+#     trigger:
+#       runs-on: ubuntu-latest
+#       steps:
+#         - id: meta
+#           run: |
+#             if [ "${{ github.event_name }}" = "pull_request" ]; then
+#               echo "alias=pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+#               echo "sha=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+#             else
+#               REF="${GITHUB_REF#refs/heads/env/}"
+#               echo "alias=$(echo "$REF" | sed 's|[^a-z0-9-]|-|g')" >> "$GITHUB_OUTPUT"
+#               echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+#             fi
+#         - uses: actions/create-github-app-token@v1
+#           id: app-token
+#           with:
+#             app-id: ${{ secrets.DECOCMS_DEPLOYER_APP_ID }}
+#             private-key: ${{ secrets.DECOCMS_DEPLOYER_APP_PRIVATE_KEY }}
+#             owner: decocms
+#             repositories: deco-start
+#         - env:
+#             GH_TOKEN: ${{ steps.app-token.outputs.token }}
+#           run: |
+#             gh workflow run preview.yml \
+#               --repo decocms/deco-start \
+#               --ref v3 \
+#               -f site_owner=${GITHUB_REPOSITORY%%/*} \
+#               -f site_name=${GITHUB_REPOSITORY##*/} \
+#               -f site_sha=${{ steps.meta.outputs.sha }} \
+#               -f alias=${{ steps.meta.outputs.alias }} \
+#               -f pr_number=${{ github.event.pull_request.number || '' }}
 #
-# Same secret model as deploy.yml: `CLOUDFLARE_*` resolve from this repo's
-# `production` environment, not from the caller. See deploy.yml for details.
+# Note on forks: pull_request runs from forked repos cannot access repo
+# secrets (incl. DECOCMS_DEPLOYER_APP_*), so they cannot trigger previews.
 
 on:
-  workflow_call: {}
+  workflow_dispatch:
+    inputs:
+      site_owner:
+        description: "GitHub org of the storefront. Defaults to deco-sites."
+        type: string
+        required: false
+        default: deco-sites
+      site_name:
+        description: "Storefront repo basename. Becomes the Cloudflare worker name."
+        type: string
+        required: true
+      site_sha:
+        description: "Commit sha to build & preview. Trusted as-is (preview alias has no production blast radius)."
+        type: string
+        required: true
+      alias:
+        description: "Preview alias name (e.g. pr-123, feature-foo). Must match wrangler alias rules."
+        type: string
+        required: true
+      pr_number:
+        description: "Optional PR number on the storefront repo. If set, the preview URL is commented back on the PR."
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
-  pull-requests: write
-  statuses: write
 
 concurrency:
-  group: preview-${{ github.repository }}-${{ github.event.client_payload.ref || github.head_ref || github.ref_name }}
+  group: preview-${{ inputs.site_owner }}-${{ inputs.site_name }}-${{ inputs.alias }}
   cancel-in-progress: true
 
 jobs:
   preview:
     runs-on: ubuntu-latest
-    environment: production
     steps:
-      - name: Resolve ref
-        id: resolve
+      - name: Checkout deco-start (template + scripts)
+        uses: actions/checkout@v4
+
+      - name: Validate alias format
+        env:
+          ALIAS: ${{ inputs.alias }}
         run: |
-          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
-            echo "ref=${{ github.event.client_payload.ref }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=${{ github.head_ref || github.ref_name }}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          if ! echo "$ALIAS" | grep -Eq '^[a-z0-9][a-z0-9-]{0,62}$'; then
+            echo "::error::Invalid alias '$ALIAS'. Must be lowercase alphanumeric/hyphens, max 63 chars, start with alphanumeric."
+            exit 1
           fi
 
-      - uses: actions/checkout@v4
+      - name: Mint App token for storefront checkout
+        id: app-token
+        uses: actions/create-github-app-token@v1
         with:
-          ref: ${{ steps.resolve.outputs.ref }}
+          app-id: ${{ secrets.DECOCMS_DEPLOYER_APP_ID }}
+          private-key: ${{ secrets.DECOCMS_DEPLOYER_APP_PRIVATE_KEY }}
+          owner: ${{ inputs.site_owner }}
+          repositories: ${{ inputs.site_name }}
 
-      - name: Resolve deco-start ref + site identity
-        id: meta
-        run: |
-          WF_REF="${{ github.workflow_ref }}"
-          REF="${WF_REF##*@}"
-          REF="${REF#refs/tags/}"
-          REF="${REF#refs/heads/}"
-          echo "deco_start_ref=$REF" >> "$GITHUB_OUTPUT"
-          echo "site_name=${GITHUB_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout deco-start registry at the same ref
+      - name: Checkout storefront at requested sha
         uses: actions/checkout@v4
         with:
-          repository: decocms/deco-start
-          ref: ${{ steps.meta.outputs.deco_start_ref }}
-          path: .deco-start
+          repository: ${{ inputs.site_owner }}/${{ inputs.site_name }}
+          ref: ${{ inputs.site_sha }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: site
+          fetch-depth: 1
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: Compute preview alias
-        id: alias
-        run: |
-          REF="${{ steps.resolve.outputs.ref }}"
-          if echo "$REF" | grep -q '^env/'; then
-            ALIAS=$(echo "$REF" | sed 's|^env/||')
-          elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            ALIAS="pr-${{ github.event.pull_request.number }}"
-          else
-            ALIAS=$(echo "$REF" | sed 's|[^a-z0-9-]|-|g')
-          fi
-          echo "alias=$ALIAS" >> "$GITHUB_OUTPUT"
+      - name: Restore npm cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('site/package-lock.json') }}
+          restore-keys: npm-${{ runner.os }}-
 
       - name: Install dependencies
-        run: npm install
+        working-directory: site
+        run: |
+          if [ ! -f package-lock.json ]; then
+            npm install --package-lock-only
+          fi
+          npm ci
 
       - name: Build
+        working-directory: site
         run: npm run build
 
-      - name: Resolve site manifest
-        id: site
-        run: node .deco-start/scripts/deploy/resolve-site.mjs
+      - name: Generate wrangler.jsonc from template
+        working-directory: site
         env:
-          DECO_START_PATH: .deco-start
-          SITE_NAME: ${{ steps.meta.outputs.site_name }}
-
-      - name: Generate wrangler.jsonc
-        run: node .deco-start/scripts/deploy/build-wrangler-config.mjs
-        env:
-          DECO_START_PATH: .deco-start
-          SITE_NAME: ${{ steps.meta.outputs.site_name }}
-          OUTPUT_PATH: ./wrangler.jsonc
+          DECO_START_PATH: "${{ github.workspace }}"
+          WORKER_NAME: ${{ inputs.site_name }}
+          OUTPUT_PATH: "./wrangler.jsonc"
+        run: node "$DECO_START_PATH/scripts/deploy/build-wrangler-config.mjs"
 
       - name: Upload preview version
         id: deploy
+        working-directory: site
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ALIAS: ${{ inputs.alias }}
         run: |
           set +e
-          OUTPUT=$(npx wrangler versions upload --preview-alias ${{ steps.alias.outputs.alias }} 2>&1)
+          OUTPUT=$(npx wrangler versions upload --preview-alias "$ALIAS" 2>&1)
           EXIT_CODE=$?
           set -e
           echo "$OUTPUT"
@@ -124,19 +174,27 @@ jobs:
           ALIAS_URL=$(echo "$OUTPUT" | grep 'Version Preview Alias URL:' | sed 's/.*Version Preview Alias URL: //')
           echo "preview_url=${PREVIEW_URL}" >> "$GITHUB_OUTPUT"
           echo "alias_url=${ALIAS_URL}" >> "$GITHUB_OUTPUT"
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      - name: Comment preview URL on PR
-        if: github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@v2
+      - name: Mint App token for PR comment
+        id: comment-token
+        if: inputs.pr_number != ''
+        uses: actions/create-github-app-token@v1
         with:
-          header: preview-url
-          message: |
-            ### Preview deployed
+          app-id: ${{ secrets.DECOCMS_DEPLOYER_APP_ID }}
+          private-key: ${{ secrets.DECOCMS_DEPLOYER_APP_PRIVATE_KEY }}
+          owner: ${{ inputs.site_owner }}
+          repositories: ${{ inputs.site_name }}
+          permission-pull-requests: write
 
-            | | URL |
-            |---|---|
-            | **Version** | ${{ steps.deploy.outputs.preview_url }} |
-            | **Alias** | ${{ steps.deploy.outputs.alias_url }} |
+      - name: Comment preview URL on storefront PR
+        if: inputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ steps.comment-token.outputs.token }}
+          REPO: ${{ inputs.site_owner }}/${{ inputs.site_name }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          PREVIEW_URL: ${{ steps.deploy.outputs.preview_url }}
+          ALIAS_URL: ${{ steps.deploy.outputs.alias_url }}
+        run: |
+          set -euo pipefail
+          BODY=$(printf '### Preview deployed\n\n| | URL |\n|---|---|\n| **Version** | %s |\n| **Alias** | %s |\n' "$PREVIEW_URL" "$ALIAS_URL")
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$BODY"
