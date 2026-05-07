@@ -1,0 +1,16 @@
+# CODEOWNERS for decocms/deco-start
+#
+# `deploy/` is the trust boundary for the central deploy pipeline. The files
+# under `deploy/sites/` immutably bind a customer repo to a Cloudflare worker;
+# `deploy/wrangler-template.jsonc` is the canonical wrangler config every site
+# inherits. A bad PR here can misroute a deploy or change every site's runtime
+# configuration in one shot. Only the platform team approves changes.
+#
+# The central reusable workflows are in the same trust boundary: they decide
+# how every site is built and deployed.
+deploy/                       @vibe-dex
+.github/workflows/deploy.yml         @vibe-dex
+.github/workflows/preview.yml        @vibe-dex
+.github/workflows/sync-secrets.yml   @vibe-dex
+.github/workflows/regen-blocks.yml   @vibe-dex
+scripts/deploy/                      @vibe-dex

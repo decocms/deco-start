@@ -1,0 +1,56 @@
+name: regen-blocks (central)
+
+# Reusable workflow. Regenerates `src/server/cms/blocks.gen.json` and commits
+# the result back to the caller branch. Runs in the caller's runner context;
+# uses bun because that's what the existing `generate:blocks` script expects.
+#
+# Caller usage (in customer repo, `.github/workflows/regen-blocks.yml`):
+#
+#   on:
+#     push:
+#       branches: [main]
+#       paths: [".deco/blocks/**"]
+#   permissions:
+#     contents: write
+#   jobs:
+#     regen:
+#       uses: decocms/deco-start/.github/workflows/regen-blocks.yml@v2
+#       secrets: inherit
+
+on:
+  workflow_call: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: regen-blocks-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  regen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install deps
+        run: bun install --frozen-lockfile
+
+      - name: Regenerate blocks.gen.json
+        run: bun run generate:blocks
+
+      - name: Commit and push if changed
+        run: |
+          if git diff --quiet src/server/cms/blocks.gen.json; then
+            echo "blocks.gen.json already up to date — nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/server/cms/blocks.gen.json
+          git commit -m "chore: regenerate blocks.gen.json after .deco sync"
+          git push

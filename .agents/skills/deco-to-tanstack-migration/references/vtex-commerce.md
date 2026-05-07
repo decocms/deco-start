@@ -36,7 +36,11 @@ This lets the core component render while gracefully degrading features that dep
 
 ## 7. VTEX API Auth on Cloudflare Workers
 
-Env vars must be set via `wrangler secret put` or `.dev.vars`, not `.env`.
+Env vars are stored as `SECRET_*` GitHub repo secrets (e.g. `SECRET_VTEX_APP_KEY`)
+and pushed to the worker via the centralized `Sync worker secrets` workflow
+(D6). Locally, use `.dev.vars` (gitignored) for development. Do not run
+`npx wrangler secret put` per-site — the central workflow keeps GitHub and
+Cloudflare in sync.
 
 
 ## 8. Cookie Handling

@@ -37,7 +37,7 @@ TanStack Start's Cloudflare adapter **completely ignores** the `export default` 
 
 **Diagnosis**: Search the built `dist/server/worker-entry-*.js` bundle for your custom code (e.g., `X-Cache`, `caches.open`, `_cache/purge`). If absent, TanStack stripped it.
 
-**Fix**: Create a **separate** `src/worker-entry.ts` file that wraps TanStack Start's built handler. Point `wrangler.jsonc` to this file instead of `@tanstack/react-start/server-entry`.
+**Fix**: Create a **separate** `src/worker-entry.ts` file that wraps TanStack Start's built handler. Wrangler is told to use this file via `main: "./src/worker-entry.ts"` in the **canonical wrangler template** at `decocms/deco-start/deploy/wrangler-template.jsonc` (D6) — sites do not configure this themselves.
 
 ```typescript
 // src/worker-entry.ts
@@ -57,13 +57,10 @@ export default createDecoWorkerEntry(serverEntry, {
 });
 ```
 
-```jsonc
-// wrangler.jsonc -- MUST point to custom entry, NOT the default
-{
-  "main": "./src/worker-entry.ts",
-  // NOT: "main": "@tanstack/react-start/server-entry"
-}
-```
+The `main` field is set centrally so a future migration of the entry path
+applies to every site at once (single PR to the template). If you ever need to
+override `main` for a single site, add it under `deploy/sites/<repo>.jsonc` —
+never to a per-site `wrangler.jsonc` (sites don't commit one; see D6).
 
 This ensures admin route interception AND edge caching survive the build because they're in the Worker's own fetch handler, outside of TanStack's build pipeline.
 
@@ -136,9 +133,14 @@ Imports like `import Color from "npm:colorjs.io"` use the Deno-specific `npm:` p
 After deploying a new build to Cloudflare Workers, the edge cache may still serve old HTML that references previous JS bundle hashes. This causes module import failures.
 
 **Fix**: After every deploy, purge the cache:
-1. Set a `PURGE_TOKEN` secret: `npx wrangler secret put PURGE_TOKEN`
+1. Set a `PURGE_TOKEN` secret. Add `SECRET_PURGE_TOKEN` to the site repo's
+   GitHub Secrets, then trigger the centralized `Sync worker secrets`
+   workflow (`workflow_dispatch` → `apply`). This pushes it to the Cloudflare
+   worker via `wrangler secret put PURGE_TOKEN`. **Do not** run
+   `npx wrangler secret put` manually per-site — the central workflow keeps
+   GitHub and Cloudflare in sync.
 2. Call the purge endpoint: `POST /_cache/purge` with `Authorization: Bearer <token>` and body `{"paths":["/"]}`
-3. Automate this in CI/CD (see the deploy.yml workflow)
+3. The right place to automate this is the **central** `deco-start/.github/workflows/deploy.yml` (D6) so every site picks it up at once. Do not add site-local deploy.yml steps; site repos hold only ~5-line caller workflows.
 
 
 ## 44. Runtime Module Import Kills Lazy-Loaded Sections
@@ -207,3 +209,98 @@ Or in project `.npmrc` with an env var (for CI):
 ```
 
 **Tradeoff with `github:` syntax**: No semver resolution — `npm update` is meaningless. Pin to a tag for stability: `github:decocms/deco-start#v0.14.2`. Without a tag, you get HEAD of the default branch.
+
+
+## 46. Central Deploy / Wrangler Config (D6)
+
+**Severity**: HIGH — site repos must NOT commit `wrangler.jsonc` or per-site deploy logic. Doing so reintroduces drift.
+
+Per [D6](../../../../.cursor/rules/migration-tooling-policy.mdc), all
+storefronts deploy via reusable workflows shipped from
+`decocms/deco-start/.github/workflows/{deploy,preview,sync-secrets,regen-blocks}.yml@v2`.
+The canonical `wrangler.jsonc` lives at
+`decocms/deco-start/deploy/wrangler-template.jsonc`; per-site overrides live at
+`decocms/deco-start/deploy/sites/<repo-name>.jsonc`. The two are deep-merged at
+deploy time and written to a generated `wrangler.jsonc` in the runner; site
+repos gitignore the file.
+
+### What goes in the site repo
+
+Four ~5-line caller workflow stubs and nothing else:
+
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  deploy:
+    uses: decocms/deco-start/.github/workflows/deploy.yml@v2
+    secrets: inherit
+```
+
+(Plus equivalent `preview.yml`, `regen-blocks.yml`, `sync-secrets.yml` —
+see `scripts/migrate/templates/github-workflows.ts` for the canonical text.)
+The migration script generates these for new sites; the same stubs are
+hand-applied to existing sites.
+
+### What goes in `decocms/deco-start/deploy/sites/<repo>.jsonc`
+
+The minimum:
+
+```jsonc
+{
+  "worker_name": "<repo-name>"
+}
+```
+
+Plus optional `routes`, `kv_namespaces`, `analytics_engine_datasets`,
+`version_metadata` for the few sites that need them. Adding a new site is a
+PR to deco-start, not a change to the site repo.
+
+### Local dev
+
+Site repos add three package.json hooks so vite picks up the generated
+`wrangler.jsonc`:
+
+```jsonc
+"scripts": {
+  "gen:wrangler": "deco-wrangler gen",
+  "predev": "deco-wrangler gen",
+  "prebuild": "deco-wrangler gen",
+  "types": "deco-wrangler types",
+  "deploy": "echo 'Production deploys are managed by .github/workflows/deploy.yml on push to main. For an emergency manual deploy run: npx deco-wrangler deploy'; exit 1"
+}
+```
+
+`deco-wrangler` is a `bin` shipped from `@decocms/start` that materializes the
+canonical config from the central registry, then either exits (`gen` mode) or
+execs the real `wrangler` with that config in cwd.
+
+### Trust model
+
+- The central workflow ignores all caller `inputs:` for site identity.
+- Site name is derived from `${{ github.repository }}` (set by GitHub,
+  untamperable by user code) and looked up in `deploy/sites/<repo>.jsonc`.
+- A customer cannot misroute their deploy onto another site's worker
+  because they can't write to `decocms/deco-start` (CODEOWNERS-protected).
+
+### Common mistakes (do not do these)
+
+- **Committing `wrangler.jsonc` to a site repo.** Generated only;
+  always gitignored. If you see it tracked, the site missed migration.
+- **Adding a site-local `deploy.yml` step** (e.g. cache purge after deploy).
+  Add it to `deco-start/.github/workflows/deploy.yml` instead so every site
+  picks it up at once.
+- **Hard-coding `account_id` in a site's wrangler config.** It comes from
+  `CLOUDFLARE_ACCOUNT_ID` (org-level GitHub secret in CI; `wrangler login`
+  locally). Removing it from JSON is the one-way protection against
+  accidentally deploying to the wrong account.
+- **Setting `worker_name` to anything other than the repo name** without
+  a strong reason. The 1:1 binding makes audit (and incident response)
+  trivial. Exceptions today: `casaevideo-storefront` -> `casaevideo-tanstack`
+  and `miess-01-tanstack` -> `miess-tanstack` (both for historical
+  Cloudflare worker names that predate the repo).

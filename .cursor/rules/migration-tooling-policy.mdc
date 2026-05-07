@@ -1,5 +1,5 @@
 ---
-description: Constitutional decisions for the deco-start migration-tooling effort (D1–D5, priorities, process). Always loaded.
+description: Constitutional decisions for the deco-start migration-tooling effort (D1–D6, priorities, process). Always loaded.
 alwaysApply: true
 ---
 
@@ -14,7 +14,7 @@ summary; always defer to the plan when they conflict.
 1. **Design for 100 sites, not 3.** When the surface of an abstraction is
    well-understood, ship it. Don't defer waiting for "more signal" — design
    for the projection. When the surface is *not* understood, *decide*
-   explicitly (write a D-record like D1–D5), don't ship fast.
+   explicitly (write a D-record like D1–D6), don't ship fast.
 2. **Strict over flexible.** No support layers, no soft drift, no
    fork-runtime adapters. Every fork divergence becomes either a PR back to
    canonical or visible local debt.
@@ -76,6 +76,25 @@ Failure modes get documented in skills, not encoded as escape hatches.
 **Agent behavior**: when a migration goes sideways, propose deletion +
 re-run, not in-place repair. Add the failure mode to the skill.
 
+### D6 — Deploy / preview / secrets pipelines: centralize in `deco-start` (signed off 2026-05-07)
+All storefronts deploy via reusable workflows under
+`decocms/deco-start/.github/workflows/{deploy,preview,sync-secrets,regen-blocks}.yml@v2`.
+Per-site overrides live in [`deploy/sites/<repo>.jsonc`](../../deploy/) and
+are deep-merged on top of [`deploy/wrangler-template.jsonc`](../../deploy/wrangler-template.jsonc)
+at deploy time. **Customer repos do not commit `wrangler.jsonc`** — it is
+generated locally by `deco-wrangler gen` (a `bin` shipped from
+`@decocms/start`) and gitignored. The repo→worker binding is the trust
+boundary: the central workflow ignores caller `inputs:` for identity and
+derives the site name from `${{ github.repository }}`. `deploy/**` is
+CODEOWNERS-protected.
+
+**Agent behavior**: when adding or migrating a site, do **not** generate a
+per-site `wrangler.jsonc` or per-site `deploy.yml` / `preview.yml` /
+`sync-secrets.yml` / `regen-blocks.yml`. The site repo gets the four
+~5-line caller stubs only. Per-site config goes in a PR to
+`decocms/deco-start` adding `deploy/sites/<repo>.jsonc`. Do not commit
+`wrangler.jsonc` or any wrangler config to a site repo.
+
 ## Priority order
 
 Work proceeds in this order. Higher priorities don't block on lower ones,
@@ -109,3 +128,4 @@ order — but only if explicitly identified as urgent.
 - When reading a section of the plan or a skill, prefer the plan or skill
   over your memory of past conversations.
 - Do not run `deco-deploy` or any deploy command from agent flows.
+- Do not commit `wrangler.jsonc` to a site repo. See **D6** above.

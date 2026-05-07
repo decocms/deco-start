@@ -117,6 +117,7 @@ this plan.
 | 2026-05-01 | **D3 — Stub generation: throw at runtime (Option C)** | Migration-time stubs throw with a clear pointer to the canonical replacement instead of silently identity-casting. Forces audit `--fix` to cover swap cases (no permanent detect-only state) and skills to keep up with stub generation. |
 | 2026-05-01 | **D4 — Site-local apps: local by default, promote at 3** | Site-specific apps live in `src/apps/local/` until ≥3 sites use them, then promote to `@decocms/apps`. |
 | 2026-05-01 | **D5 — Failed migrations: rm -rf and re-run** | No `--restart` mode. Half-migrated sites are throwaways. Failure modes get documented in skills, not encoded as escape hatches. |
+| 2026-05-07 | **D6 — Deploy / preview / secrets pipelines: centralize in `deco-start`** | At 6 sites the "1-minute copy" of `deploy.yml` / `preview.yml` / `wrangler.jsonc` had already produced unintended drift (lebiscuit missing 2 workflows, miess missing `account_id`, casaevideo's `loadtest:tail` worker name out of sync with its wrangler config). All sites now consume reusable workflows from `decocms/deco-start@v2` and a per-site registry under [`deploy/sites/<repo>.jsonc`](./deploy/) deep-merged on top of [`deploy/wrangler-template.jsonc`](./deploy/wrangler-template.jsonc) at deploy time. Customer repos hold only ~5-line caller workflows; `wrangler.jsonc` is generated and gitignored. The repo→worker binding is the trust boundary that prevents one site's commits from misrouting onto another site's worker (the central workflow ignores caller `inputs:` for identity and derives the site name from `${{ github.repository }}`). See [`deploy/README.md`](./deploy/README.md) for the contract. |
 
 The full text of the constitutional rule (loaded into every agent
 session for this repo) lives at
@@ -1669,10 +1670,21 @@ props. One broken section never takes the page down.
   release picks up the framework export — TODO is checked into
   `src/lib/http-utils.ts`.
 - **CI/CD porting from casaevideo to a new TanStack site is a 1-minute
-  copy.** `deploy.yml`, `preview.yml`, `regen-blocks.yml`, plus
-  `wrangler.jsonc` worker `name` rename, plus `account_id` paste from
-  another site. No template needed yet — three sites is too few. Will
-  template if a fourth migration needs it.
+  copy** (when this note was written, at 3 sites). By 6 sites
+  the copy-paste had drifted: lebiscuit was missing
+  `regen-blocks.yml` and `sync-secrets.yml`, miess was missing
+  `regen-blocks.yml` and its `wrangler.jsonc` lacked `account_id`,
+  lebiscuit's preview workflow swallowed `wrangler` exit codes, and
+  casaevideo's `loadtest:tail` referenced a worker name that didn't
+  match its `wrangler.jsonc`. **Resolved 2026-05-07 via D6:** all
+  workflows + wrangler config are centralized in
+  [`deco-start/.github/workflows/`](./.github/workflows/) and
+  [`deco-start/deploy/`](./deploy/). New-site onboarding is now: open a
+  PR adding `deploy/sites/<repo>.jsonc` to deco-start, then drop the
+  ~5-line caller workflows into the new site's repo. No `wrangler.jsonc`
+  is committed to the site repo — `deco-wrangler gen`
+  (a `bin` shipped from `@decocms/start`) materializes it from the
+  central registry on demand for local dev and CI alike.
 
 #### Counter-evidence the user-rule asks for
 

@@ -1,0 +1,143 @@
+name: preview (central)
+
+# Reusable workflow that uploads a preview version (alias) for any storefront
+# repo registered under `deploy/sites/<repo-name>.jsonc`.
+#
+# Caller usage (in customer repo, `.github/workflows/preview.yml`):
+#
+#   on:
+#     repository_dispatch:
+#       types: [preview-deploy]
+#     pull_request:
+#       types: [opened, synchronize, reopened]
+#     push:
+#       branches: ['env/**']
+#   permissions:
+#     contents: read
+#     pull-requests: write
+#     statuses: write
+#   jobs:
+#     preview:
+#       uses: decocms/deco-start/.github/workflows/preview.yml@v2
+#       secrets: inherit
+
+on:
+  workflow_call:
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+concurrency:
+  group: preview-${{ github.repository }}-${{ github.event.client_payload.ref || github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve ref
+        id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "ref=${{ github.event.client_payload.ref }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=${{ github.head_ref || github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve.outputs.ref }}
+
+      - name: Resolve deco-start ref + site identity
+        id: meta
+        run: |
+          WF_REF="${{ github.workflow_ref }}"
+          REF="${WF_REF##*@}"
+          REF="${REF#refs/tags/}"
+          REF="${REF#refs/heads/}"
+          echo "deco_start_ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "site_name=${GITHUB_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout deco-start registry at the same ref
+        uses: actions/checkout@v4
+        with:
+          repository: decocms/deco-start
+          ref: ${{ steps.meta.outputs.deco_start_ref }}
+          path: .deco-start
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Compute preview alias
+        id: alias
+        run: |
+          REF="${{ steps.resolve.outputs.ref }}"
+          if echo "$REF" | grep -q '^env/'; then
+            ALIAS=$(echo "$REF" | sed 's|^env/||')
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            ALIAS="pr-${{ github.event.pull_request.number }}"
+          else
+            ALIAS=$(echo "$REF" | sed 's|[^a-z0-9-]|-|g')
+          fi
+          echo "alias=$ALIAS" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build
+        run: npm run build
+
+      - name: Resolve site manifest
+        id: site
+        run: node .deco-start/scripts/deploy/resolve-site.mjs
+        env:
+          DECO_START_PATH: .deco-start
+          SITE_NAME: ${{ steps.meta.outputs.site_name }}
+
+      - name: Generate wrangler.jsonc
+        run: node .deco-start/scripts/deploy/build-wrangler-config.mjs
+        env:
+          DECO_START_PATH: .deco-start
+          SITE_NAME: ${{ steps.meta.outputs.site_name }}
+          OUTPUT_PATH: ./wrangler.jsonc
+
+      - name: Upload preview version
+        id: deploy
+        run: |
+          set +e
+          OUTPUT=$(npx wrangler versions upload --preview-alias ${{ steps.alias.outputs.alias }} 2>&1)
+          EXIT_CODE=$?
+          set -e
+          echo "$OUTPUT"
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "::error::wrangler versions upload failed with exit code $EXIT_CODE"
+            exit $EXIT_CODE
+          fi
+          PREVIEW_URL=$(echo "$OUTPUT" | grep 'Version Preview URL:' | sed 's/.*Version Preview URL: //')
+          ALIAS_URL=$(echo "$OUTPUT" | grep 'Version Preview Alias URL:' | sed 's/.*Version Preview Alias URL: //')
+          echo "preview_url=${PREVIEW_URL}" >> "$GITHUB_OUTPUT"
+          echo "alias_url=${ALIAS_URL}" >> "$GITHUB_OUTPUT"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Comment preview URL on PR
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: preview-url
+          message: |
+            ### Preview deployed
+
+            | | URL |
+            |---|---|
+            | **Version** | ${{ steps.deploy.outputs.preview_url }} |
+            | **Alias** | ${{ steps.deploy.outputs.alias_url }} |

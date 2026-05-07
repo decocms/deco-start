@@ -29,3 +29,29 @@ jobs:
         run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Caller workflows in storefront repos pin to a moveable major tag (`@v2`),
+      # GitHub Actions convention. After every release we fast-forward that major
+      # tag to the latest exact tag in the same series. Idempotent: if no new
+      # release happened, this just re-points to the existing latest, which is a
+      # no-op force-push.
+      #
+      # Why not a separate workflow on `push: tags`? GitHub suppresses workflow
+      # triggers caused by the auto-issued `GITHUB_TOKEN` (anti-recursion guard),
+      # and `@semantic-release/git` pushes tags using exactly that token, so a
+      # listener would never fire. Inlining keeps the lifecycle visible in one
+      # job log.
+      - name: Advance moveable major tag
+        run: |
+          git fetch --tags --force
+          LATEST=$(git tag -l 'v*.*.*' --sort=-v:refname | head -n 1)
+          if [ -z "$LATEST" ]; then
+            echo "::notice::no v*.*.* tags yet; nothing to advance"
+            exit 0
+          fi
+          MAJOR=$(echo "$LATEST" | sed -E 's/^(v[0-9]+).*/\1/')
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f "$MAJOR" "$LATEST"
+          git push origin "$MAJOR" --force
+          echo "::notice::Moved $MAJOR -> $LATEST"

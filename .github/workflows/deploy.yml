@@ -1,0 +1,115 @@
+name: deploy (central)
+
+# Reusable workflow that drives `wrangler deploy` for any storefront repo
+# registered under `deploy/sites/<repo-name>.jsonc`.
+#
+# Site identity (worker name, KV bindings, routes, ...) is derived ONLY from
+# `${{ github.repository }}` and the registry checked in to deco-start. The
+# caller cannot pass an `inputs:` block to override the worker name -- this is
+# the trust boundary that prevents one site's commits from deploying on top of
+# another site's worker.
+#
+# Caller usage (in customer repo, `.github/workflows/deploy.yml`):
+#
+#   on:
+#     push:
+#       branches: [main]
+#   permissions:
+#     contents: write
+#   jobs:
+#     deploy:
+#       uses: decocms/deco-start/.github/workflows/deploy.yml@v2
+#       secrets: inherit
+
+on:
+  workflow_call:
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deploy-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+
+      - name: Resolve deco-start ref + site identity
+        id: meta
+        run: |
+          # github.workflow_ref looks like
+          #   decocms/deco-start/.github/workflows/deploy.yml@refs/tags/v1
+          # or
+          #   decocms/deco-start/.github/workflows/deploy.yml@refs/heads/main
+          WF_REF="${{ github.workflow_ref }}"
+          REF="${WF_REF##*@}"
+          REF="${REF#refs/tags/}"
+          REF="${REF#refs/heads/}"
+          echo "deco_start_ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "site_name=${GITHUB_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout deco-start registry at the same ref
+        uses: actions/checkout@v4
+        with:
+          repository: decocms/deco-start
+          ref: ${{ steps.meta.outputs.deco_start_ref }}
+          path: .deco-start
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Generate lockfile if missing
+        if: hashFiles('package-lock.json') == ''
+        run: npm install --package-lock-only
+
+      - name: Restore npm cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: npm-${{ runner.os }}-
+
+      - name: Sync lockfile and install
+        run: |
+          npm install --package-lock-only
+          if ! git diff --quiet package-lock.json 2>/dev/null; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add package-lock.json
+            git commit -m "chore: sync package-lock.json"
+            git push || echo "Lockfile push failed (remote ahead); proceeding with deploy"
+          fi
+          npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Resolve site manifest
+        id: site
+        run: node .deco-start/scripts/deploy/resolve-site.mjs
+        env:
+          DECO_START_PATH: .deco-start
+          SITE_NAME: ${{ steps.meta.outputs.site_name }}
+
+      - name: Generate wrangler.jsonc
+        run: node .deco-start/scripts/deploy/build-wrangler-config.mjs
+        env:
+          DECO_START_PATH: .deco-start
+          SITE_NAME: ${{ steps.meta.outputs.site_name }}
+          OUTPUT_PATH: ./wrangler.jsonc
+
+      - name: Deploy to Cloudflare Workers
+        run: npx wrangler deploy --var BUILD_HASH:$(git rev-parse --short HEAD)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

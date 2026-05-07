@@ -1,0 +1,4 @@
+// Per-site overrides for `baggagio-tanstack`.
+{
+  "worker_name": "baggagio-tanstack"
+}

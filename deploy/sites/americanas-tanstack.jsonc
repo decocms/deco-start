@@ -1,0 +1,4 @@
+// Per-site overrides for `americanas-tanstack`.
+{
+  "worker_name": "americanas-tanstack"
+}
