@@ -3,10 +3,14 @@ import type { MigrationContext } from "../types";
 
 /**
  * Fleet-wide canonical bun version. Bumped here propagates to all newly
- * migrated sites via the `packageManager` field. See
+ * migrated sites via the `packageManager` field AND the
+ * `lockfile-check.yml` workflow's `bun-version` input. See
  * MIGRATION_TOOLING_PLAN.md for the bun-canonical decision.
+ *
+ * Exported because the lockfile-check workflow template reads it
+ * directly to keep both files in lockstep.
  */
-const CANONICAL_BUN_VERSION = "1.3.5";
+export const CANONICAL_BUN_VERSION = "1.3.5";
 
 /**
  * Get the latest published version of an npm package.

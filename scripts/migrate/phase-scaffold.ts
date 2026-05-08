@@ -2,7 +2,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { MigrationContext } from "./types";
 import { log, logPhase } from "./types";
-import { generatePackageJson } from "./templates/package-json";
+import { CANONICAL_BUN_VERSION, generatePackageJson } from "./templates/package-json";
+import { generateLockfileCheckYml } from "./templates/lockfile-check-yml";
 import { generateTsconfig } from "./templates/tsconfig";
 import { generateViteConfig } from "./templates/vite-config";
 import { generateKnipConfig } from "./templates/knip-config";
@@ -71,6 +72,16 @@ export function scaffold(ctx: MigrationContext): void {
     printWidth: 100,
     tabWidth: 2,
   }, null, 2) + "\n");
+
+  // PR-time lockfile guardrail. Lives in the site repo (per-site, not
+  // a centralised reusable workflow) because per D6.3 we are not
+  // scaffolding caller stubs into storefronts. Bun version is pinned
+  // in lockstep with `package.json` via CANONICAL_BUN_VERSION.
+  writeFile(
+    ctx,
+    ".github/workflows/lockfile-check.yml",
+    generateLockfileCheckYml(CANONICAL_BUN_VERSION),
+  );
 
   // Server entry files (server.ts, worker-entry.ts, router.tsx, runtime.ts, context.ts)
   writeMultiFile(ctx, generateServerEntry(ctx));

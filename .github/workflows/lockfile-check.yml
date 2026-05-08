@@ -1,0 +1,35 @@
+name: lockfile-check
+
+# PR-time guardrail: re-runs the same install our release workflow
+# runs on main (`bun install --frozen-lockfile`). Fails the PR if
+# bun.lock would have rejected the install — closes the loop so drift
+# can never reach main.
+#
+# Pairs with:
+#   - "packageManager": "bun@1.3.5" in package.json
+#   - .gitignore bans on package-lock.json / yarn.lock / pnpm-lock.yaml
+#   - the deco-post-cleanup audit's lockfile-* rules
+#
+# Adjust `bun-version` here in lockstep with the package.json
+# `packageManager` field.
+
+on:
+  pull_request:
+    paths:
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/lockfile-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  frozen-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.5
+      - name: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile
