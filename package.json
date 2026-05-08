@@ -86,7 +86,8 @@
     "lint:unused": "knip",
     "format": "biome format src/ scripts/",
     "format:fix": "biome format --write src/ scripts/",
-    "check": "npm run typecheck && npm run lint && npm run lint:unused"
+    "check": "bun run typecheck && bun run lint && bun run lint:unused",
+    "clean": "rm -rf node_modules .cache dist .wrangler/state node_modules/.vite && bun install"
   },
   "keywords": [
     "deco",
@@ -96,6 +97,7 @@
   ],
   "author": "deco.cx",
   "license": "MIT",
+  "packageManager": "bun@1.3.5",
   "repository": {
     "type": "git",
     "url": "https://github.com/decocms/deco-start.git"
