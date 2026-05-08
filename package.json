@@ -7,7 +7,8 @@
   "bin": {
     "deco-migrate": "./scripts/migrate.ts",
     "deco-post-cleanup": "./scripts/migrate-post-cleanup.ts",
-    "deco-htmx-analyze": "./scripts/htmx-analyze.ts"
+    "deco-htmx-analyze": "./scripts/htmx-analyze.ts",
+    "deco-cf-observability": "./scripts/migrate-to-cf-observability.ts"
   },
   "exports": {
     ".": "./src/index.ts",
@@ -71,6 +72,7 @@
     "./scripts/generate-invoke": "./scripts/generate-invoke.ts",
     "./scripts/migrate": "./scripts/migrate.ts",
     "./scripts/migrate-post-cleanup": "./scripts/migrate-post-cleanup.ts",
+    "./scripts/migrate-to-cf-observability": "./scripts/migrate-to-cf-observability.ts",
     "./scripts/tailwind-lint": "./scripts/tailwind-lint.ts",
     "./vite": "./src/vite/plugin.js",
     "./daemon": "./src/daemon/index.ts"
