@@ -1391,6 +1391,26 @@ async function resolveDecoPageImpl(
       try {
         const deferred = resolveSectionShallow(section, ctx);
         if (deferred) {
+          // Skip sections whose scheduling window has already closed (or
+          // hasn't opened yet).  Without this check a LoadingFallback
+          // skeleton is rendered and immediately replaced by nothing once
+          // the component's own scheduling guard returns null — producing
+          // the "skeleton flashes then disappears" effect.
+          const sched = deferred.rawProps?.scheduling as
+            | { start?: string; end?: string }
+            | undefined;
+          if (sched) {
+            const now = Date.now();
+            if (sched.end && now > new Date(sched.end).getTime()) {
+              flatIndex++;
+              continue;
+            }
+            if (sched.start && now < new Date(sched.start).getTime()) {
+              flatIndex++;
+              continue;
+            }
+          }
+
           deferred.index = currentFlatIndex;
 
           // Cache rawProps server-side and strip from the deferred object
