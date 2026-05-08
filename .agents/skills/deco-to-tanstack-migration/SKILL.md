@@ -315,7 +315,7 @@ See: `references/search.md`
 5. **`tsconfig.json` mirrors `vite.config.ts`** -- only `"~/*": ["./src/*"]` in paths
 6. **Signals don't auto-subscribe in React** -- reading `signal.value` in render creates NO subscription; use `useStore(signal.store)` from `@tanstack/react-store`
 7. **Commerce loaders need request context** -- `resolve.ts` must pass URL/path to PLP/PDP loaders
-8. **`wrangler.jsonc` main must be a custom worker-entry** -- TanStack Start ignores `export default` in `server.ts`. The `main` field lives in the **central** `decocms/deco-start/deploy/wrangler-template.jsonc` (D6); site repos do not commit `wrangler.jsonc`.
+8. **`wrangler.jsonc` main must be a custom worker-entry** -- TanStack Start ignores `export default` in `server.ts`. The `main` field lives in the site's per-site `wrangler.jsonc`.
 9. **Copy components faithfully, never rewrite** -- `cp` the original, then only change mechanical things (class→className, imports). NEVER regenerate or "improve" — AI-rewritten components are the #1 source of visual regressions
 10. **Tailwind v4 logical property hazard** -- mixed `px-*` + `pl-*/pr-*` on the same element breaks the cascade
 11. **oklch CSS variables need triplets, not hex** -- `oklch(var(--x))` must store variables as oklch triplets

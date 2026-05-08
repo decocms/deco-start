@@ -1,5 +1,5 @@
 ---
-description: Constitutional decisions for the deco-start migration-tooling effort (D1–D6, priorities, process). Always loaded.
+description: Constitutional decisions for the deco-start migration-tooling effort (D1–D5 + D6.3 revert, priorities, process). Always loaded.
 alwaysApply: true
 ---
 
@@ -14,7 +14,7 @@ summary; always defer to the plan when they conflict.
 1. **Design for 100 sites, not 3.** When the surface of an abstraction is
    well-understood, ship it. Don't defer waiting for "more signal" — design
    for the projection. When the surface is *not* understood, *decide*
-   explicitly (write a D-record like D1–D6), don't ship fast.
+   explicitly (write a D-record like D1–D5), don't ship fast.
 2. **Strict over flexible.** No support layers, no soft drift, no
    fork-runtime adapters. Every fork divergence becomes either a PR back to
    canonical or visible local debt.
@@ -76,51 +76,36 @@ Failure modes get documented in skills, not encoded as escape hatches.
 **Agent behavior**: when a migration goes sideways, propose deletion +
 re-run, not in-place repair. Add the failure mode to the skill.
 
-### D6.2 — App-mediated dispatch + no per-site registry (signed off 2026-05-07; supersedes D6 + D6.1)
-All storefronts deploy via reusable workflows under
-`decocms/deco-start/.github/workflows/{deploy,preview,sync-secrets,regen-blocks}.yml@v3`.
-Storefront caller stubs mint a short-lived **`decocms-deployer` GitHub App**
-installation token (App ID + private key live as `deco-sites` org-level
-secrets) and call `gh workflow run deploy.yml --repo decocms/deco-start --ref v3
--f site_owner=… -f site_name=…`. The central workflow runs in
-**`decocms/deco-start`'s context**, so `CLOUDFLARE_API_TOKEN` and
-`CLOUDFLARE_ACCOUNT_ID` are ordinary repo secrets in `decocms/deco-start`
-and never leave it.
+### D6.3 — Revert D6/D6.1/D6.2; Cloudflare Workers Builds owns deploy (signed off 2026-05-07)
+The whole D6 family — centralized GitHub Actions reusable workflows under
+`decocms/deco-start/.github/workflows/{deploy,preview,sync-secrets}.yml`,
+the `decocms-deployer` GitHub App, the per-storefront `<site_name>-secrets`
+GitHub Environments, the central `deploy/wrangler-template.jsonc`, the
+`deco-wrangler` CLI, the `deploy/sites/<repo>.jsonc` registry, and the
+per-site caller stubs — has been **reverted**.
 
-There is **no per-site registry under `deploy/sites/`**. Worker name == storefront
-repo basename by convention. Per-worker derived fields use `$WORKER_NAME` /
-`$WORKER_UNDERSCORE` substitution tokens in
-[`deploy/wrangler-template.jsonc`](../../deploy/wrangler-template.jsonc).
-The deploy authorization gate is the App being installed on the storefront
-repo — if it isn't, the App-token mint inside the central workflow fails and
-the deploy never starts. **Customer repos do not commit `wrangler.jsonc`** —
-it is generated locally by `deco-wrangler gen` (a `bin` shipped from
-`@decocms/start`) and gitignored.
+Why: GitHub Free orgs do not propagate org-level secrets to private repos,
+which forced the App private key to be distributed to every storefront repo
+individually. That key gives the holder the ability to mint installation
+tokens for any installed repo, concentrating blast radius on a credential
+that had to be rotated across N storefronts. The trust model couldn't pay
+for itself at our scale.
 
-Production deploys are **force-rollback proof**: the central workflow ignores
-any caller-supplied `site_sha` and resolves the storefront's current default
-branch HEAD itself. The worst a compromised storefront can do across tenants
-is trigger a no-op redeploy of another storefront's current main.
+**Replacement direction (to be elaborated in a follow-up D-record once
+shipped):** Cloudflare Workers Builds owns deploy/preview pipelines per-worker.
+The dashboard repo<->worker connection is the source of truth — verified
+empirically against `baggagio-tanstack` 2026-05-07 that a malicious
+`wrangler.jsonc` `name` field is ignored, the deploy lands on the connected
+worker, and CF auto-opens a PR to fix the config. Per-storefront wiring is
+one CF dashboard click per worker.
 
-`SECRET_*` runtime secrets live in **`decocms/deco-start`** as well, in
-per-storefront GitHub Environments named `<site_name>-secrets`. `sync-secrets.yml`
-binds to the matching environment and runs `wrangler secret put`. Site teams
-get edit/approve permission on their own environment via Environment
-protection rules. **The storefront repo holds zero secrets** beyond the
-App credentials (which only grant the ability to trigger workflows on
-`decocms/deco-start`).
-
-`deploy/`, `scripts/deploy/`, and the central workflow files are
-CODEOWNERS-protected.
-
-**Agent behavior**: when adding or migrating a site, do **not** generate a
-per-site `wrangler.jsonc`, do **not** generate a `deploy/sites/<repo>.jsonc`
-file (that whole directory was removed in D6.2), and do **not** add
-`CLOUDFLARE_*` or `SECRET_*` to a storefront repo's secrets. The site repo
-gets four ~15-line caller stubs that mint a `decocms-deployer` App token and
-fire `workflow_dispatch` at `decocms/deco-start@v3`; the App ID + private key
-live as `deco-sites` org-level secrets `DECOCMS_DEPLOYER_APP_ID` and
-`DECOCMS_DEPLOYER_APP_PRIVATE_KEY`.
+**Agent behavior — current interim period**: while D6.3's replacement is
+being designed, do **not** scaffold `decocms/deco-start@vN`-calling caller
+stubs in storefronts and do **not** depend on a `deco-wrangler` CLI from
+`@decocms/start` (it no longer exists). Storefronts retain their existing
+per-site inline `deploy.yml` (with their own `CLOUDFLARE_*` secrets) until
+Workers Builds onboarding lands. Site repos do still commit `wrangler.jsonc`
+during this interim — `deco-wrangler gen` is gone.
 
 ## Priority order
 
@@ -155,4 +140,3 @@ order — but only if explicitly identified as urgent.
 - When reading a section of the plan or a skill, prefer the plan or skill
   over your memory of past conversations.
 - Do not run `deco-deploy` or any deploy command from agent flows.
-- Do not commit `wrangler.jsonc` to a site repo. See **D6** above.

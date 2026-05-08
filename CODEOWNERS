@@ -1,14 +1,6 @@
 # CODEOWNERS for decocms/deco-start
 #
-# `deploy/wrangler-template.jsonc` is the canonical wrangler config every
-# storefront inherits. A bad PR here can change every site's runtime config in
-# one shot. Only the platform team approves changes.
-#
-# The central reusable workflows under `.github/workflows/` are in the same
-# trust boundary: they decide how every site is built and deployed.
-deploy/                              @vibe-dex
-.github/workflows/deploy.yml         @vibe-dex
-.github/workflows/preview.yml        @vibe-dex
-.github/workflows/sync-secrets.yml   @vibe-dex
-.github/workflows/regen-blocks.yml   @vibe-dex
-scripts/deploy/                      @vibe-dex
+# Workflows under `.github/workflows/` decide how this package is built,
+# released, and what blocks regeneration sites can trigger. Only the
+# platform team approves changes.
+.github/workflows/                   @vibe-dex

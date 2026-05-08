@@ -37,7 +37,7 @@ TanStack Start's Cloudflare adapter **completely ignores** the `export default` 
 
 **Diagnosis**: Search the built `dist/server/worker-entry-*.js` bundle for your custom code (e.g., `X-Cache`, `caches.open`, `_cache/purge`). If absent, TanStack stripped it.
 
-**Fix**: Create a **separate** `src/worker-entry.ts` file that wraps TanStack Start's built handler. Wrangler is told to use this file via `main: "./src/worker-entry.ts"` in the **canonical wrangler template** at `decocms/deco-start/deploy/wrangler-template.jsonc` (D6) — sites do not configure this themselves.
+**Fix**: Create a **separate** `src/worker-entry.ts` file that wraps TanStack Start's built handler. Wrangler is told to use this file via `main: "./src/worker-entry.ts"` in the site's `wrangler.jsonc`.
 
 ```typescript
 // src/worker-entry.ts
@@ -59,7 +59,7 @@ export default createDecoWorkerEntry(serverEntry, {
 
 The `main` field is set centrally so a future migration of the entry path
 applies to every site at once (single PR to the template). There is no
-per-site override file (D6.2 Pure C); if a single site truly needs a different
+per-site override file; if a single site truly needs a different
 entry path, change the template (and accept that all sites get it) or add a
 substitution token like `$WORKER_ENTRY_PATH` and feed it from a per-site env.
 
@@ -141,7 +141,7 @@ After deploying a new build to Cloudflare Workers, the edge cache may still serv
    `npx wrangler secret put` manually per-site — the central workflow keeps
    GitHub and Cloudflare in sync.
 2. Call the purge endpoint: `POST /_cache/purge` with `Authorization: Bearer <token>` and body `{"paths":["/"]}`
-3. The right place to automate this is the **central** `deco-start/.github/workflows/deploy.yml` (D6) so every site picks it up at once. Do not add site-local deploy.yml steps; site repos hold only ~5-line caller workflows.
+3. Currently this lives in each storefront's per-site `deploy.yml` (D6 centralization was reverted; D6.3 Workers Builds replacement is in flight).
 
 
 ## 44. Runtime Module Import Kills Lazy-Loaded Sections
@@ -212,137 +212,34 @@ Or in project `.npmrc` with an env var (for CI):
 **Tradeoff with `github:` syntax**: No semver resolution — `npm update` is meaningless. Pin to a tag for stability: `github:decocms/deco-start#v0.14.2`. Without a tag, you get HEAD of the default branch.
 
 
-## 46. Central Deploy / Wrangler Config (D6.2)
+## 46. Deploy / Wrangler Config (interim, D6.3 in flight)
 
-**Severity**: HIGH — site repos must NOT commit `wrangler.jsonc`, must NOT hold
-Cloudflare credentials, and must NOT have per-site deploy logic. Doing so
-reintroduces drift and breaks the trust model.
+**Status (2026-05-07)**: D6.2's centralized App-mediated dispatch was
+**reverted** in favour of Cloudflare Workers Builds owning the deploy
+pipeline per-worker. The Workers Builds onboarding plan is being
+designed in a follow-up PR. Until it lands, this section describes the
+**interim state**: each storefront retains its own per-site inline
+`deploy.yml` workflow (the original pre-D6 setup), with its own
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` repo secrets.
 
-Per [D6.2](../../../../.cursor/rules/migration-tooling-policy.mdc), all
-storefronts deploy via reusable workflows shipped from
-`decocms/deco-start/.github/workflows/{deploy,preview,sync-secrets,regen-blocks}.yml@v3`.
-There is no per-site registry: worker name == storefront repo basename by
-convention. The canonical `wrangler.jsonc` lives at
-`decocms/deco-start/deploy/wrangler-template.jsonc`; the build script
-substitutes `$WORKER_NAME` / `$WORKER_UNDERSCORE` tokens at deploy time and
-writes a generated `wrangler.jsonc` in the runner. Site repos gitignore the
-file.
+Site repos **do** commit a per-site `wrangler.jsonc` during the interim
+period. The `deco-wrangler` CLI no longer ships from `@decocms/start`.
 
-### What goes in the site repo
+### What changes when Workers Builds onboarding ships
 
-Four caller workflow stubs that mint a `decocms-deployer` GitHub App
-installation token and call `gh workflow run` on `decocms/deco-start@v3`:
+When the D6.3 replacement lands, expect:
 
-```yaml
-# .github/workflows/deploy.yml
-name: Deploy
-on:
-  push:
-    branches: [main]
-permissions:
-  contents: read
-jobs:
-  trigger:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/create-github-app-token@v1
-        id: app-token
-        with:
-          app-id: ${{ secrets.DECOCMS_DEPLOYER_APP_ID }}
-          private-key: ${{ secrets.DECOCMS_DEPLOYER_APP_PRIVATE_KEY }}
-          owner: decocms
-          repositories: deco-start
-      - env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          gh workflow run deploy.yml \
-            --repo decocms/deco-start \
-            --ref v3 \
-            -f site_owner=${GITHUB_REPOSITORY%%/*} \
-            -f site_name=${GITHUB_REPOSITORY##*/}
-```
+- Per-storefront CF Builds connection (one dashboard click per worker).
+- Per-site `.github/workflows/deploy.yml` removed; CF Builds takes over
+  on push.
+- `wrangler.jsonc` continues to live in the site repo, but a `deco-build`
+  CLI in `@decocms/start` regenerates the bindings (KV, R2, etc.) from a
+  central template at build time so customers can't add bindings to
+  other tenants' resources.
+- `name` field in `wrangler.jsonc` is enforced by CF (verified against
+  `baggagio-tanstack` 2026-05-07 — a malicious `name` value is ignored
+  and CF auto-opens a PR to fix it).
 
-(Plus equivalent `preview.yml`, `regen-blocks.yml`, `sync-secrets.yml` —
-see `scripts/migrate/templates/github-workflows.ts` for the canonical text.)
-The migration script generates these for new sites.
-
-### App + secrets setup (one-time, per org)
-
-1. Create a `decocms-deployer` GitHub App with permissions
-   `Actions: Write`, `Contents: Read`, `Pull requests: Write` (the last
-   only needed if you want preview URLs commented on PRs),
-   `Metadata: Read`. Install it on `decocms/deco-start` and on each
-   storefront repo (or whole-org install on `deco-sites`).
-2. Store the App ID and private key as `deco-sites` org-level secrets
-   `DECOCMS_DEPLOYER_APP_ID` and `DECOCMS_DEPLOYER_APP_PRIVATE_KEY` so every
-   storefront workflow can mint installation tokens without per-repo setup.
-3. Store `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as plain repo
-   secrets in `decocms/deco-start` (NOT in any storefront).
-4. For each storefront that has runtime secrets: create a GitHub Environment
-   in `decocms/deco-start` named `<storefront-repo-basename>-secrets`, add
-   the `SECRET_*` values there, and configure protection rules to grant the
-   site team self-service access to that environment only.
-
-### Local dev
-
-Site repos add three package.json hooks so vite picks up the generated
-`wrangler.jsonc`:
-
-```jsonc
-"scripts": {
-  "gen:wrangler": "deco-wrangler gen",
-  "predev": "deco-wrangler gen",
-  "prebuild": "deco-wrangler gen",
-  "types": "deco-wrangler types",
-  "deploy": "echo 'Production deploys are managed by .github/workflows/deploy.yml on push to main. For an emergency manual deploy run: npx deco-wrangler deploy'; exit 1"
-}
-```
-
-`deco-wrangler` is a `bin` shipped from `@decocms/start` that materializes the
-canonical config from the central template (worker name inferred from git
-remote / package.json), then either exits (`gen` mode) or execs the real
-`wrangler` with that config in cwd.
-
-### Trust model
-
-- **Authorization gate**: the deploy can only start if the
-  `decocms-deployer` App is installed on the target storefront repo. The
-  central workflow's App-token mint step fails with a clear error otherwise.
-- **Worker naming is convention-based and not customer-controlled.** A
-  customer with push access to their own storefront cannot rename the worker
-  their deploy lands on (the central workflow uses `inputs.site_name` as the
-  worker name; modifying their stub to pass a different `site_name` would
-  also require the App to be installed on that other repo).
-- **Cloudflare credentials never leave `decocms/deco-start`.** The central
-  workflow runs in deco-start's context, so the env-var resolves natively
-  from repo secrets.
-- **Force-rollback is impossible for production.** The central deploy
-  workflow ignores any caller-supplied sha and always resolves the
-  storefront's current default-branch HEAD itself.
-- **Per-site runtime secrets** (`SECRET_*`) live in deco-start environments,
-  not storefront repos. The storefront caller stub for `sync-secrets.yml`
-  triggers a workflow that binds to the matching env and runs
-  `wrangler secret put`. The storefront repo holds zero secrets beyond the
-  `decocms-deployer` App credentials.
-
-### Common mistakes (do not do these)
-
-- **Committing `wrangler.jsonc` to a site repo.** Generated only;
-  always gitignored. If you see it tracked, the site missed migration.
-- **Adding a site-local `deploy.yml` step** (e.g. cache purge after deploy).
-  Add it to `deco-start/.github/workflows/deploy.yml` instead so every site
-  picks it up at once.
-- **Adding `CLOUDFLARE_*` to a storefront repo's secrets.** They never
-  belong there. The central workflow runs in deco-start's context.
-- **Adding `SECRET_*` to a storefront repo's secrets.** They live in the
-  matching `<site_name>-secrets` environment in deco-start.
-- **Hard-coding `account_id` in a site's wrangler config.** It comes from
-  `CLOUDFLARE_ACCOUNT_ID` (in CI; `wrangler login` locally) — keeping
-  it out of JSON is the one-way protection against accidentally deploying
-  to the wrong account.
-- **Trying to override the worker name** for one site. There is no
-  per-site override mechanism in D6.2. If the worker MUST be named
-  differently from the repo, the right answer is either to rename the
-  repo to match (cleanest) or to do a CF-side migration (deploy a new
-  worker with the repo-name and re-attach routes). This trade-off was
-  taken intentionally in exchange for the registry-free architecture.
+Until then, do NOT scaffold caller stubs that reference
+`decocms/deco-start/.github/workflows/*.yml@vN` — those workflows are
+gone.

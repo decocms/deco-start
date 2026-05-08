@@ -13,12 +13,10 @@ const REQUIRED_FILES = [
   "package.json",
   "tsconfig.json",
   "vite.config.ts",
-  // wrangler.jsonc is INTENTIONALLY absent -- D6.2: it's generated from
-  // decocms/deco-start's deploy/wrangler-template.jsonc by `deco-wrangler gen`.
-  ".github/workflows/deploy.yml",
-  ".github/workflows/preview.yml",
+  // Deploy / preview / sync-secrets pipelines are owned by Cloudflare
+  // Workers Builds (D6.3) -- configured in the CF dashboard, not via
+  // GitHub workflow files in the site repo.
   ".github/workflows/regen-blocks.yml",
-  ".github/workflows/sync-secrets.yml",
   "knip.config.ts",
   ".prettierrc",
   "src/server.ts",

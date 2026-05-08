@@ -7,8 +7,7 @@
   "bin": {
     "deco-migrate": "./scripts/migrate.ts",
     "deco-post-cleanup": "./scripts/migrate-post-cleanup.ts",
-    "deco-htmx-analyze": "./scripts/htmx-analyze.ts",
-    "deco-wrangler": "./scripts/deploy/wrangler-wrapper.mjs"
+    "deco-htmx-analyze": "./scripts/htmx-analyze.ts"
   },
   "exports": {
     ".": "./src/index.ts",

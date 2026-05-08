@@ -12,11 +12,8 @@
     "generate:blocks": "tsx node_modules/@decocms/start/scripts/generate-blocks.ts",
     "generate:invoke": "tsx node_modules/@decocms/start/scripts/generate-invoke.ts",
     "generate:schema": "tsx node_modules/@decocms/start/scripts/generate-schema.ts --site storefront",
-    "gen:wrangler": "deco-wrangler gen",
-    "predev": "deco-wrangler gen",
-    "prebuild": "deco-wrangler gen",
-    "types": "deco-wrangler types",
-    "deploy": "echo 'Production deploys are managed by .github/workflows/deploy.yml on push to main. See D6.'; exit 1"
+    "deploy": "wrangler deploy",
+    "types": "wrangler types"
   },
   "dependencies": {
     "@decocms/apps": "^0.20.1",
