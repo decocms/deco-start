@@ -55,7 +55,13 @@ import { type Resource, resourceFromAttributes } from "@opentelemetry/resources"
 
 import { configureMeter, configureTracer } from "../middleware/observability";
 import { createCompositeLogger, createCompositeMeter } from "./composite";
-import { configureLogger, defaultLoggerAdapter, type LogLevel, logger } from "./logger";
+import {
+  configureLogger,
+  defaultLoggerAdapter,
+  type LogLevel,
+  logger,
+  setLoggerAttributeFloor,
+} from "./logger";
 import {
   createAnalyticsEngineMeterAdapter,
   createOtelLoggerAdapter,
@@ -292,6 +298,17 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
     ...(opts.decoAppsVersion ? { "deco.apps.version": opts.decoAppsVersion } : {}),
   };
 
+  // Same set, stamped on every log record. CF Workers Logs ships the JSON
+  // body verbatim (resource attrs from `buildResource` are NOT applied to
+  // logs in default mode), so HyperDX panels grouping by these dimensions
+  // would otherwise return empty. Caller-supplied `attrs` still win on key
+  // collision.
+  setLoggerAttributeFloor({
+    "deco.runtime.version": decoRuntimeVersion,
+    "deployment.environment": deploymentEnvironment,
+    ...(opts.decoAppsVersion ? { "deco.apps.version": opts.decoAppsVersion } : {}),
+  });
+
   // ---- Logger ----------------------------------------------------------
   // Default mode: console JSON only. Cloudflare Workers Logs captures the
   // output and ships it via `observability.logs.destinations` to whichever
@@ -375,6 +392,7 @@ export function _resetBootStateForTests(): void {
   booted = false;
   bootState = null;
   spanAttributeFloor = {};
+  setLoggerAttributeFloor({});
 }
 
 // ---------------------------------------------------------------------------
