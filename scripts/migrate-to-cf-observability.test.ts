@@ -2,10 +2,14 @@
  * Smoke tests for the `migrate-to-cf-observability.ts` codemod.
  *
  * Drives the script as a child process against tmp wrangler.jsonc fixtures.
- * Verifies the three behaviors that matter operationally:
- *  - replacing an existing `observability.logs` block (lebiscuit shape)
- *  - appending a new `observability` block when none exists
+ * Verifies the operationally important behaviors:
+ *  - rewriting an existing observability block to the canonical CF-native
+ *    shape (no destinations, master enabled flag set)
+ *  - appending a new canonical block when none exists
  *  - second run is a no-op (idempotency / CI guard)
+ *  - HyperDX-style destinations are stripped on the next run
+ *  - opt-in destination forwarding via `--destination-logs` /
+ *    `--destination-traces`
  *  - result is valid JSONC (parses after stripping comments)
  */
 import * as cp from "node:child_process";
@@ -38,7 +42,7 @@ describe("migrate-to-cf-observability codemod", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("replaces an existing observability.logs block in lebiscuit-shape config", () => {
+  it("rewrites a partial observability block to the canonical CF-native shape", () => {
     fs.writeFileSync(
       wranglerPath,
       `{
@@ -64,19 +68,58 @@ describe("migrate-to-cf-observability codemod", () => {
     expect(r.code).toBe(0);
 
     const result = fs.readFileSync(wranglerPath, "utf8");
-    expect(result).toContain('"destinations": ["hyperdx-logs"]');
-    expect(result).toContain('"destinations": ["hyperdx-traces"]');
+    // Master switch present.
+    expect(result).toContain('"enabled": true');
+    // Both leaves present with rates and persist.
+    expect(result).toContain('"head_sampling_rate": 1');
     expect(result).toContain('"head_sampling_rate": 0.1');
-
-    // Result must be valid JSONC.
-    expect(() => JSON.parse(stripJsoncComments(result))).not.toThrow();
-
-    // Original key context preserved.
+    expect(result.match(/"persist": true/g)?.length).toBe(2);
+    // No destinations by default.
+    expect(result).not.toContain('"destinations"');
+    // Original keys preserved.
     expect(result).toContain('"name": "lebiscuit-tanstack"');
     expect(result).toContain('"binding": "DECO_METRICS"');
+    // Result must be valid JSONC.
+    expect(() => JSON.parse(stripJsoncComments(result))).not.toThrow();
   });
 
-  it("appends a new observability block when none exists", () => {
+  it("strips stale HyperDX-style destinations from a config that already has them", () => {
+    fs.writeFileSync(
+      wranglerPath,
+      `{
+  "name": "lebiscuit-tanstack",
+  "main": "./src/worker-entry.ts",
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true,
+      "head_sampling_rate": 1,
+      "persist": true,
+      "destinations": ["hyperdx-logs"]
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.1,
+      "persist": true,
+      "destinations": ["hyperdx-traces"]
+    }
+  }
+}
+`,
+    );
+
+    const r = runCodemod(["--source", tmpDir, "--write"]);
+    expect(r.code).toBe(0);
+
+    const result = fs.readFileSync(wranglerPath, "utf8");
+    expect(result).not.toContain("hyperdx-logs");
+    expect(result).not.toContain("hyperdx-traces");
+    expect(result).not.toContain('"destinations"');
+    expect(() => JSON.parse(stripJsoncComments(result))).not.toThrow();
+  });
+
+  it("appends a canonical observability block when none exists", () => {
     fs.writeFileSync(
       wranglerPath,
       `{
@@ -92,7 +135,10 @@ describe("migrate-to-cf-observability codemod", () => {
 
     const result = fs.readFileSync(wranglerPath, "utf8");
     expect(result).toContain('"observability"');
-    expect(result).toContain('"destinations": ["hyperdx-logs"]');
+    expect(result).toContain('"enabled": true');
+    expect(result).toContain('"head_sampling_rate": 1');
+    expect(result).toContain('"head_sampling_rate": 0.1');
+    expect(result).not.toContain('"destinations"');
     expect(() => JSON.parse(stripJsoncComments(result))).not.toThrow();
   });
 
@@ -114,7 +160,7 @@ describe("migrate-to-cf-observability codemod", () => {
 
     const r = runCodemod(["--source", tmpDir, "--write"]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain("already on CF-native");
+    expect(r.stdout).toContain("already on the canonical CF observability block");
 
     const after2 = fs.readFileSync(wranglerPath, "utf8");
     expect(after2).toBe(after1);
@@ -135,7 +181,7 @@ describe("migrate-to-cf-observability codemod", () => {
     expect(fs.readFileSync(wranglerPath, "utf8")).toBe(before);
   });
 
-  it("respects --logs / --traces / --traces-rate / --persist flags", () => {
+  it("respects --destination-logs / --destination-traces / --traces-rate / --persist flags", () => {
     fs.writeFileSync(
       wranglerPath,
       `{
@@ -148,9 +194,9 @@ describe("migrate-to-cf-observability codemod", () => {
     runCodemod([
       "--source",
       tmpDir,
-      "--logs",
+      "--destination-logs",
       "my-logs",
-      "--traces",
+      "--destination-traces",
       "my-traces",
       "--traces-rate",
       "0.05",
@@ -162,7 +208,7 @@ describe("migrate-to-cf-observability codemod", () => {
     expect(result).toContain('"destinations": ["my-logs"]');
     expect(result).toContain('"destinations": ["my-traces"]');
     expect(result).toContain('"head_sampling_rate": 0.05');
-    // Both blocks set persist:true (no logs-only persist flag).
+    // Both blocks set persist:true.
     const persistTrueCount = (result.match(/"persist": true/g) ?? []).length;
     expect(persistTrueCount).toBe(2);
   });

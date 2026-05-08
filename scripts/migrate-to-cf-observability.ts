@@ -2,15 +2,30 @@
 /**
  * Cloudflare-native observability codemod
  *
- * Rewrites a migrated site's `wrangler.jsonc` so Cloudflare ships
- * `console.*` logs and OTel traces directly to HyperDX (or any other
- * OTLP destination provisioned in the CF dashboard) — replacing the
- * in-Worker OTLP exporter that `@decocms/start` ≤ 4.3.x bundled.
+ * Rewrites a migrated site's `wrangler.jsonc` so the Cloudflare runtime
+ * captures `console.*` logs and auto-instrumented traces directly into
+ * the per-Worker observability dashboard. No in-Worker exporter, no
+ * external destination — the CF dashboard is the destination.
+ *
+ * The canonical block this script writes:
+ *
+ *   "observability": {
+ *     "enabled": true,
+ *     "logs":   { "enabled": true, "invocation_logs": true,
+ *                 "head_sampling_rate": 1, "persist": true },
+ *     "traces": { "enabled": true,
+ *                 "head_sampling_rate": 0.1, "persist": true }
+ *   }
+ *
+ * `enabled: true` at the top level is the master switch — without it
+ * Cloudflare captures nothing, regardless of the sub-block flags.
+ * `persist: true` keeps the data queryable in the CF dashboard
+ * (Workers Logs view + Traces view). Discovered the hard way during the
+ * lebiscuit canary cutover.
  *
  * Behavior:
- *   - dry-run by default — prints the proposed `observability` block
- *     plus a unified diff against the existing one. Safe to run
- *     unattended in CI.
+ *   - dry-run by default — prints a unified diff against the existing
+ *     observability block. Safe in CI.
  *   - `--write` performs the in-place edit. The script:
  *       1. locates the existing `"observability": { ... }` block
  *          (matching balanced braces, JSONC-comment-aware),
@@ -19,26 +34,35 @@
  *          observability key exists yet,
  *       4. validates the result parses as JSON (after stripping
  *          comments) before writing.
- *   - Idempotent: running twice produces the same file.
+ *   - Idempotent: a wrangler.jsonc already on the canonical block is a
+ *     no-op. A wrangler.jsonc with stale HyperDX-style destinations is
+ *     rewritten to drop them.
+ *   - Forwarding to an external destination (an OTel collector for
+ *     ClickHouse, a third-party SaaS, etc.) is opt-in via
+ *     `--destination-logs` / `--destination-traces`. The destination
+ *     itself must be provisioned out-of-band in the CF dashboard.
  *
  * Usage (from a migrated site directory):
  *   npx -p @decocms/start deco-cf-observability                # dry-run
  *   npx -p @decocms/start deco-cf-observability --write        # apply
- *   npx -p @decocms/start deco-cf-observability --logs hyperdx-logs --traces hyperdx-traces --write
+ *
+ *   # Opt-in: also forward to an account-level destination:
+ *   npx -p @decocms/start deco-cf-observability --write \
+ *     --destination-logs my-logs-dest --destination-traces my-traces-dest
  *
  * Options:
- *   --source <dir>   Site directory containing wrangler.jsonc (default: cwd)
- *   --write          Apply the change. Otherwise prints diff and exits.
- *   --logs <name>    Logs destination name (default: "hyperdx-logs")
- *   --traces <name>  Traces destination name (default: "hyperdx-traces")
- *   --traces-rate <r> head_sampling_rate for traces (default: 0.1)
- *   --logs-rate <r>  head_sampling_rate for logs (default: 1.0)
- *   --no-persist     Set persist:false (default — saves CF dashboard storage cost)
- *   --persist        Set persist:true (keep traces/logs in the CF dashboard)
- *   --help, -h       Show this help
+ *   --source <dir>            Site directory containing wrangler.jsonc (default: cwd)
+ *   --write                   Apply the change. Otherwise prints diff and exits 1.
+ *   --destination-logs <n>    Optional CF destination name to forward logs to.
+ *   --destination-traces <n>  Optional CF destination name to forward traces to.
+ *   --traces-rate <r>         head_sampling_rate for traces (default: 0.1)
+ *   --logs-rate <r>           head_sampling_rate for logs   (default: 1.0)
+ *   --no-persist              Set persist:false (do not keep data in CF dashboard)
+ *   --persist                 Set persist:true (default — required if no destination)
+ *   --help, -h                Show this help
  *
  * Exit codes:
- *   0 — no change needed (already CF-native), or dry-run completed
+ *   0 — no change needed (already canonical), or dry-run completed cleanly
  *   1 — change required and `--write` not passed (CI signal)
  *   2 — file invalid / can't parse / can't safely edit
  */
@@ -49,7 +73,9 @@ import * as path from "node:path";
 interface CliOpts {
   source: string;
   write: boolean;
+  /** Optional CF destination slug for logs. Empty = no forwarding. */
   logsDest: string;
+  /** Optional CF destination slug for traces. Empty = no forwarding. */
   tracesDest: string;
   tracesRate: number;
   logsRate: number;
@@ -61,11 +87,13 @@ function parseArgs(argv: string[]): CliOpts {
   const opts: CliOpts = {
     source: ".",
     write: false,
-    logsDest: "hyperdx-logs",
-    tracesDest: "hyperdx-traces",
+    logsDest: "",
+    tracesDest: "",
     tracesRate: 0.1,
     logsRate: 1.0,
-    persist: false,
+    // CF dashboard persistence on by default — without either persist:true
+    // OR a destination, observability data is captured and discarded.
+    persist: true,
     help: false,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -77,11 +105,11 @@ function parseArgs(argv: string[]): CliOpts {
       case "--write":
         opts.write = true;
         break;
-      case "--logs":
-        opts.logsDest = argv[++i] ?? opts.logsDest;
+      case "--destination-logs":
+        opts.logsDest = argv[++i] ?? "";
         break;
-      case "--traces":
-        opts.tracesDest = argv[++i] ?? opts.tracesDest;
+      case "--destination-traces":
+        opts.tracesDest = argv[++i] ?? "";
         break;
       case "--traces-rate":
         opts.tracesRate = Number(argv[++i] ?? opts.tracesRate);
@@ -108,32 +136,34 @@ function showHelp(): void {
   console.log(`
   @decocms/start — Cloudflare-native observability codemod
 
-  Rewrites wrangler.jsonc to ship logs and traces via Cloudflare's
-  platform-managed OTLP export (observability.{logs,traces}.destinations)
-  instead of the in-Worker exporter SDK.
+  Rewrites wrangler.jsonc so Cloudflare captures \`console.*\` logs and
+  auto-instrumented traces directly into the per-Worker dashboard. No
+  in-Worker exporter SDK, no external destination required.
 
   Usage:
     npx -p @decocms/start deco-cf-observability [options]
 
   Options:
-    --source <dir>     Site directory (default: .)
-    --write            Apply the edit. Without it, prints diff and exits 1.
-    --logs <name>      Logs destination (default: hyperdx-logs)
-    --traces <name>    Traces destination (default: hyperdx-traces)
-    --traces-rate <r>  head_sampling_rate for traces (default: 0.1)
-    --logs-rate <r>    head_sampling_rate for logs (default: 1.0)
-    --persist          Keep the dashboard storage tier (default: --no-persist)
-    --help, -h         This message
+    --source <dir>             Site directory (default: .)
+    --write                    Apply the edit. Without it, prints diff and exits 1.
+    --destination-logs <n>     Optional CF destination slug to also forward logs to.
+    --destination-traces <n>   Optional CF destination slug to also forward traces to.
+    --traces-rate <r>          head_sampling_rate for traces (default: 0.1)
+    --logs-rate <r>            head_sampling_rate for logs   (default: 1.0)
+    --persist                  Keep the dashboard storage tier (default)
+    --no-persist               Drop the dashboard tier (only sane when forwarding)
+    --help, -h                 This message
 
   After running with --write you must:
-    1. Provision the destinations in the CF dashboard (one-time per account)
-    2. Deploy the Worker
-    3. Validate signals are landing in HyperDX
-    4. Delete the now-orphaned secrets:
-       wrangler secret delete OTEL_EXPORTER_OTLP_ENDPOINT \\
-                              OTEL_EXPORTER_OTLP_HEADERS \\
-                              OTEL_SAMPLING_CONFIG \\
-                              OTEL_LOG_MIN_SEVERITY
+    1. Deploy the Worker (\`wrangler deploy\`).
+    2. Verify the CF dashboard shows logs + traces within ~5 min:
+         Workers & Pages → <site> → Observability
+    3. If migrating from an older app-side OTLP setup, delete the
+       now-orphaned secrets:
+         wrangler secret delete OTEL_EXPORTER_OTLP_ENDPOINT \\
+                                OTEL_EXPORTER_OTLP_HEADERS \\
+                                OTEL_SAMPLING_CONFIG \\
+                                OTEL_LOG_MIN_SEVERITY
 `);
 }
 
@@ -406,43 +436,93 @@ function findTopLevelObjectEnd(src: string): number | null {
 
 function renderObservabilityBlock(opts: CliOpts, indent = "  "): string {
   const persist = opts.persist;
-  return [
+  const lines: string[] = [
     `"observability": {`,
-    `${indent}// Cloudflare ships console.* output OTLP-encoded to the`,
-    `${indent}// HyperDX destination provisioned at the account level. No`,
-    `${indent}// in-Worker exporter, no flush bug, no subrequest cost.`,
+    `${indent}// Master switch — without enabled:true at the top level CF`,
+    `${indent}// captures nothing, regardless of the sub-block flags.`,
+    `${indent}"enabled": true,`,
+    `${indent}// Cloudflare captures every console.* call from the Worker`,
+    `${indent}// (structured JSON via @decocms/start's logger lands here too).`,
+    `${indent}// persist:true keeps them queryable in the CF dashboard.`,
     `${indent}"logs": {`,
     `${indent}${indent}"enabled": true,`,
     `${indent}${indent}"invocation_logs": true,`,
     `${indent}${indent}"head_sampling_rate": ${opts.logsRate},`,
-    `${indent}${indent}"persist": ${persist},`,
-    `${indent}${indent}"destinations": ["${opts.logsDest}"]`,
+    `${indent}${indent}"persist": ${persist}`,
+  ];
+  if (opts.logsDest) {
+    // Replace the trailing line with a comma'd version, then append the
+    // destinations array. Keeps the block valid JSON either way.
+    lines[lines.length - 1] = `${indent}${indent}"persist": ${persist},`;
+    lines.push(`${indent}${indent}"destinations": ["${opts.logsDest}"]`);
+  }
+  lines.push(
     `${indent}},`,
-    `${indent}// Auto-instruments fetch/KV/R2/DO + picks up @opentelemetry/api`,
-    `${indent}// global tracer spans (the bridge instrumentWorker installs).`,
-    `${indent}// Sampling is one global rate per Worker; URL-pattern sampling`,
-    `${indent}// requires opting back into the URLBasedSampler escape hatch.`,
+    `${indent}// Cloudflare auto-instruments fetch/KV/R2/DO subrequests and`,
+    `${indent}// also picks up @opentelemetry/api global-tracer spans the`,
+    `${indent}// framework's withTracing() helper emits.`,
     `${indent}"traces": {`,
     `${indent}${indent}"enabled": true,`,
     `${indent}${indent}"head_sampling_rate": ${opts.tracesRate},`,
-    `${indent}${indent}"persist": ${persist},`,
-    `${indent}${indent}"destinations": ["${opts.tracesDest}"]`,
-    `${indent}}`,
-    `}`,
-  ].join("\n");
+    `${indent}${indent}"persist": ${persist}`,
+  );
+  if (opts.tracesDest) {
+    lines[lines.length - 1] = `${indent}${indent}"persist": ${persist},`;
+    lines.push(`${indent}${indent}"destinations": ["${opts.tracesDest}"]`);
+  }
+  lines.push(`${indent}}`, `}`);
+  return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------------
-// Detect "already CF-native"
+// Detect "already canonical"
 // ---------------------------------------------------------------------------
 
-function isAlreadyCfNative(src: string, opts: CliOpts): boolean {
-  // Cheap heuristic: the file mentions both destinations (under either
-  // logs or traces) and a `head_sampling_rate`. A more thorough parse
-  // is overkill for an idempotency check.
-  if (!src.includes(`"destinations"`)) return false;
-  if (!src.includes(opts.logsDest) && !src.includes(opts.tracesDest)) return false;
-  if (!src.includes("head_sampling_rate")) return false;
+/**
+ * A wrangler.jsonc is considered canonical when it has the master
+ * `enabled: true` switch under `observability`, both `logs` and
+ * `traces` sub-blocks present, AND the `destinations` arrays match
+ * what `--destination-logs` / `--destination-traces` requested (which
+ * is "absent" by default). This means a stale HyperDX-style
+ * destination array always triggers a rewrite even if the rest of the
+ * shape happens to match.
+ */
+function isAlreadyCanonical(src: string, opts: CliOpts): boolean {
+  // Fast structural checks — full JSONC parse only if they pass.
+  if (!src.includes(`"observability"`)) return false;
+  if (!src.includes(`"enabled": true`) && !src.includes(`"enabled":true`)) {
+    return false;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripJsoncComments(src));
+  } catch {
+    return false;
+  }
+  if (!parsed || typeof parsed !== "object") return false;
+  const obs = (parsed as Record<string, unknown>).observability;
+  if (!obs || typeof obs !== "object") return false;
+  const obsObj = obs as Record<string, unknown>;
+  if (obsObj.enabled !== true) return false;
+
+  const checkLeaf = (leaf: unknown, expectedDest: string): boolean => {
+    if (!leaf || typeof leaf !== "object") return false;
+    const l = leaf as Record<string, unknown>;
+    if (l.enabled !== true) return false;
+    const dests = l.destinations;
+    if (expectedDest === "") {
+      // Caller wants no destinations. Tolerate either absent or an
+      // empty array; reject any non-empty array.
+      if (dests === undefined) return true;
+      return Array.isArray(dests) && dests.length === 0;
+    }
+    if (!Array.isArray(dests) || dests.length !== 1) return false;
+    return dests[0] === expectedDest;
+  };
+
+  if (!checkLeaf(obsObj.logs, opts.logsDest)) return false;
+  if (!checkLeaf(obsObj.traces, opts.tracesDest)) return false;
   return true;
 }
 
@@ -534,8 +614,11 @@ function applyEdit(src: string, opts: CliOpts): string {
   if (end == null) {
     throw new Error("wrangler.jsonc: could not locate top-level closing `}`");
   }
-  // Determine if we need a leading comma on the new key.
-  const insertAt = end;
+  // Walk back from the closing `}` over whitespace to find the last
+  // non-whitespace character. We splice in two pieces:
+  //  - the comma (if needed) goes immediately AFTER that char so it
+  //    sits on the same line as the prior key, not on a line of its own
+  //  - the new key + value goes right before the closing `}`
   let scan = end - 1;
   while (scan >= 0 && /\s/.test(src[scan])) scan--;
   const prevChar = scan >= 0 ? src[scan] : "";
@@ -545,8 +628,16 @@ function applyEdit(src: string, opts: CliOpts): string {
     .split("\n")
     .map((l) => baseIndent + l)
     .join("\n");
-  const insertion = `${needsComma ? "," : ""}\n${indented}\n`;
-  return src.slice(0, insertAt) + insertion + src.slice(insertAt);
+  if (needsComma) {
+    const commaInsertAt = scan + 1;
+    const before = `${src.slice(0, commaInsertAt)},`;
+    // Preserve any whitespace/newlines that were between the prior key
+    // and the closing `}` so the new block lines up under existing
+    // indentation conventions.
+    const between = src.slice(commaInsertAt, end);
+    return `${before}${between}${indented}\n${src.slice(end)}`;
+  }
+  return `${src.slice(0, end)}${indented}\n${src.slice(end)}`;
 }
 
 function main(): void {
@@ -563,8 +654,8 @@ function main(): void {
 
   const before = fs.readFileSync(wranglerPath, "utf8");
 
-  if (isAlreadyCfNative(before, opts)) {
-    console.log(`✓ ${wranglerPath} already on CF-native observability — no change.`);
+  if (isAlreadyCanonical(before, opts)) {
+    console.log(`${wranglerPath} already on the canonical CF observability block — no change.`);
     process.exit(0);
   }
 
@@ -590,21 +681,18 @@ function main(): void {
   }
 
   fs.writeFileSync(wranglerPath, after, "utf8");
-  console.log(`✓ wrote ${wranglerPath}`);
+  console.log(`wrote ${wranglerPath}`);
   console.log(`
   Next steps:
-    1. (one-time per CF account) provision destinations in the dashboard:
-       Logs:   ${opts.logsDest}   → HyperDX OTLP /v1/logs   + Authorization header
-       Traces: ${opts.tracesDest} → HyperDX OTLP /v1/traces + Authorization header
-    2. wrangler deploy
-    3. Verify in HyperDX:
-       service:<your-site-name> AND SeverityNumber:*  →  log records arriving
-       service:<your-site-name> AND duration:*        →  spans arriving
-    4. Delete now-orphaned secrets:
-       wrangler secret delete OTEL_EXPORTER_OTLP_ENDPOINT \\
-                              OTEL_EXPORTER_OTLP_HEADERS \\
-                              OTEL_SAMPLING_CONFIG \\
-                              OTEL_LOG_MIN_SEVERITY
+    1. wrangler deploy
+    2. Verify CF dashboard captures logs + traces (~5 min):
+         Workers & Pages → <site> → Observability
+    3. If migrating from an older app-side OTLP setup, delete the
+       now-orphaned secrets:
+         wrangler secret delete OTEL_EXPORTER_OTLP_ENDPOINT \\
+                                OTEL_EXPORTER_OTLP_HEADERS \\
+                                OTEL_SAMPLING_CONFIG \\
+                                OTEL_LOG_MIN_SEVERITY
 `);
 }
 
