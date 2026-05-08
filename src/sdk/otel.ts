@@ -42,15 +42,24 @@ import { type Resource, resourceFromAttributes } from "@opentelemetry/resources"
 
 import { configureMeter, configureTracer } from "../middleware/observability";
 import { createCompositeLogger, createCompositeMeter } from "./composite";
-import { configureLogger, defaultLoggerAdapter, logger } from "./logger";
+import { configureLogger, defaultLoggerAdapter, type LogLevel, logger } from "./logger";
 import {
   createAnalyticsEngineMeterAdapter,
   createOtelLoggerAdapter,
   createOtelMeterAdapter,
+  flushOtelProviders,
   setRuntimeEnv,
 } from "./otelAdapters";
 import { RequestContext } from "./requestContext";
 import { createUrlBasedHeadSampler, decodeSamplingConfig } from "./sampler";
+
+const VALID_LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
+
+function parseLogLevel(value: unknown): LogLevel | undefined {
+  if (typeof value !== "string") return undefined;
+  const lc = value.toLowerCase();
+  return VALID_LOG_LEVELS.find((l) => l === lc);
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -69,6 +78,15 @@ export interface OtelOptions {
   analyticsEngineEnabled?: boolean;
   /** Push interval for OTLP metrics, in ms. Defaults to env.OTEL_EXPORT_INTERVAL or 60_000. */
   metricsExportIntervalMillis?: number;
+  /**
+   * Minimum severity to forward to OTLP logs (HyperDX). Below the floor
+   * the framework still writes a structured JSON line to `console.*`
+   * (Cloudflare Workers Logs), so nothing is silently lost.
+   *
+   * Defaults to `"warn"`. Falls back to env `OTEL_LOG_MIN_SEVERITY` when
+   * unset. Set to `"debug"` to forward everything.
+   */
+  otlpMinSeverity?: LogLevel;
   /**
    * Version of `@decocms/start` to advertise as `deco.runtime.version`.
    * Falls back to a build-time constant; override only for tests.
@@ -179,12 +197,27 @@ export function instrumentWorker(
         return handler.fetch(request, env, ctx);
       };
 
-      // RequestContext may already be active (createDecoWorkerEntry sets it
-      // up). If so, run inline; otherwise wrap. Cheap to detect via current.
-      if (RequestContext.current) {
-        return wrap();
+      try {
+        // RequestContext may already be active (createDecoWorkerEntry sets it
+        // up). If so, run inline; otherwise wrap. Cheap to detect via current.
+        if (RequestContext.current) {
+          return await wrap();
+        }
+        return await RequestContext.run(request, wrap);
+      } finally {
+        // Drain OTLP logger + meter batches inside the post-response window
+        // the platform guarantees via `waitUntil`. Without this hook,
+        // BatchLogRecordProcessor (5s flush) and PeriodicExportingMetricReader
+        // (60s flush) batches usually die with the isolate before the timer
+        // fires and never reach HyperDX. `flushOtelProviders` is a no-op when
+        // OTLP isn't configured, so this is safe in every code path.
+        try {
+          ctx.waitUntil(flushOtelProviders());
+        } catch {
+          // `waitUntil` only throws if `ctx` isn't a real ExecutionContext
+          // (e.g. test stubs). Telemetry flush failures are not request-fatal.
+        }
       }
-      return RequestContext.run(request, wrap);
     },
   };
 
@@ -216,6 +249,9 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
   });
 
   // ---- Logger ----------------------------------------------------------
+  const otlpMinSeverity =
+    opts.otlpMinSeverity ?? parseLogLevel(env.OTEL_LOG_MIN_SEVERITY) ?? "warn";
+
   const otelLogger =
     otlpEndpoint != null
       ? createOtelLoggerAdapter({
@@ -223,6 +259,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
           headers: otlpHeaders,
           resource,
           name: serviceName,
+          minSeverity: otlpMinSeverity,
         })
       : null;
 
@@ -262,6 +299,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
   logger.info("observability booted", {
     service: serviceName,
     otlp: Boolean(otlpEndpoint),
+    otlpMinSeverity: otlpEndpoint != null ? otlpMinSeverity : null,
     analyticsEngine: aeEnabled,
     sampling: Boolean(env.OTEL_SAMPLING_CONFIG),
     runtimeVersion: opts.decoRuntimeVersion ?? DECO_RUNTIME_VERSION,

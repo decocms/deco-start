@@ -60,9 +60,11 @@ export {
   createAnalyticsEngineMeterAdapter,
   createOtelLoggerAdapter,
   createOtelMeterAdapter,
+  flushOtelProviders,
   getRuntimeEnv,
   type OtelLoggerAdapterOptions,
   type OtelMeterAdapterOptions,
+  registerOtelFlushHandler,
   setRuntimeEnv,
 } from "./otelAdapters";
 // Sampler

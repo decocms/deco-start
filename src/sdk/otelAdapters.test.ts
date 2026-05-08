@@ -1,8 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { LoggerProvider } from "@opentelemetry/sdk-logs";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  _getFlushHandlerCountForTests,
+  _resetFlushHandlersForTests,
   createAnalyticsEngineMeterAdapter,
   createOtelLoggerAdapter,
   createOtelMeterAdapter,
+  flushOtelProviders,
+  registerOtelFlushHandler,
   setRuntimeEnv,
 } from "./otelAdapters";
 import { RequestContext } from "./requestContext";
@@ -40,7 +45,13 @@ describe("createOtelLoggerAdapter / createOtelMeterAdapter", () => {
   });
 
   it("logs without throwing for a variety of attribute shapes", () => {
-    const log = createOtelLoggerAdapter({ endpoint: "https://otel.example.invalid" });
+    // minSeverity:"debug" so the test exercises the actual emit path; the
+    // default "warn" floor would short-circuit before the OTel emit runs
+    // and the attribute-sanitization branch wouldn't be hit.
+    const log = createOtelLoggerAdapter({
+      endpoint: "https://otel.example.invalid",
+      minSeverity: "debug",
+    });
     expect(log).not.toBeNull();
     expect(() =>
       log!.log("info", "ok", {
@@ -55,6 +66,131 @@ describe("createOtelLoggerAdapter / createOtelMeterAdapter", () => {
         sym: Symbol("s") as unknown as string,
       }),
     ).not.toThrow();
+  });
+});
+
+describe("createOtelLoggerAdapter — minSeverity floor", () => {
+  // Every call to `createOtelLoggerAdapter` constructs its own local
+  // `LoggerProvider`. The OTel global provider is set the first time
+  // (`setGlobalLoggerProvider` is "first wins"), so spying on the global
+  // doesn't observe later adapters' emits. Spying on the *prototype*
+  // sidesteps that — every provider instance, local or global, returns
+  // the same fake logger and we can count emits across all of them.
+  let emitSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    _resetFlushHandlersForTests();
+    emitSpy = vi.fn();
+    vi.spyOn(LoggerProvider.prototype, "getLogger").mockReturnValue({
+      emit: emitSpy,
+    } as unknown as ReturnType<LoggerProvider["getLogger"]>);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    _resetFlushHandlersForTests();
+  });
+
+  function makeAdapter(minSeverity?: "debug" | "info" | "warn" | "error") {
+    const adapter = createOtelLoggerAdapter({
+      endpoint: "https://otel.example.invalid",
+      headers: { authorization: "test" },
+      ...(minSeverity ? { minSeverity } : {}),
+    });
+    expect(adapter).not.toBeNull();
+    return adapter!;
+  }
+
+  it("defaults to 'warn' — drops debug + info, keeps warn + error", () => {
+    const adapter = makeAdapter(undefined);
+    adapter.log("debug", "d");
+    adapter.log("info", "i");
+    adapter.log("warn", "w");
+    adapter.log("error", "e");
+    expect(emitSpy).toHaveBeenCalledTimes(2);
+    expect(emitSpy.mock.calls[0]?.[0].severityText).toBe("WARN");
+    expect(emitSpy.mock.calls[1]?.[0].severityText).toBe("ERROR");
+  });
+
+  it("explicit minSeverity='debug' lets every level through", () => {
+    const adapter = makeAdapter("debug");
+    adapter.log("debug", "d");
+    adapter.log("info", "i");
+    adapter.log("warn", "w");
+    adapter.log("error", "e");
+    expect(emitSpy).toHaveBeenCalledTimes(4);
+  });
+
+  it("explicit minSeverity='error' only forwards error", () => {
+    const adapter = makeAdapter("error");
+    adapter.log("debug", "d");
+    adapter.log("info", "i");
+    adapter.log("warn", "w");
+    adapter.log("error", "e");
+    expect(emitSpy).toHaveBeenCalledTimes(1);
+    expect(emitSpy.mock.calls[0]?.[0].severityText).toBe("ERROR");
+  });
+});
+
+describe("flushOtelProviders / registerOtelFlushHandler", () => {
+  beforeEach(() => _resetFlushHandlersForTests());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    _resetFlushHandlersForTests();
+  });
+
+  it("resolves immediately when no handlers are registered", async () => {
+    expect(_getFlushHandlerCountForTests()).toBe(0);
+    await expect(flushOtelProviders()).resolves.toBeUndefined();
+  });
+
+  it("invokes every registered handler exactly once", async () => {
+    const a = vi.fn(() => Promise.resolve());
+    const b = vi.fn(() => Promise.resolve());
+    registerOtelFlushHandler(a);
+    registerOtelFlushHandler(b);
+    expect(_getFlushHandlerCountForTests()).toBe(2);
+    await flushOtelProviders();
+    expect(a).toHaveBeenCalledOnce();
+    expect(b).toHaveBeenCalledOnce();
+  });
+
+  it("does NOT reject when a handler throws — uses Promise.allSettled", async () => {
+    const ok = vi.fn(() => Promise.resolve());
+    const fail = vi.fn(() => Promise.reject(new Error("OTLP 503")));
+    registerOtelFlushHandler(fail);
+    registerOtelFlushHandler(ok);
+    // Must resolve, not throw — flush failures are telemetry incidents,
+    // not request incidents. This is the surface contract callers rely on.
+    await expect(flushOtelProviders()).resolves.toBeUndefined();
+    expect(ok).toHaveBeenCalledOnce();
+    expect(fail).toHaveBeenCalledOnce();
+  });
+
+  it("createOtelLoggerAdapter registers exactly one flush handler", () => {
+    const before = _getFlushHandlerCountForTests();
+    const adapter = createOtelLoggerAdapter({
+      endpoint: "https://otel.example.invalid",
+    });
+    expect(adapter).not.toBeNull();
+    expect(_getFlushHandlerCountForTests()).toBe(before + 1);
+  });
+
+  it("createOtelMeterAdapter registers exactly one flush handler", () => {
+    const before = _getFlushHandlerCountForTests();
+    const meter = createOtelMeterAdapter({
+      endpoint: "https://otel.example.invalid",
+      exportIntervalMillis: 60_000,
+    });
+    expect(meter).not.toBeNull();
+    expect(_getFlushHandlerCountForTests()).toBe(before + 1);
+  });
+
+  it("returning-null factories register no handlers", () => {
+    expect(_getFlushHandlerCountForTests()).toBe(0);
+    createOtelLoggerAdapter(null);
+    createOtelLoggerAdapter({ endpoint: "" });
+    createOtelMeterAdapter(null);
+    expect(_getFlushHandlerCountForTests()).toBe(0);
   });
 });
 

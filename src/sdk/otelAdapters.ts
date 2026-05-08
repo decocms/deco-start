@@ -40,6 +40,56 @@ import type { LoggerAdapter, LogLevel } from "./logger";
 import { RequestContext } from "./requestContext";
 
 // ---------------------------------------------------------------------------
+// Flush registry — per-request `ctx.waitUntil` hook target
+// ---------------------------------------------------------------------------
+
+/**
+ * Cloudflare Workers isolates are recycled aggressively (often before the
+ * next 5s `BatchLogRecordProcessor` tick or 60s `PeriodicExportingMetricReader`
+ * tick fires). Without a per-request flush, in-memory log/metric batches die
+ * with the isolate and never reach OTLP — observable as "spans show up in
+ * HyperDX, logs and metrics don't".
+ *
+ * Each OTLP adapter registers a `forceFlush` handler here at construction
+ * time. `instrumentWorker` calls `flushOtelProviders()` from
+ * `ctx.waitUntil(...)` after every response so the batch is drained inside
+ * the post-response window the platform guarantees.
+ *
+ * The registry is module-scoped (one entry per provider, not per request)
+ * and survives worker reloads — the boot guard in `bootObservability`
+ * prevents duplicate registration in steady state. Tests must call
+ * `_resetFlushHandlersForTests()` between fixtures to avoid leakage.
+ */
+const flushHandlers: Array<() => Promise<unknown>> = [];
+
+/** Register a `forceFlush()`-style handler. Idempotency is the caller's problem. */
+export function registerOtelFlushHandler(fn: () => Promise<unknown>): void {
+  flushHandlers.push(fn);
+}
+
+/**
+ * Drain every registered OTLP provider in parallel. Resolves once they
+ * all settle — never rejects, because flush failures are telemetry
+ * incidents, not request incidents.
+ *
+ * Safe to call when no adapters are registered (returns immediately).
+ */
+export async function flushOtelProviders(): Promise<void> {
+  if (flushHandlers.length === 0) return;
+  await Promise.allSettled(flushHandlers.map((fn) => fn()));
+}
+
+/** Test-only: clear the flush registry between fixtures. Do not call from app code. */
+export function _resetFlushHandlersForTests(): void {
+  flushHandlers.length = 0;
+}
+
+/** Test-only: introspect the registry size. Do not call from app code. */
+export function _getFlushHandlerCountForTests(): number {
+  return flushHandlers.length;
+}
+
+// ---------------------------------------------------------------------------
 // Env / binding access
 // ---------------------------------------------------------------------------
 
@@ -79,13 +129,37 @@ export interface OtelLoggerAdapterOptions {
   resource?: Resource;
   /** OTel logger name. Defaults to "@decocms/start". */
   name?: string;
+  /**
+   * Minimum severity to forward to OTLP. Calls below this floor are dropped
+   * by this adapter (and therefore don't ship to HyperDX or any other OTLP
+   * sink), but the framework's default console adapter still sees them, so
+   * they remain visible in Cloudflare Workers Logs.
+   *
+   * Defaults to `"warn"`. The reasoning: in Cloudflare Workers every OTLP
+   * emit eventually becomes an outbound subrequest (after batching). Routine
+   * `info` chatter compounded over many isolates can exhaust either the
+   * subrequest budget (if a hot loop logs) or the HyperDX log-ingest quota.
+   * Warn+ keeps the trace ↔ log correlation that matters during incidents
+   * without ingesting noise that's already captured by Cloudflare Logs.
+   *
+   * Override per-site via `OtelOptions.otlpMinSeverity` or the
+   * `OTEL_LOG_MIN_SEVERITY` env var. Set to `"debug"` to forward everything.
+   */
+  minSeverity?: LogLevel;
 }
 
 /**
- * Streams `logger.*` calls to an OTLP/HTTP logs endpoint (e.g. HyperDX).
+ * Streams `logger.*` calls (at or above `minSeverity`) to an OTLP/HTTP logs
+ * endpoint (e.g. HyperDX).
  *
  * Returns `null` when no endpoint is configured — `instrumentWorker()`
  * uses that signal to skip registering this adapter.
+ *
+ * Side effect: registers the underlying `LoggerProvider`'s `forceFlush()`
+ * with `registerOtelFlushHandler` so per-request hooks in `instrumentWorker`
+ * can drain the batch before the Workers isolate is recycled. Without that
+ * registration, `BatchLogRecordProcessor`'s 5s timer rarely fires before
+ * GC and log records are silently dropped.
  */
 export function createOtelLoggerAdapter(
   options: OtelLoggerAdapterOptions | null,
@@ -101,6 +175,7 @@ export function createOtelLoggerAdapter(
     resource: options.resource,
   });
   provider.addLogRecordProcessor(new BatchLogRecordProcessor(exporter));
+  registerOtelFlushHandler(() => provider.forceFlush());
 
   // Register globally so `@opentelemetry/api-logs` consumers (if any)
   // also pick it up. Idempotent — safe across multiple worker reloads.
@@ -111,10 +186,12 @@ export function createOtelLoggerAdapter(
   }
 
   const otelLogger = provider.getLogger(options.name ?? "@decocms/start");
+  const minSev = SEVERITY[options.minSeverity ?? "warn"].number;
 
   return {
     log(level, msg, attrs) {
       const sev = SEVERITY[level];
+      if (sev.number < minSev) return;
       otelLogger.emit({
         severityNumber: sev.number,
         severityText: sev.text,
@@ -229,6 +306,11 @@ export function createOtelMeterAdapter(
     readers: [reader],
     views,
   });
+  // See `flushHandlers` registry comment — `PeriodicExportingMetricReader`
+  // ticks every `exportIntervalMillis` (default 60s); without per-request
+  // forceFlush the metric batch typically dies with the Workers isolate
+  // before its first scheduled tick.
+  registerOtelFlushHandler(() => provider.forceFlush());
 
   try {
     metricsApi.setGlobalMeterProvider(provider);
