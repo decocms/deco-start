@@ -1,13 +1,24 @@
 name: Release
 
 # GOTCHA: GitHub Actions silently skips this workflow when the head
-# commit message contains `[skip ci]` ANYWHERE — including in the
-# body or in quoted text describing other commits. Be especially
-# careful when documenting expected `chore(release): X.Y.Z [skip ci]`
-# behaviour in a PR body or commit message; that string in the
-# squash-merge commit will suppress the next release run.
-# Recover with a no-op commit (or any commit whose message does NOT
-# contain the literal `[skip ci]` token).
+# commit message contains the canonical CI-skip token (the bracketed
+# phrase "skip" + "ci") ANYWHERE in the message — title or body,
+# inside backticks, inside code blocks, doesn't matter. The
+# semantic-release release commit emits that token by design (so its
+# own commit doesn't loop a release back through CI). Side effect:
+# any PR that DESCRIBES that release commit verbatim in its body
+# inherits the token through the squash-merge and silently skips
+# the next release.
+#
+# When writing a commit message or PR body that needs to reference
+# the suppression behaviour, refer to it descriptively (e.g. "the
+# semantic-release skip token") instead of pasting the literal.
+#
+# Recover with a no-op commit whose entire message — title and body
+# — does NOT contain the literal token.
+#
+# References:
+#  - https://docs.github.com/en/actions/managing-workflow-runs/skipping-workflow-runs
 
 on:
   push:
