@@ -89,11 +89,41 @@ let activeAdapter: LoggerAdapter = defaultLoggerAdapter;
 let minLevel: LogLevel = "info";
 
 /**
+ * Per-record attribute floor — merged into every log line BEFORE the
+ * caller's `attrs` (caller wins). Used to stamp `deco.runtime.version`,
+ * `deco.apps.version`, `deployment.environment` on every log so HyperDX
+ * panels filtering on these dimensions keep working under
+ * Cloudflare-managed log export (which otherwise strips our resource
+ * attributes — only the JSON record body survives).
+ *
+ * Set via `setLoggerAttributeFloor(...)` at boot from
+ * `instrumentWorker()`. Default empty so the logger is a no-op for sites
+ * that don't wire `instrumentWorker`.
+ */
+let attributeFloor: Record<string, unknown> = {};
+
+/**
  * Replace the active logger adapter.
  * Call once at worker boot from `instrumentWorker()`.
  */
 export function configureLogger(adapter: LoggerAdapter): void {
   activeAdapter = adapter;
+}
+
+/**
+ * Replace the per-record attribute floor — keys here will be added to
+ * every log line UNLESS the caller passes the same key in their `attrs`
+ * (caller wins). Set once at worker boot from `instrumentWorker()`.
+ */
+export function setLoggerAttributeFloor(attrs: Record<string, unknown>): void {
+  attributeFloor = { ...attrs };
+}
+
+/**
+ * Test-only: read the current attribute floor. Do not call from app code.
+ */
+export function _getLoggerAttributeFloorForTests(): Record<string, unknown> {
+  return { ...attributeFloor };
 }
 
 /**
@@ -197,13 +227,21 @@ export function serializeError(err: unknown): SerializedError {
 
 function emit(level: LogLevel, msg: string, attrs?: Record<string, unknown>): void {
   if (!shouldLog(level)) return;
+  // Merge floor → caller attrs so caller can override any floor key.
+  // Skipped entirely when the floor is empty so the no-op path stays cheap.
+  const merged: Record<string, unknown> | undefined =
+    Object.keys(attributeFloor).length === 0
+      ? attrs
+      : attrs
+        ? { ...attributeFloor, ...attrs }
+        : { ...attributeFloor };
   try {
-    activeAdapter.log(level, msg, attrs);
+    activeAdapter.log(level, msg, merged);
   } catch {
     // Adapter blew up. Fall back to default so we don't lose the line.
     if (activeAdapter !== defaultLoggerAdapter) {
       try {
-        defaultLoggerAdapter.log(level, msg, attrs);
+        defaultLoggerAdapter.log(level, msg, merged);
       } catch {
         /* swallow */
       }

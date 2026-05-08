@@ -2,47 +2,66 @@
  * Single observability entry point for `@decocms/start` on Cloudflare Workers.
  *
  * `instrumentWorker(handler, options)` wraps a Worker handler with:
- *  - structured JSON logger (stdout → Cloudflare Logs / Logpush) — always
- *  - OTLP/HTTP logs exporter (HyperDX) — when `OTEL_EXPORTER_OTLP_ENDPOINT` is set
- *  - OTLP/HTTP metrics exporter (HyperDX) — same condition
+ *  - structured JSON logger (stdout → Cloudflare Workers Logs) — always
  *  - Workers Analytics Engine metrics — when `env.DECO_METRICS` binding exists
- *  - OTel traces via `@microlabs/otel-cf-workers` — when OTLP endpoint is set,
- *    or always-on for the framework's internal `withTracing()` calls.
- *  - URL-based head sampler from `OTEL_SAMPLING_CONFIG`
- *  - OTel `Resource` with service.* / cloud.* / deployment.environment /
- *    deco.runtime.version attributes
+ *  - OTLP/HTTP metrics exporter (HyperDX) — when `OTEL_EXPORTER_OTLP_ENDPOINT`
+ *    is set (CF doesn't support OTLP metrics export yet, so this stays app-side)
+ *  - Per-request `ctx.waitUntil(forceFlush)` for any registered OTel batch
+ *    processors so log/metric batches don't die with the isolate
+ *  - Bridges framework-internal `withTracing()` calls onto the global
+ *    `@opentelemetry/api` tracer, stamping `deco.*` attributes on every span
+ *    so they survive Cloudflare's platform-managed trace export
  *
- * Removing HyperDX = unsetting `OTEL_EXPORTER_OTLP_ENDPOINT`. The console-JSON
- * logger and AE metrics keep flowing — this is the "no vendor lock-in" guarantee.
+ * **Logs and traces export to HyperDX is now handled by Cloudflare** via the
+ * `observability.{logs,traces}.destinations` block in `wrangler.jsonc`. CF
+ * captures `console.*` output and `@opentelemetry/api` global tracer spans
+ * out-of-band and ships them OTLP-encoded to whatever destination is
+ * configured. This eliminates the in-Worker exporter SDK, the per-request
+ * subrequest cost of pushing OTLP, and the entire class of bug PR #153 fixed
+ * (batch processors that never flush before isolate recycling).
  *
  * @example
  * ```ts
+ * // worker-entry.ts
  * import { createDecoWorkerEntry } from "@decocms/start/sdk/workerEntry";
  * import { instrumentWorker } from "@decocms/start/sdk/otel";
  *
  * const handler = createDecoWorkerEntry(serverEntry, options);
- *
  * export default instrumentWorker(handler, { serviceName: "my-store" });
  * ```
  *
- * Wrangler bindings to add when enabling OTLP + AE:
+ * Companion `wrangler.jsonc` block (run `scripts/migrate-to-cf-observability.ts`
+ * to inject this automatically):
  * ```jsonc
- * "version_metadata":         { "binding": "CF_VERSION_METADATA" },
- * "analytics_engine_datasets": [{ "binding": "DECO_METRICS", "dataset": "deco_metrics_my_site" }]
+ * "observability": {
+ *   "logs":   { "enabled": true, "destinations": ["hyperdx-logs"],
+ *               "head_sampling_rate": 1.0, "persist": false },
+ *   "traces": { "enabled": true, "destinations": ["hyperdx-traces"],
+ *               "head_sampling_rate": 0.1, "persist": false }
+ * },
+ * "version_metadata":          { "binding": "CF_VERSION_METADATA" },
+ * "analytics_engine_datasets": [{ "binding": "DECO_METRICS",
+ *                                 "dataset":  "deco_metrics_my_site" }]
  * ```
  *
- * Required Worker secrets when OTLP is enabled:
- *   wrangler secret put OTEL_EXPORTER_OTLP_ENDPOINT  # https://in-otel.hyperdx.io
- *   wrangler secret put OTEL_EXPORTER_OTLP_HEADERS   # authorization=<token>
+ * **Back-compat seam.** Sites that need to keep app-side OTLP log export
+ * (custom destination not covered by CF, custom batching, etc.) can opt back
+ * in with `enableAppSideOtlpLogs: true` and the existing `OTEL_EXPORTER_OTLP_*`
+ * secrets. Slated for removal in 5.0.0.
  */
 
-import { instrument, type ResolveConfigFn } from "@microlabs/otel-cf-workers";
 import { trace } from "@opentelemetry/api";
 import { type Resource, resourceFromAttributes } from "@opentelemetry/resources";
 
 import { configureMeter, configureTracer } from "../middleware/observability";
 import { createCompositeLogger, createCompositeMeter } from "./composite";
-import { configureLogger, defaultLoggerAdapter, type LogLevel, logger } from "./logger";
+import {
+  configureLogger,
+  defaultLoggerAdapter,
+  type LogLevel,
+  logger,
+  setLoggerAttributeFloor,
+} from "./logger";
 import {
   createAnalyticsEngineMeterAdapter,
   createOtelLoggerAdapter,
@@ -51,7 +70,6 @@ import {
   setRuntimeEnv,
 } from "./otelAdapters";
 import { RequestContext } from "./requestContext";
-import { createUrlBasedHeadSampler, decodeSamplingConfig } from "./sampler";
 
 const VALID_LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
 
@@ -79,20 +97,38 @@ export interface OtelOptions {
   /** Push interval for OTLP metrics, in ms. Defaults to env.OTEL_EXPORT_INTERVAL or 60_000. */
   metricsExportIntervalMillis?: number;
   /**
-   * Minimum severity to forward to OTLP logs (HyperDX). Below the floor
-   * the framework still writes a structured JSON line to `console.*`
-   * (Cloudflare Workers Logs), so nothing is silently lost.
+   * Minimum severity to forward to the **app-side OTLP** logger (only
+   * relevant when `enableAppSideOtlpLogs: true`). The default `console.*`
+   * adapter is unaffected and continues to capture every level for
+   * Cloudflare Workers Logs / CF-side OTLP export.
    *
    * Defaults to `"warn"`. Falls back to env `OTEL_LOG_MIN_SEVERITY` when
    * unset. Set to `"debug"` to forward everything.
    */
   otlpMinSeverity?: LogLevel;
   /**
-   * Version of `@decocms/start` to advertise as `deco.runtime.version`.
+   * Opt-in: also wire an in-Worker OTLP logger that pushes log records to
+   * `OTEL_EXPORTER_OTLP_ENDPOINT`. Defaults to `false` — sites should
+   * prefer the platform-managed CF-side path
+   * (`observability.logs.destinations` in `wrangler.jsonc`), which is
+   * cheaper, has no flush-bug class, and consumes zero subrequest budget.
+   *
+   * Use this only when CF's OTLP logs export doesn't meet a specific need
+   * (e.g. shipping to a destination CF doesn't support, custom batching,
+   * staging-only debugging). Requires `OTEL_EXPORTER_OTLP_ENDPOINT` and
+   * `OTEL_EXPORTER_OTLP_HEADERS` to be set.
+   *
+   * Slated for removal in 5.0.0.
+   */
+  enableAppSideOtlpLogs?: boolean;
+  /**
+   * Version of `@decocms/start` to advertise as `deco.runtime.version`
+   * on every span (CF doesn't preserve it as a resource attribute since
+   * we no longer ship our own resource — we stamp it per-span instead).
    * Falls back to a build-time constant; override only for tests.
    */
   decoRuntimeVersion?: string;
-  /** Optional `@decocms/apps` version, advertised as `deco.apps.version`. */
+  /** Optional `@decocms/apps` version, stamped as `deco.apps.version` on every span. */
   decoAppsVersion?: string;
 }
 
@@ -124,25 +160,59 @@ interface BootState {
 
 let bootState: BootState | null = null;
 
+/**
+ * Per-span attribute floor — stamped on every span we create via
+ * `configureTracer().startSpan(...)`. These match what the legacy resource
+ * attributes used to carry (when `@microlabs/otel-cf-workers` shipped its
+ * own OTel `Resource`); we now stamp them on each span so HyperDX panels
+ * filtering on `deco.runtime.version`, `deco.apps.version`, or
+ * `deployment.environment` keep working with CF-managed export, which only
+ * preserves CF's own resource attribute set (`service.name`, `faas.name`,
+ * `cloudflare.script_version.id`, etc.).
+ *
+ * Populated by `bootObservability` before any span is created. Stays an
+ * empty object until then so early span creation is a no-op stamp.
+ */
+let spanAttributeFloor: Record<string, string> = {};
+
 // ---------------------------------------------------------------------------
 // instrumentWorker
 // ---------------------------------------------------------------------------
 
 /**
- * Wraps a Cloudflare Worker handler with the full @decocms/start
- * observability stack. Idempotent — calling twice on the same handler
- * is a no-op (returns the already-instrumented handler).
+ * Wraps a Cloudflare Worker handler with the @decocms/start observability
+ * stack:
+ *  - structured JSON logger (always)
+ *  - AE meter (when `DECO_METRICS` binding present)
+ *  - optional app-side OTLP meter (when `OTEL_EXPORTER_OTLP_ENDPOINT` set)
+ *  - optional app-side OTLP logger (when `enableAppSideOtlpLogs: true`)
+ *  - per-request `ctx.waitUntil(forceFlush)` for any registered batch processors
+ *  - bridge from framework-internal `withTracing()` to `@opentelemetry/api`
+ *    global tracer, with `deco.*` attributes stamped on every span
+ *
+ * Logs and traces export to HyperDX (or any OTLP destination) is handled
+ * by Cloudflare via `observability.{logs,traces}.destinations` in
+ * `wrangler.jsonc`. This wrapper does NOT call `@microlabs/otel-cf-workers`
+ * `instrument()` — CF's platform-managed export captures `console.*` output
+ * and global-tracer spans out-of-band.
  */
 export function instrumentWorker(
   handler: WorkerHandler,
   options: OtelOptions | ((env: Record<string, unknown>) => OtelOptions) = {},
 ): WorkerHandler {
-  // Bridge our pluggable TracerAdapter onto @opentelemetry/api so
-  // framework-internal `withTracing()` calls produce real OTel spans
-  // for whatever exporter is configured (OTLP, console, etc.).
+  // Bridge our pluggable TracerAdapter onto @opentelemetry/api. Framework
+  // code calls `withTracing("name", fn, { attr: val })`; that delegates here
+  // and lands on `trace.getTracer("@decocms/start").startSpan(...)`.
+  //
+  // CF Workers Tracing (when `observability.traces.enabled = true` in
+  // wrangler) installs its own TracerProvider into the @opentelemetry/api
+  // global, so these spans flow through to whatever OTLP destination is
+  // configured. Without CF tracing the global tracer is a no-op proxy and
+  // the spans simply drop — same outcome as before, no error.
   configureTracer({
     startSpan: (name, attrs) => {
-      const span = trace.getTracer("@decocms/start").startSpan(name, { attributes: attrs });
+      const merged = { ...spanAttributeFloor, ...(attrs ?? {}) };
+      const span = trace.getTracer("@decocms/start").startSpan(name, { attributes: merged });
       return {
         end: () => span.end(),
         setError: (error) => {
@@ -153,64 +223,32 @@ export function instrumentWorker(
     },
   });
 
-  const resolveConfig: ResolveConfigFn = (env, _trigger) => {
-    const opts = typeof options === "function" ? options(env as Record<string, unknown>) : options;
-    bootObservability(opts, env as Record<string, unknown>);
-
-    const state = bootState!;
-
-    // Sampling — base64 JSON via OTEL_SAMPLING_CONFIG, see sdk/sampler.ts
-    const samplingConfig = decodeSamplingConfig(env.OTEL_SAMPLING_CONFIG as string | undefined);
-    const headSampler = createUrlBasedHeadSampler(samplingConfig);
-
-    // microlabs requires an exporter even when we only want internal
-    // tracing. When OTLP isn't configured, we still set up a no-op
-    // collector — the URL we'd never reach so spans simply drop.
-    const exporterUrl = state.otlpEndpoint ?? "http://127.0.0.1:0/v1/traces";
-
-    return {
-      exporter: {
-        url: joinPath(exporterUrl, "/v1/traces"),
-        headers: state.otlpHeaders,
-      },
-      service: {
-        name: state.serviceName,
-        version: (env.CF_VERSION_METADATA as { id?: string } | undefined)?.id,
-      },
-      sampling: { headSampler },
-      // microlabs auto-instruments globalThis.fetch + KV + waitUntil.
-      instrumentation: {
-        instrumentGlobalFetch: true,
-        instrumentGlobalCache: true,
-      },
-    };
-  };
-
-  const innerHandler: WorkerHandler = {
+  return {
     async fetch(request, env, ctx) {
-      // Stash env so request-scoped adapters (AE) can resolve their bindings.
-      // Done inside RequestContext.run wrapping in workerEntry.ts as well, but
-      // for instrumentWorker we re-stash in case this handler is wrapped over
-      // the top of a Worker that doesn't go through createDecoWorkerEntry.
+      const opts =
+        typeof options === "function" ? options(env as Record<string, unknown>) : options;
+      bootObservability(opts, env as Record<string, unknown>);
+
+      // Stash env so request-scoped adapters (AE) can resolve their
+      // bindings. Done inside RequestContext.run wrapping in workerEntry.ts
+      // too, but we re-stash here in case `instrumentWorker` is wrapped
+      // over a handler that doesn't go through `createDecoWorkerEntry`.
       const wrap = async () => {
         setRuntimeEnv(env);
         return handler.fetch(request, env, ctx);
       };
 
       try {
-        // RequestContext may already be active (createDecoWorkerEntry sets it
-        // up). If so, run inline; otherwise wrap. Cheap to detect via current.
         if (RequestContext.current) {
           return await wrap();
         }
         return await RequestContext.run(request, wrap);
       } finally {
-        // Drain OTLP logger + meter batches inside the post-response window
-        // the platform guarantees via `waitUntil`. Without this hook,
-        // BatchLogRecordProcessor (5s flush) and PeriodicExportingMetricReader
-        // (60s flush) batches usually die with the isolate before the timer
-        // fires and never reach HyperDX. `flushOtelProviders` is a no-op when
-        // OTLP isn't configured, so this is safe in every code path.
+        // Drain OTLP meter (and OTLP logger, if `enableAppSideOtlpLogs`)
+        // batches inside the post-response window `waitUntil` guarantees.
+        // Without this hook, `PeriodicExportingMetricReader` (60s flush)
+        // batches usually die with the isolate before the timer fires.
+        // No-op when no batch processors are registered.
         try {
           ctx.waitUntil(flushOtelProviders());
         } catch {
@@ -220,9 +258,6 @@ export function instrumentWorker(
       }
     },
   };
-
-  // deno-lint-ignore no-explicit-any
-  return instrument(innerHandler as any, resolveConfig) as unknown as WorkerHandler;
 }
 
 // ---------------------------------------------------------------------------
@@ -239,21 +274,57 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
   const otlpHeaders =
     opts.headers ?? parseHeaders(env.OTEL_EXPORTER_OTLP_HEADERS as string | undefined);
 
+  const decoRuntimeVersion = opts.decoRuntimeVersion ?? DECO_RUNTIME_VERSION;
+  const deploymentEnvironment = (env.DECO_ENV_NAME as string | undefined) ?? "production";
+
   const resource = buildResource({
     serviceName,
     serviceVersion: (env.CF_VERSION_METADATA as { id?: string } | undefined)?.id,
     serviceInstanceId: cryptoRandomId(),
-    deploymentEnvironment: (env.DECO_ENV_NAME as string | undefined) ?? "production",
-    decoRuntimeVersion: opts.decoRuntimeVersion ?? DECO_RUNTIME_VERSION,
+    deploymentEnvironment,
+    decoRuntimeVersion,
     decoAppsVersion: opts.decoAppsVersion,
   });
 
+  // Stamp deco.* attributes on every span we create. CF-managed trace
+  // export emits its own resource attribute set (service.name=Worker name,
+  // faas.name, cloudflare.script_version.id, faas.version, etc.) so the
+  // legacy resource attrs from `buildResource` don't survive on the
+  // CF-side path. Stamping them per-span preserves the dimensions
+  // existing HyperDX dashboards filter on.
+  spanAttributeFloor = {
+    "deco.runtime.version": decoRuntimeVersion,
+    "deployment.environment": deploymentEnvironment,
+    ...(opts.decoAppsVersion ? { "deco.apps.version": opts.decoAppsVersion } : {}),
+  };
+
+  // Same set, stamped on every log record. CF Workers Logs ships the JSON
+  // body verbatim (resource attrs from `buildResource` are NOT applied to
+  // logs in default mode), so HyperDX panels grouping by these dimensions
+  // would otherwise return empty. Caller-supplied `attrs` still win on key
+  // collision.
+  setLoggerAttributeFloor({
+    "deco.runtime.version": decoRuntimeVersion,
+    "deployment.environment": deploymentEnvironment,
+    ...(opts.decoAppsVersion ? { "deco.apps.version": opts.decoAppsVersion } : {}),
+  });
+
   // ---- Logger ----------------------------------------------------------
+  // Default mode: console JSON only. Cloudflare Workers Logs captures the
+  // output and ships it via `observability.logs.destinations` to whichever
+  // OTLP destination is configured in `wrangler.jsonc`. This is the
+  // recommended path: zero in-Worker exporter, no flush bug, no subrequest
+  // cost per emit.
+  //
+  // Opt-in mode (`enableAppSideOtlpLogs: true`): also wire the OTLP logger
+  // adapter for sites with destinations CF doesn't support. Requires
+  // `OTEL_EXPORTER_OTLP_ENDPOINT` to be set.
   const otlpMinSeverity =
     opts.otlpMinSeverity ?? parseLogLevel(env.OTEL_LOG_MIN_SEVERITY) ?? "warn";
 
+  const wantAppSideLogs = opts.enableAppSideOtlpLogs === true;
   const otelLogger =
-    otlpEndpoint != null
+    wantAppSideLogs && otlpEndpoint != null
       ? createOtelLoggerAdapter({
           endpoint: otlpEndpoint,
           headers: otlpHeaders,
@@ -266,6 +337,9 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
   configureLogger(createCompositeLogger([defaultLoggerAdapter, otelLogger]));
 
   // ---- Meter -----------------------------------------------------------
+  // OTLP meter stays default-on when an endpoint is configured: CF doesn't
+  // support OTLP metrics export yet, so this is the only path to
+  // HyperDX-compatible metrics. Drop this branch when CF ships metrics.
   const otelMeter =
     otlpEndpoint != null
       ? createOtelMeterAdapter({
@@ -295,15 +369,30 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
   booted = true;
 
   // Single boot-time breadcrumb so operators can confirm the wiring at a
-  // glance from CF Logs without enabling debug.
+  // glance from CF Logs without enabling debug. Surfaces which export
+  // mode is active (CF-native vs app-side) so misconfigured sites are
+  // obvious from the first request.
   logger.info("observability booted", {
     service: serviceName,
-    otlp: Boolean(otlpEndpoint),
-    otlpMinSeverity: otlpEndpoint != null ? otlpMinSeverity : null,
+    mode: wantAppSideLogs ? "hybrid (app-side OTLP logs + CF traces)" : "cf-native",
+    otlpMeter: Boolean(otlpEndpoint),
+    otlpLogger: wantAppSideLogs && otlpEndpoint != null,
+    otlpMinSeverity: wantAppSideLogs && otlpEndpoint != null ? otlpMinSeverity : null,
     analyticsEngine: aeEnabled,
-    sampling: Boolean(env.OTEL_SAMPLING_CONFIG),
-    runtimeVersion: opts.decoRuntimeVersion ?? DECO_RUNTIME_VERSION,
+    runtimeVersion: decoRuntimeVersion,
+    deploymentEnvironment,
   });
+}
+
+/**
+ * Test-only: clear boot state so successive tests can re-boot
+ * `instrumentWorker` with different options. Do not call from app code.
+ */
+export function _resetBootStateForTests(): void {
+  booted = false;
+  bootState = null;
+  spanAttributeFloor = {};
+  setLoggerAttributeFloor({});
 }
 
 // ---------------------------------------------------------------------------
@@ -345,7 +434,7 @@ function buildResource(input: ResourceInput): Resource {
  * Drift is acceptable — this attribute is for operator triage, not for
  * billing / SLOs.
  */
-const DECO_RUNTIME_VERSION = "2.28.2";
+const DECO_RUNTIME_VERSION = "4.4.0";
 
 function parseHeaders(str?: string): Record<string, string> {
   if (!str) return {};
@@ -363,14 +452,6 @@ function parseHeaders(str?: string): Record<string, string> {
 function numericEnv(value: unknown, fallback: number): number {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : fallback;
-}
-
-function joinPath(base: string, path: string): string {
-  if (!base) return path;
-  if (base.endsWith("/")) base = base.slice(0, -1);
-  if (!path.startsWith("/")) path = "/" + path;
-  if (base.toLowerCase().endsWith(path.toLowerCase())) return base;
-  return base + path;
 }
 
 function cryptoRandomId(): string {

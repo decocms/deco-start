@@ -42,11 +42,23 @@ function generateWorkerEntry(ctx: MigrationContext): string {
   return `/**
  * Cloudflare Worker entry point.
  *
- * Wraps TanStack Start with admin protocol handlers and edge caching.
+ * Wraps TanStack Start with admin protocol handlers, edge caching, and
+ * the @decocms/start observability stack:
+ *   - structured JSON logger (console.log) -> Cloudflare Workers Logs ->
+ *     CF-managed OTLP push when wrangler.jsonc has the
+ *     observability.logs.destinations block
+ *   - @opentelemetry/api global tracer bridge (so withTracing() spans flow
+ *     to whichever destination CF tracing pushes to)
+ *   - request/cache metrics to AE (DECO_METRICS binding)
+ *
+ * Run \`npx -p @decocms/start deco-cf-observability --write\` after wiring
+ * wrangler.jsonc to add the CF-native observability block. See
+ * https://github.com/decocms/deco-start#observability
  */
 import "./setup";
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { createDecoWorkerEntry } from "@decocms/start/sdk/workerEntry";
+import { instrumentWorker } from "@decocms/start/sdk/observability";
 import {
   handleMeta,
   handleDecofileRead,
@@ -60,7 +72,7 @@ ${isCommerce ? `
 ` : ""}
 const serverEntry = createServerEntry({ fetch: handler.fetch });
 
-export default createDecoWorkerEntry(serverEntry, {
+const decoWorker = createDecoWorkerEntry(serverEntry, {
   admin: {
     handleMeta,
     handleDecofileRead,
@@ -68,6 +80,10 @@ export default createDecoWorkerEntry(serverEntry, {
     handleRender,
     corsHeaders,
   },
+});
+
+export default instrumentWorker(decoWorker, {
+  serviceName: "${ctx.siteName}",
 });
 `;
 }
@@ -78,6 +94,7 @@ function generateVtexWorkerEntry(ctx: MigrationContext): string {
   return `import "./setup";
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { createDecoWorkerEntry } from "@decocms/start/sdk/workerEntry";
+import { instrumentWorker } from "@decocms/start/sdk/observability";
 import {
   handleMeta,
   handleDecofileRead,
@@ -164,7 +181,7 @@ const decoWorker = createDecoWorkerEntry(serverEntry, {
 // A/B wrapper — KV-driven traffic split between TanStack and legacy origin
 // ---------------------------------------------------------------------------
 
-export default withABTesting(decoWorker, {
+const abTestedWorker = withABTesting(decoWorker, {
   kvBinding: "SITES_KV",
   preHandler: (request, url) => {
     const redirect = matchRedirect(url.pathname, cmsRedirects);
@@ -182,6 +199,25 @@ export default withABTesting(decoWorker, {
         url.pathname === "/logout" || url.pathname === "/logout/") return false;
     return shouldProxyToVtex(url.pathname);
   },
+});
+
+// ---------------------------------------------------------------------------
+// Observability wrap (outermost layer)
+//
+// As of @decocms/start 4.4.0, instrumentWorker uses Cloudflare-native
+// observability by default:
+//   - logs:   console.* -> CF Workers Logs -> CF-managed OTLP push
+//             (when wrangler.jsonc has observability.logs.destinations)
+//   - traces: @opentelemetry/api global tracer (bridged from withTracing)
+//             -> CF Workers Tracing -> CF-managed OTLP push
+//   - metrics: AE (DECO_METRICS) + app-side OTLP (until CF ships
+//              OTLP metrics export)
+//
+// Run \`npx -p @decocms/start deco-cf-observability --write\` after
+// wiring wrangler.jsonc to inject the CF-native observability block.
+// ---------------------------------------------------------------------------
+export default instrumentWorker(abTestedWorker, {
+  serviceName: "${ctx.siteName}",
 });
 `;
 }

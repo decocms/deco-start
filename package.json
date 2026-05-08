@@ -7,7 +7,8 @@
   "bin": {
     "deco-migrate": "./scripts/migrate.ts",
     "deco-post-cleanup": "./scripts/migrate-post-cleanup.ts",
-    "deco-htmx-analyze": "./scripts/htmx-analyze.ts"
+    "deco-htmx-analyze": "./scripts/htmx-analyze.ts",
+    "deco-cf-observability": "./scripts/migrate-to-cf-observability.ts"
   },
   "exports": {
     ".": "./src/index.ts",
@@ -71,6 +72,7 @@
     "./scripts/generate-invoke": "./scripts/generate-invoke.ts",
     "./scripts/migrate": "./scripts/migrate.ts",
     "./scripts/migrate-post-cleanup": "./scripts/migrate-post-cleanup.ts",
+    "./scripts/migrate-to-cf-observability": "./scripts/migrate-to-cf-observability.ts",
     "./scripts/tailwind-lint": "./scripts/tailwind-lint.ts",
     "./vite": "./src/vite/plugin.js",
     "./daemon": "./src/daemon/index.ts"
@@ -104,7 +106,6 @@
   },
   "dependencies": {
     "@deco-cx/warp-node": "^0.3.16",
-    "@microlabs/otel-cf-workers": "^1.0.0-rc.52",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/api-logs": "^0.200.0",
     "@opentelemetry/exporter-logs-otlp-http": "^0.200.0",

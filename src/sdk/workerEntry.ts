@@ -949,10 +949,13 @@ export function createDecoWorkerEntry(
         // via getRuntimeEnv() in sdk/otelAdapters.ts.
         setRuntimeEnv(env);
 
-        // Wrap inner handler in a single root span. `@microlabs/otel-cf-workers`
-        // already creates an outer span via its `instrument()` wrapper; this
-        // adds a nested span carrying our normalized path/status attributes
-        // that microlabs doesn't capture (it uses url.path verbatim).
+        // Wrap inner handler in a single root span carrying our normalized
+        // path/method attributes. With Cloudflare-managed trace export
+        // (`observability.traces.destinations` in wrangler.jsonc), this
+        // span — and any `withTracing` spans nested below it — flow to
+        // HyperDX via CF's platform-managed OTLP push, since the bridge
+        // in `instrumentWorker` configures the `@opentelemetry/api`
+        // global tracer for us.
         return withTracing(
           "deco.http.request",
           async () => {

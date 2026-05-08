@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  _getLoggerAttributeFloorForTests,
   configureLogger,
   defaultLoggerAdapter,
   getLoggerAdapter,
@@ -7,6 +8,7 @@ import {
   type LoggerAdapter,
   logger,
   serializeError,
+  setLoggerAttributeFloor,
   setLogLevel,
 } from "./logger";
 
@@ -132,6 +134,83 @@ describe("configureLogger", () => {
     // Default adapter was invoked as the fallback
     expect(logSpy).toHaveBeenCalledOnce();
     logSpy.mockRestore();
+  });
+});
+
+describe("setLoggerAttributeFloor", () => {
+  afterEach(() => {
+    setLoggerAttributeFloor({});
+    configureLogger(defaultLoggerAdapter);
+    setLogLevel("info");
+  });
+
+  it("starts empty so the floor is a no-op out of the box", () => {
+    expect(_getLoggerAttributeFloorForTests()).toEqual({});
+  });
+
+  it("merges floor attrs into every log call", () => {
+    setLoggerAttributeFloor({
+      "deco.runtime.version": "4.4.0",
+      "deployment.environment": "production",
+    });
+    const calls: Array<Record<string, unknown> | undefined> = [];
+    configureLogger({
+      log(_level, _msg, attrs) {
+        calls.push(attrs);
+      },
+    });
+
+    logger.info("ping", { route: "/" });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({
+      "deco.runtime.version": "4.4.0",
+      "deployment.environment": "production",
+      route: "/",
+    });
+  });
+
+  it("lets caller attrs override the floor on key collision", () => {
+    setLoggerAttributeFloor({ "deployment.environment": "production" });
+    const calls: Array<Record<string, unknown> | undefined> = [];
+    configureLogger({
+      log(_level, _msg, attrs) {
+        calls.push(attrs);
+      },
+    });
+
+    logger.warn("override", { "deployment.environment": "staging" });
+
+    expect(calls[0]?.["deployment.environment"]).toBe("staging");
+  });
+
+  it("applies the floor even when the caller passes no attrs", () => {
+    setLoggerAttributeFloor({ tenant: "lebiscuit" });
+    const calls: Array<Record<string, unknown> | undefined> = [];
+    configureLogger({
+      log(_level, _msg, attrs) {
+        calls.push(attrs);
+      },
+    });
+
+    logger.info("no-attrs");
+
+    expect(calls[0]).toEqual({ tenant: "lebiscuit" });
+  });
+
+  it("clearing the floor restores the no-op fast path", () => {
+    setLoggerAttributeFloor({ tenant: "lebiscuit" });
+    setLoggerAttributeFloor({});
+    const calls: Array<Record<string, unknown> | undefined> = [];
+    configureLogger({
+      log(_level, _msg, attrs) {
+        calls.push(attrs);
+      },
+    });
+
+    logger.info("clean", { x: 1 });
+
+    expect(calls[0]).toEqual({ x: 1 });
   });
 });
 

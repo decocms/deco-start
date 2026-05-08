@@ -205,6 +205,14 @@ export function report(ctx: MigrationContext): void {
   lines.push("");
   lines.push("# 6. Run dev server");
   lines.push("npm run dev");
+  lines.push("");
+  lines.push("# 7. (Once wrangler.jsonc is wired) enable CF-native observability");
+  lines.push("#    Pushes console.* logs and OTel traces to HyperDX via");
+  lines.push("#    Cloudflare-managed OTLP export. Requires the");
+  lines.push("#    `hyperdx-logs` and `hyperdx-traces` destinations to be");
+  lines.push("#    provisioned at the CF account level.");
+  lines.push("npx -p @decocms/start deco-cf-observability         # dry-run");
+  lines.push("npx -p @decocms/start deco-cf-observability --write # apply");
   lines.push("```");
   lines.push("");
 

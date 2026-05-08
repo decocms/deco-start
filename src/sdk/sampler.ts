@@ -1,12 +1,19 @@
 /**
  * URL-based head sampler — port of `deco-cx/deco/observability/otel/samplers/urlBased.ts`.
  *
- * Lets ops dial sampling rates per URL pattern without redeploying. Reads
- * `OTEL_SAMPLING_CONFIG` (base64-encoded JSON) at boot and decides each
- * trace's sample rate based on the matching pattern.
+ * **No longer wired into `instrumentWorker` by default.** As of 4.4.0 the
+ * recommended path for trace sampling is Cloudflare's wrangler-level
+ * `observability.traces.head_sampling_rate`, which is one global rate per
+ * Worker. This module stays as an opt-in escape hatch for sites that need
+ * URL-pattern-aware sampling (e.g. always trace `/checkout`, sample
+ * homepages at 1%) — those sites must wire OTel themselves outside the
+ * default `instrumentWorker` flow.
+ *
+ * The sampler reads `OTEL_SAMPLING_CONFIG` (base64-encoded JSON) and
+ * decides each trace's sample rate based on the matching pattern.
  *
  * Wrapped in `ParentBasedSampler` so a span inherits its parent's sampling
- * decision when one exists (i.e. distributed traces are kept consistent end
+ * decision when one exists (i.e. distributed traces stay consistent end
  * to end).
  *
  * **Default ratio.** When no `default` is provided in the config (or the env
@@ -28,6 +35,9 @@
  *   ]
  * }
  * ```
+ *
+ * @deprecated Slated for removal in 5.0.0 unless a site declares an active
+ *   need. Use Cloudflare's `head_sampling_rate` first.
  */
 
 import { type Attributes, type Context, type Link, type SpanKind, trace } from "@opentelemetry/api";
@@ -189,7 +199,9 @@ export function decodeSamplingConfig(raw: string | undefined): SamplingConfig | 
 
 /**
  * Build a `ParentBasedSampler` rooted at our URL-based sampler.
- * Use as the `headSampler` for `@microlabs/otel-cf-workers`.
+ * Wire as the `headSampler` for any custom OTel SDK setup (e.g. a site
+ * that opts back into `@microlabs/otel-cf-workers` outside the default
+ * `instrumentWorker` flow).
  */
 export function createUrlBasedHeadSampler(config: SamplingConfig | null): Sampler {
   const root = new URLBasedSampler(config ?? {});
