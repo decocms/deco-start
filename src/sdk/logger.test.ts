@@ -6,6 +6,7 @@ import {
   getLogLevel,
   type LoggerAdapter,
   logger,
+  serializeError,
   setLogLevel,
 } from "./logger";
 
@@ -131,5 +132,57 @@ describe("configureLogger", () => {
     // Default adapter was invoked as the fallback
     expect(logSpy).toHaveBeenCalledOnce();
     logSpy.mockRestore();
+  });
+});
+
+describe("serializeError", () => {
+  it("flattens an Error into a JSON-safe shape with stack", () => {
+    const err = new Error("boom");
+    const out = serializeError(err);
+    expect(out).toEqual({ name: "Error", message: "boom", stack: err.stack });
+  });
+
+  it("preserves subclass name (TypeError, RangeError, custom)", () => {
+    expect(serializeError(new TypeError("bad type")).name).toBe("TypeError");
+    class MyErr extends Error {
+      override name = "MyErr";
+    }
+    expect(serializeError(new MyErr("custom")).name).toBe("MyErr");
+  });
+
+  it("survives JSON.stringify round-trip", () => {
+    const err = new Error("round-trip");
+    const out = serializeError(err);
+    expect(() => JSON.parse(JSON.stringify(out))).not.toThrow();
+    expect(JSON.parse(JSON.stringify(out)).message).toBe("round-trip");
+  });
+
+  it("captures plain objects as JSON in message, marking them as NonError", () => {
+    const out = serializeError({ code: 500, body: "vtex down" });
+    expect(out.name).toBe("NonError");
+    expect(out.message).toBe('{"code":500,"body":"vtex down"}');
+    expect(out.stack).toBeUndefined();
+  });
+
+  it("falls back to String() when an object has circular refs", () => {
+    const circ: Record<string, unknown> = { a: 1 };
+    circ.self = circ;
+    const out = serializeError(circ);
+    expect(out.name).toBe("NonError");
+    expect(typeof out.message).toBe("string");
+    expect(out.stack).toBeUndefined();
+  });
+
+  it("handles primitives (string, number, null, undefined)", () => {
+    expect(serializeError("just a string")).toEqual({
+      name: "NonError",
+      message: "just a string",
+    });
+    expect(serializeError(42)).toEqual({ name: "NonError", message: "42" });
+    expect(serializeError(null)).toEqual({ name: "NonError", message: "null" });
+    expect(serializeError(undefined)).toEqual({
+      name: "NonError",
+      message: "undefined",
+    });
   });
 });

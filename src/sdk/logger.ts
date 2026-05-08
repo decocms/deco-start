@@ -127,17 +127,72 @@ function shouldLog(level: LogLevel): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * Mirrors `@deco/deco/o11y` logger:
- *  - first arg is the message
+ * Strict structured logger. Mirrors `@deco/deco/o11y`:
+ *  - first arg is a human-readable message string
  *  - optional second arg is a flat attributes object
  *
- * Adapters decide the destination (stdout JSON, OTLP, both, …).
+ * Adapters decide the destination (stdout JSON, OTLP, both, …). The
+ * contract is intentionally narrow so structured output stays predictable
+ * across all sinks.
+ *
+ * @example
+ * ```ts
+ * logger.info("checkout started", { orderFormId, items });
+ * logger.warn("retrying vtex call", { attempt, host });
+ *
+ * // For Errors, serialize explicitly into the attrs payload:
+ * try { ... } catch (err) {
+ *   const e = serializeError(err);
+ *   logger.error(e.message, { error: e, stage: "checkout" });
+ * }
+ * ```
  */
 export interface Logger {
   debug(msg: string, attrs?: Record<string, unknown>): void;
   info(msg: string, attrs?: Record<string, unknown>): void;
   warn(msg: string, attrs?: Record<string, unknown>): void;
   error(msg: string, attrs?: Record<string, unknown>): void;
+}
+
+/**
+ * Normalised, JSON-safe error shape suitable for inclusion in logger
+ * attributes. `serializeError` always returns this shape regardless of
+ * what was thrown.
+ */
+export interface SerializedError {
+  name: string;
+  message: string;
+  stack?: string;
+}
+
+/**
+ * Convert any thrown value into a flat, structured object that survives
+ * `JSON.stringify` and round-trips cleanly to OTel / Cloudflare Logs.
+ * Strict logger sites should call this from their catch blocks rather
+ * than passing the Error directly.
+ *
+ * @example
+ * ```ts
+ * try { ... } catch (err) {
+ *   const e = serializeError(err);
+ *   logger.error(e.message, { error: e });
+ * }
+ * ```
+ */
+export function serializeError(err: unknown): SerializedError {
+  if (err instanceof Error) {
+    return { name: err.name, message: err.message, stack: err.stack };
+  }
+  if (err && typeof err === "object") {
+    let body: string;
+    try {
+      body = JSON.stringify(err);
+    } catch {
+      body = String(err);
+    }
+    return { name: "NonError", message: body };
+  }
+  return { name: "NonError", message: String(err) };
 }
 
 function emit(level: LogLevel, msg: string, attrs?: Record<string, unknown>): void {

@@ -31,7 +31,7 @@
  * export default defineConfig({ plugins: [decoVitePlugin(), ...] });
  * ```
  */
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 // Bare-specifier stubs resolved by ID before Vite touches them.
 /** @type {Record<string, string>} */
@@ -42,6 +42,23 @@ const CLIENT_STUBS = {
   "node:stream/web": "\0stub:node-stream-web",
   "node:async_hooks": "\0stub:node-async-hooks",
   "tanstack-start-injected-head-scripts:v": "\0stub:tanstack-head-scripts",
+};
+
+// SSR-only stubs. Same mechanism as CLIENT_STUBS but applied to the worker
+// SSR build instead of the browser build.
+/** @type {Record<string, string>} */
+const SSR_STUBS = {
+  // `@opentelemetry/resources` (transitively pulled in by sdk-logs /
+  // sdk-metrics / exporter-* OTel packages — five copies in node_modules due
+  // to OTel monorepo peer-dep version pinning) statically imports bare `fs`
+  // inside its node-platform machine-id detectors. We never call those
+  // detectors — `instrumentWorker` builds the OTel Resource from explicit
+  // attributes only — but Vite's CF Workers SSR resolver still walks the
+  // re-export barrel and chokes on the bare `fs` specifier (workerd's
+  // `nodejs_compat` only exposes the prefixed `node:fs`, not the legacy
+  // bare form). Stub it; the static import resolves and the unreachable
+  // detector code is never executed.
+  fs: "\0stub:bare-fs",
 };
 
 // Minimal stub source for each virtual module.
@@ -72,13 +89,18 @@ const STUB_SOURCE = {
     "export default { AsyncLocalStorage: _ALS, AsyncResource, executionAsyncId, createHook };",
   ].join("\n"),
 
-  "\0stub:tanstack-head-scripts":
-    "export const injectedHeadScripts = undefined;",
+  "\0stub:tanstack-head-scripts": "export const injectedHeadScripts = undefined;",
 
   // The admin schema bundle is server-only — the client receives pre-resolved
   // blocks via the SSR payload. Stubbing it on the client cuts a large module
   // (typically 0.5-5 MB) out of the browser bundle.
   "\0stub:meta-gen": "export default {};",
+
+  // Bare `fs` shim — see SSR_STUBS comment above for the rationale. Surfaces
+  // just enough of `import { promises as fs } from 'fs'` to satisfy static
+  // module resolution; method calls would throw, but the OTel detector code
+  // path is unreachable from `instrumentWorker`.
+  "\0stub:bare-fs": "export const promises = {}; export default { promises };",
 };
 
 /** @returns {import("vite").PluginOption} */
@@ -89,6 +111,9 @@ export function decoVitePlugin() {
     enforce: "pre",
 
     resolveId(id, importer, options) {
+      // SSR-only stubs — must be checked first since the client guard below
+      // returns undefined for everything that hasn't matched yet on SSR.
+      if (options?.ssr && SSR_STUBS[id]) return SSR_STUBS[id];
       // Server builds keep the real modules.
       if (options?.ssr) return undefined;
       // Bare-specifier exact-match stubs (react-dom/server, node:stream, etc.).
@@ -98,10 +123,7 @@ export function decoVitePlugin() {
       // plugin works whether `setup.ts` imports the .json directly (current)
       // or a future variant routes through a generated .ts wrapper.
       // Requires `importer` so we don't accidentally stub the entry module.
-      if (
-        importer &&
-        (id.endsWith("meta.gen.json") || id.endsWith("meta.gen.ts"))
-      ) {
+      if (importer && (id.endsWith("meta.gen.json") || id.endsWith("meta.gen.ts"))) {
         return "\0stub:meta-gen";
       }
       return undefined;
@@ -154,7 +176,6 @@ export function decoVitePlugin() {
       const siteName = process.env.DECO_SITE_NAME;
       const envName = process.env.DECO_ENV_NAME;
       if (siteName && envName) {
-
         // Daemon files are .ts and live inside node_modules. Node's
         // experimental strip-types refuses to transpile node_modules, so
         // a plain dynamic `import()` blows up under `vite dev`. Use tsx's
@@ -214,18 +235,12 @@ export function decoVitePlugin() {
           rollupOptions: {
             output: {
               manualChunks(id) {
-                if (
-                  id.includes("node_modules/react-dom") ||
-                  id.includes("node_modules/react/")
-                ) {
+                if (id.includes("node_modules/react-dom") || id.includes("node_modules/react/")) {
                   return "vendor-react";
                 }
 
                 // TanStack Router — client-side router (always needed)
-                if (
-                  id.includes("@tanstack/react-router") ||
-                  id.includes("@tanstack/router-core")
-                ) {
+                if (id.includes("@tanstack/react-router") || id.includes("@tanstack/router-core")) {
                   return "vendor-router";
                 }
 
@@ -275,8 +290,7 @@ export function decoVitePlugin() {
     configEnvironment(name, env) {
       if (name === "ssr" || name === "client") {
         env.optimizeDeps = env.optimizeDeps || {};
-        env.optimizeDeps.esbuildOptions =
-          env.optimizeDeps.esbuildOptions || {};
+        env.optimizeDeps.esbuildOptions = env.optimizeDeps.esbuildOptions || {};
         env.optimizeDeps.esbuildOptions.jsx = "automatic";
         env.optimizeDeps.esbuildOptions.jsxImportSource = "react";
       }
