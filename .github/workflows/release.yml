@@ -1,5 +1,14 @@
 name: Release
 
+# GOTCHA: GitHub Actions silently skips this workflow when the head
+# commit message contains `[skip ci]` ANYWHERE — including in the
+# body or in quoted text describing other commits. Be especially
+# careful when documenting expected `chore(release): X.Y.Z [skip ci]`
+# behaviour in a PR body or commit message; that string in the
+# squash-merge commit will suppress the next release run.
+# Recover with a no-op commit (or any commit whose message does NOT
+# contain the literal `[skip ci]` token).
+
 on:
   push:
     branches: [main]
