@@ -9,6 +9,13 @@
  * decision when one exists (i.e. distributed traces are kept consistent end
  * to end).
  *
+ * **Default ratio.** When no `default` is provided in the config (or the env
+ * var is unset entirely), the sampler keeps **10%** of traces. Production
+ * storefront traffic at full sampling will burn HyperDX ingest quotas
+ * quickly — for an unconfigured site we'd rather drop 90% than overspend by
+ * default. Sites that genuinely want every trace recorded must opt-in
+ * explicitly with `OTEL_SAMPLING_CONFIG` setting `default: 1`.
+ *
  * @example
  * ```jsonc
  * // base64-encode this and set as OTEL_SAMPLING_CONFIG:
@@ -41,11 +48,22 @@ export interface SamplingRule {
 }
 
 export interface SamplingConfig {
-  /** Default sample ratio applied when no rule matches. Defaults to 1.0 (always sample). */
+  /**
+   * Default sample ratio applied when no rule matches. Defaults to **0.1**
+   * (10% sampled) when omitted. Set to `1` to record every trace
+   * (only do this when you need a full debug stream and accept the cost).
+   */
   default?: number;
   /** Ordered list of rules. First match wins. */
   rules?: SamplingRule[];
 }
+
+/**
+ * Default ratio applied by `URLBasedSampler` when neither the config nor a
+ * matching rule specifies one. Centralised so tests + docs share a single
+ * source of truth.
+ */
+export const DEFAULT_SAMPLE_RATIO = 0.1;
 
 interface CompiledRule {
   re: RegExp;
@@ -61,7 +79,7 @@ export class URLBasedSampler implements Sampler {
   private readonly rules: CompiledRule[];
 
   constructor(config: SamplingConfig = {}) {
-    this.defaultSampler = ratioToSampler(config.default ?? 1.0);
+    this.defaultSampler = ratioToSampler(config.default ?? DEFAULT_SAMPLE_RATIO);
     this.rules = (config.rules ?? []).map((rule) => ({
       re: new RegExp(rule.pattern),
       sampler: ratioToSampler(rule.ratio),
@@ -128,7 +146,7 @@ function extractPath(attrs: Attributes): string | null {
 
 /**
  * Decode a base64-encoded `OTEL_SAMPLING_CONFIG` value into a `SamplingConfig`.
- * Returns `null` (caller falls back to default ratio 1.0) on:
+ * Returns `null` (caller falls back to `DEFAULT_SAMPLE_RATIO`, currently 0.1) on:
  *  - missing / empty input
  *  - invalid base64
  *  - JSON parse failure
