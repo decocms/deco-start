@@ -2,13 +2,11 @@ import { execSync } from "node:child_process";
 import type { MigrationContext } from "../types";
 
 /**
- * Fleet-wide canonical bun version. Bumped here propagates to all newly
- * migrated sites via the `packageManager` field AND the
- * `lockfile-check.yml` workflow's `bun-version` input. See
- * MIGRATION_TOOLING_PLAN.md for the bun-canonical decision.
- *
- * Exported because the lockfile-check workflow template reads it
- * directly to keep both files in lockstep.
+ * Fleet-wide canonical bun version. Propagates to all newly migrated
+ * sites via the `packageManager` field — Corepack-aware tooling (npm
+ * 10+, yarn 4+, pnpm 9+) reads this and refuses to install with the
+ * wrong package manager, which is the actual enforcement we rely on.
+ * See MIGRATION_TOOLING_PLAN.md for the bun-canonical decision.
  */
 export const CANONICAL_BUN_VERSION = "1.3.5";
 
