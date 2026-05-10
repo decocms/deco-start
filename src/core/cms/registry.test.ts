@@ -116,3 +116,36 @@ describe("registerSectionsSync", () => {
     expect(getSyncComponent("site/sections/Bad.tsx")).toBeUndefined();
   });
 });
+
+describe("registerSectionsSync <-> getSection integration (gotcha #1 from issue #163)", () => {
+  it("getSection() returns an entry for sync-registered sections", async () => {
+    const FakeComponent = () => null;
+    registerSectionsSync({
+      "site/sections/SyncIntegrationFoo.tsx": FakeComponent,
+    });
+    const entry = getSection("site/sections/SyncIntegrationFoo.tsx");
+    expect(entry).toBeDefined();
+    // The fallback loader should resolve to the same module's default export
+    const mod = await entry!();
+    expect(mod.default).toBe(FakeComponent);
+  });
+
+  it("registerSectionsSync does not clobber an existing registry loader", async () => {
+    const ExistingComponent = () => null;
+    const SyncComponent = () => null;
+    // First register a real (lazy) loader
+    registerSection(
+      "site/sections/ExistingFoo.tsx",
+      () => Promise.resolve({ default: ExistingComponent }),
+    );
+    // Then call registerSectionsSync with the same key
+    registerSectionsSync({
+      "site/sections/ExistingFoo.tsx": SyncComponent,
+    });
+    const entry = getSection("site/sections/ExistingFoo.tsx");
+    expect(entry).toBeDefined();
+    const mod = await entry!();
+    // The first registration should win — registerSectionsSync should not clobber.
+    expect(mod.default).toBe(ExistingComponent);
+  });
+});

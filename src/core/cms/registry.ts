@@ -212,6 +212,13 @@ export function registerSectionsSync(sections: Record<string, SyncSectionEntry>)
       if (entry.ErrorFallback) opts.errorFallback = entry.ErrorFallback;
       sectionOptions[key] = opts;
     }
+
+    // Also register a trivial async loader so getSection() (which reads
+    // `registry`) finds sync-registered sections. Fixes gotcha #1 from
+    // issue #163. Don't clobber an existing real loader.
+    if (!registry[key]) {
+      registry[key] = () => Promise.resolve({ default: component });
+    }
   }
 }
 
