@@ -1,0 +1,21 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.0/schema.json",
+  "root": false,
+  "extends": ["../../biome.json"],
+  "linter": {
+    "rules": {
+      "style": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "paths": {
+              "next": "Forbidden in tanstack/**.",
+              "next/server": "Forbidden in tanstack/**.",
+              "next/headers": "Forbidden in tanstack/**."
+            }
+          }
+        }
+      }
+    }
+  }
+}

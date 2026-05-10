@@ -1,0 +1,27 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.0/schema.json",
+  "root": false,
+  "extends": ["../../biome.json"],
+  "linter": {
+    "rules": {
+      "style": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "paths": {
+              "@tanstack/react-start": "Forbidden in core/** — use the RequestStore abstraction in core/runtime/.",
+              "@tanstack/react-start/server": "Forbidden in core/** — accept inputs as arguments.",
+              "@tanstack/react-start/api": "Forbidden in core/**.",
+              "@tanstack/react-start/server-entry": "Forbidden in core/**.",
+              "@tanstack/react-router": "Forbidden in core/** — core is framework-agnostic.",
+              "next": "Forbidden in core/**.",
+              "next/server": "Forbidden in core/**.",
+              "next/headers": "Forbidden in core/**.",
+              "node:async_hooks": "Forbidden in core/** — use injected RequestStore."
+            }
+          }
+        }
+      }
+    }
+  }
+}
