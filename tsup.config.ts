@@ -1,4 +1,34 @@
+import { promises as fs } from "node:fs";
+import { join } from "node:path";
 import { defineConfig } from "tsup";
+
+const BIN_FILES = [
+  "dist/scripts/migrate.cjs",
+  "dist/scripts/migrate-post-cleanup.cjs",
+  "dist/scripts/htmx-analyze.cjs",
+  "dist/scripts/migrate-to-cf-observability.cjs",
+];
+
+async function addShebangs() {
+  const SHEBANG = "#!/usr/bin/env node\n";
+  for (const file of BIN_FILES) {
+    const path = join(process.cwd(), file);
+    try {
+      const content = await fs.readFile(path, "utf8");
+      // Replace any existing shebang (e.g. from source `#!/usr/bin/env tsx`)
+      // with the node shebang for the compiled bin.
+      const body = content.startsWith("#!")
+        ? content.slice(content.indexOf("\n") + 1)
+        : content;
+      if (!content.startsWith(SHEBANG)) {
+        await fs.writeFile(path, SHEBANG + body, "utf8");
+      }
+      await fs.chmod(path, 0o755);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+  }
+}
 
 const sharedExternal = [
   "@tanstack/react-query",
@@ -106,5 +136,8 @@ export default defineConfig([
       opts.outbase = "scripts";
     },
     ignoreWatch: ["**/*.test.ts", "**/*.test.tsx"],
+    async onSuccess() {
+      await addShebangs();
+    },
   },
 ]);
