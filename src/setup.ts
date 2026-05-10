@@ -17,7 +17,7 @@ import {
 	setBlocks,
 	setDanglingReferenceHandler,
 	setResolveErrorHandler,
-} from "./cms/index";
+} from "./core/cms/index";
 import { registerBuiltinMatchers } from "./matchers/builtins";
 import { registerProductionOrigins } from "./core/sdk/normalizeUrls";
 import {

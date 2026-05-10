@@ -25,8 +25,8 @@
  * ```
  */
 
-import type { ResolvedSection } from "../cms";
-import { loadBlocks, onChange, resolvePageSections } from "../cms";
+import type { ResolvedSection } from "../core/cms";
+import { loadBlocks, onChange, resolvePageSections } from "../core/cms";
 
 // ---------------------------------------------------------------------------
 // Types

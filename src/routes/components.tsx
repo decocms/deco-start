@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import type { DeferredSection, ResolvedSection } from "../cms/resolve";
+import type { DeferredSection, ResolvedSection } from "../core/cms/resolve";
 import { DecoPageRenderer } from "../hooks/DecoPageRenderer";
 
 /**

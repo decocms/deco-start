@@ -30,8 +30,8 @@ import {
   setResponseHeader,
 } from "@tanstack/react-start/server";
 import { createElement } from "react";
-import { preloadSectionComponents } from "../cms/registry";
-import type { DeferredSection, MatcherContext, PageSeo, ResolvedSection } from "../cms/resolve";
+import { preloadSectionComponents } from "../core/cms/registry";
+import type { DeferredSection, MatcherContext, PageSeo, ResolvedSection } from "../core/cms/resolve";
 import {
   extractSeoFromProps,
   extractSeoFromSections,
@@ -40,9 +40,9 @@ import {
   resolveDecoPage,
   resolveDeferredSection,
   resolveDeferredSectionFull,
-} from "../cms/resolve";
-import { getSiteSeo } from "../cms/loader";
-import { runSectionLoaders, runSingleSectionLoader } from "../cms/sectionLoaders";
+} from "../core/cms/resolve";
+import { getSiteSeo } from "../core/cms/loader";
+import { runSectionLoaders, runSingleSectionLoader } from "../core/cms/sectionLoaders";
 import {
   type CacheProfileName,
   cacheHeaders,

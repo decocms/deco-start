@@ -20,11 +20,11 @@
  */
 
 import { clearInvokeHandlers, registerInvokeHandlers } from "../admin/invoke";
-import { registerSections } from "../cms/registry";
+import { registerSections } from "../core/cms/registry";
 import {
   registerCommerceLoaders,
   unregisterCommerceLoader,
-} from "../cms/resolve";
+} from "../core/cms/resolve";
 import { RequestContext } from "./requestContext";
 
 // ---------------------------------------------------------------------------

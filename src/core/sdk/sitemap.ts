@@ -29,7 +29,7 @@
  * ```
  */
 
-import { getAllPages, loadBlocks } from "../../cms/loader";
+import { getAllPages, loadBlocks } from "../cms/loader";
 
 // -------------------------------------------------------------------------
 // Types

@@ -1,14 +1,14 @@
 import { createElement } from "react";
-import { loadBlocks, withBlocksOverride } from "../cms/loader";
-import { getSection } from "../cms/registry";
+import { loadBlocks, withBlocksOverride } from "../core/cms/loader";
+import { getSection } from "../core/cms/registry";
 import {
   type MatcherContext,
   type ResolvedSection,
   resolvePageSections,
   resolveValue,
   WELL_KNOWN_TYPES,
-} from "../cms/resolve";
-import { runSingleSectionLoader } from "../cms/sectionLoaders";
+} from "../core/cms/resolve";
+import { runSingleSectionLoader } from "../core/cms/sectionLoaders";
 import { buildHtmlShell } from "../core/sdk/htmlShell";
 import { LIVE_CONTROLS_SCRIPT } from "./liveControls";
 import { getPreviewWrapper } from "./setup";

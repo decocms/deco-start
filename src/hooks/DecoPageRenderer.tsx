@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 import { Await, ClientOnly } from "@tanstack/react-router";
-import type { SectionOptions } from "../cms/registry";
+import type { SectionOptions } from "../core/cms/registry";
 import {
   getResolvedComponent,
   getSectionOptions,
@@ -17,8 +17,8 @@ import {
   getSyncComponent,
   preloadSectionModule,
   setResolvedComponent,
-} from "../cms/registry";
-import type { DeferredSection, ResolvedSection } from "../cms/resolve";
+} from "../core/cms/registry";
+import type { DeferredSection, ResolvedSection } from "../core/cms/resolve";
 
 import { SectionErrorBoundary } from "./SectionErrorFallback";
 

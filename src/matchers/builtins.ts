@@ -15,8 +15,8 @@
  * ```
  */
 
-import type { MatcherContext } from "../cms/resolve";
-import { evaluateMatcher, registerMatcher } from "../cms/resolve";
+import type { MatcherContext } from "../core/cms/resolve";
+import { evaluateMatcher, registerMatcher } from "../core/cms/resolve";
 import { resolveCountryCode } from "./countryNames";
 
 // -------------------------------------------------------------------------

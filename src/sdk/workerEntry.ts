@@ -26,10 +26,10 @@
  */
 
 import { getRenderShellConfig } from "../admin/setup";
-import { loadBlocks } from "../cms/loader";
-import type { MatcherContext } from "../cms/resolve";
-import { resolveDecoPage } from "../cms/resolve";
-import { runSectionLoaders, runSingleSectionLoader } from "../cms/sectionLoaders";
+import { loadBlocks } from "../core/cms/loader";
+import type { MatcherContext } from "../core/cms/resolve";
+import { resolveDecoPage } from "../core/cms/resolve";
+import { runSectionLoaders, runSingleSectionLoader } from "../core/cms/sectionLoaders";
 import { logRequest, recordRequestMetric, withTracing } from "../middleware/observability";
 import {
   type CacheProfileName,

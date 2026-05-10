@@ -15,7 +15,7 @@
  *   await autoconfigApps(generatedBlocks, APP_REGISTRY);
  */
 
-import { onChange } from "../cms/loader";
+import { onChange } from "../core/cms/loader";
 import { resolveSecret } from "../core/sdk/crypto";
 import {
   setupApps,

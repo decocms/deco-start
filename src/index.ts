@@ -1,6 +1,6 @@
 // @decocms/start — framework layer for Deco storefronts
 export * from "./admin/index";
-export * from "./cms/index";
+export * from "./core/cms/index";
 export * from "./hooks/index";
 export * from "./middleware/index";
 // Observability surface — logger + instrumentWorker live behind their own

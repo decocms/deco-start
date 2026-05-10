@@ -24,7 +24,7 @@
  * ```
  */
 
-import type { MatcherContext } from "../cms/resolve";
+import type { MatcherContext } from "../core/cms/resolve";
 
 export interface PostHogAdapter {
   /**

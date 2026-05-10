@@ -30,9 +30,9 @@
       "require": "./dist/core/index.cjs"
     },
     "./cms": {
-      "types": "./dist/cms/index.d.ts",
-      "import": "./dist/cms/index.js",
-      "require": "./dist/cms/index.cjs"
+      "types": "./dist/core/cms/index.d.ts",
+      "import": "./dist/core/cms/index.js",
+      "require": "./dist/core/cms/index.cjs"
     },
     "./admin": {
       "types": "./dist/admin/index.d.ts",

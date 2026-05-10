@@ -3,10 +3,10 @@ import {
   type LoaderConfig,
   registerActionSchemas,
   registerLoaderSchemas,
-} from "../admin/schema";
-import { getMeter, MetricNames, withTracing } from "../middleware/observability";
-import { djb2Hex } from "../core/sdk/djb2";
-import { normalizeUrlsInObject } from "../core/sdk/normalizeUrls";
+} from "../../admin/schema";
+import { getMeter, MetricNames, withTracing } from "../../middleware/observability";
+import { djb2Hex } from "../sdk/djb2";
+import { normalizeUrlsInObject } from "../sdk/normalizeUrls";
 import { findPageByPath, loadBlocks } from "./loader";
 import { getOnBeforeResolveProps, getSection, registerOnBeforeResolveProps } from "./registry";
 import { isLayoutSection, runSingleSectionLoader } from "./sectionLoaders";

@@ -9,9 +9,9 @@
  * inside the TanStack Start server function.
  */
 
-import { withTracing } from "../middleware/observability";
-import { getCacheProfile } from "../core/sdk/cacheHeaders";
-import { djb2 } from "../core/sdk/djb2";
+import { withTracing } from "../../middleware/observability";
+import { getCacheProfile } from "../sdk/cacheHeaders";
+import { djb2 } from "../sdk/djb2";
 import type { ResolvedSection } from "./resolve";
 
 export type SectionLoaderFn = (
@@ -38,7 +38,7 @@ interface CacheableSectionConfig {
 
 export type CacheableSectionInput =
   | CacheableSectionConfig
-  | import("../core/sdk/cacheHeaders").CacheProfileName;
+  | import("../sdk/cacheHeaders").CacheProfileName;
 
 function resolveSectionCacheConfig(input: CacheableSectionInput): CacheableSectionConfig {
   if (typeof input === "string") {

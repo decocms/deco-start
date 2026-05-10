@@ -1,4 +1,4 @@
-import { getRevision, loadBlocks, setBlocks } from "../cms/loader";
+import { getRevision, loadBlocks, setBlocks } from "../core/cms/loader";
 import { clearLoaderCache } from "../sdk/cachedLoader";
 import { invalidateMetaCache } from "./meta";
 

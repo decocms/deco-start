@@ -1,4 +1,4 @@
-export type { PageSeo } from "../cms/resolve";
+export type { PageSeo } from "../core/cms/resolve";
 export type { Device } from "../core/sdk/useDevice";
 export {
   decoInvokeRoute,
