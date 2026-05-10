@@ -4,7 +4,7 @@ import {
   registerActionSchemas,
   registerLoaderSchemas,
 } from "../admin/schema";
-import { getMeter, MetricNames, withTracing } from "../../middleware/observability";
+import { getMeter, MetricNames, withTracing } from "../../tanstack/middleware/observability";
 import { djb2Hex } from "../sdk/djb2";
 import { normalizeUrlsInObject } from "../sdk/normalizeUrls";
 import { findPageByPath, loadBlocks } from "./loader";

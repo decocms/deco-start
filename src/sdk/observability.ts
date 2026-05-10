@@ -47,7 +47,7 @@ export {
   setSpanAttribute,
   type TracerAdapter,
   withTracing,
-} from "../middleware/observability";
+} from "../tanstack/middleware/observability";
 // Composite helpers (for advanced multi-backend wiring — e.g. AE + future
 // ClickHouse-collector meter, or default-console + future-collector logger)
 export { createCompositeLogger, createCompositeMeter } from "../core/sdk/composite";

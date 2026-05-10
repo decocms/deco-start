@@ -10,7 +10,7 @@
  * still records the line.
  */
 
-import type { MeterAdapter } from "../../middleware/observability";
+import type { MeterAdapter } from "../../tanstack/middleware/observability";
 import type { LoggerAdapter, LogLevel } from "./logger";
 
 type Labels = Record<string, string | number | boolean>;

@@ -11,7 +11,7 @@
  * (e.g. "product") which derives timing from the unified profile system.
  */
 
-import { recordCacheMetric, withTracing } from "../middleware/observability";
+import { recordCacheMetric, withTracing } from "../tanstack/middleware/observability";
 import { type CacheProfileName, loaderCacheOptions } from "../core/sdk/cacheHeaders";
 
 export type CachePolicy = "no-store" | "no-cache" | "stale-while-revalidate";

@@ -10,7 +10,7 @@
  *     `ctx.waitUntil` for telemetry plumbing.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as observability from "../../middleware/observability";
+import * as observability from "../../tanstack/middleware/observability";
 import * as composite from "./composite";
 import * as logger from "./logger";
 import { _resetBootStateForTests, instrumentWorker } from "./otel";

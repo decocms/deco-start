@@ -78,7 +78,7 @@ export default defineConfig([
     entry: [
       "src/index.ts",
       "src/tanstack/hooks/index.ts",
-      "src/middleware/index.ts",
+      "src/tanstack/middleware/index.ts",
       "src/tanstack/routes/index.ts",
       "src/sdk/*.ts",
       "src/apps/index.ts",

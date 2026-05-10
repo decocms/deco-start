@@ -36,7 +36,7 @@ installTanStackRuntime();
 import type { MatcherContext } from "../core/cms/resolve";
 import { resolveDecoPage } from "../core/cms/resolve";
 import { runSectionLoaders, runSingleSectionLoader } from "../core/cms/sectionLoaders";
-import { logRequest, recordRequestMetric, withTracing } from "../middleware/observability";
+import { logRequest, recordRequestMetric, withTracing } from "../tanstack/middleware/observability";
 import {
   type CacheProfileName,
   cacheHeaders,

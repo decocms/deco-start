@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { MeterAdapter } from "../../middleware/observability";
+import type { MeterAdapter } from "../../tanstack/middleware/observability";
 import { createCompositeLogger, createCompositeMeter } from "./composite";
 import type { LoggerAdapter } from "./logger";
 

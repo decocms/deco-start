@@ -9,7 +9,7 @@
  * inside the TanStack Start server function.
  */
 
-import { withTracing } from "../../middleware/observability";
+import { withTracing } from "../../tanstack/middleware/observability";
 import { getCacheProfile } from "../sdk/cacheHeaders";
 import { djb2 } from "../sdk/djb2";
 import type { ResolvedSection } from "./resolve";

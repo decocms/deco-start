@@ -255,24 +255,24 @@
       "require": "./dist/sdk/setupApps.cjs"
     },
     "./middleware": {
-      "types": "./dist/middleware/index.d.ts",
-      "import": "./dist/middleware/index.js",
-      "require": "./dist/middleware/index.cjs"
+      "types": "./dist/tanstack/middleware/index.d.ts",
+      "import": "./dist/tanstack/middleware/index.js",
+      "require": "./dist/tanstack/middleware/index.cjs"
     },
     "./middleware/healthMetrics": {
-      "types": "./dist/middleware/healthMetrics.d.ts",
-      "import": "./dist/middleware/healthMetrics.js",
-      "require": "./dist/middleware/healthMetrics.cjs"
+      "types": "./dist/tanstack/middleware/healthMetrics.d.ts",
+      "import": "./dist/tanstack/middleware/healthMetrics.js",
+      "require": "./dist/tanstack/middleware/healthMetrics.cjs"
     },
     "./middleware/hydrationContext": {
-      "types": "./dist/middleware/hydrationContext.d.ts",
-      "import": "./dist/middleware/hydrationContext.js",
-      "require": "./dist/middleware/hydrationContext.cjs"
+      "types": "./dist/tanstack/middleware/hydrationContext.d.ts",
+      "import": "./dist/tanstack/middleware/hydrationContext.js",
+      "require": "./dist/tanstack/middleware/hydrationContext.cjs"
     },
     "./middleware/validateSection": {
-      "types": "./dist/middleware/validateSection.d.ts",
-      "import": "./dist/middleware/validateSection.js",
-      "require": "./dist/middleware/validateSection.cjs"
+      "types": "./dist/tanstack/middleware/validateSection.d.ts",
+      "import": "./dist/tanstack/middleware/validateSection.js",
+      "require": "./dist/tanstack/middleware/validateSection.cjs"
     },
     "./matchers/posthog": {
       "types": "./dist/core/matchers/posthog.d.ts",
