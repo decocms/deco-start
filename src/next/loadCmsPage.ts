@@ -11,5 +11,9 @@ import { buildMatcherContextFromNext } from "./ctx";
  */
 export async function loadCmsPage(req: Request): Promise<LoadedCmsPage | null> {
   const ctx = buildMatcherContextFromNext(req);
-  return await loadCmsPagePure(req.url, ctx);
+  // ctx.path is the pathname extracted from req.url by
+  // buildMatcherContextFromNext. Pass it (NOT req.url) — req.url is the
+  // absolute URL per the WHATWG Fetch spec, and loadCmsPagePure treats
+  // its first argument as a path that flows into findPageByPath.
+  return await loadCmsPagePure(ctx.path ?? new URL(req.url).pathname, ctx);
 }
