@@ -1,5 +1,5 @@
-export type { PageSeo } from "../core/cms/resolve";
-export type { Device } from "../core/sdk/useDevice";
+export type { PageSeo } from "../../core/cms/resolve";
+export type { Device } from "../../core/sdk/useDevice";
 export {
   decoInvokeRoute,
   decoMetaRoute,

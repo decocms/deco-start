@@ -79,7 +79,7 @@ export default defineConfig([
       "src/index.ts",
       "src/hooks/index.ts",
       "src/middleware/index.ts",
-      "src/routes/index.ts",
+      "src/tanstack/routes/index.ts",
       "src/sdk/*.ts",
       "src/apps/index.ts",
       "src/apps/autoconfig.ts",

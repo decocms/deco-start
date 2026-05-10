@@ -13,10 +13,10 @@
  * export const Route = createFileRoute("/deco/meta")(decoMetaRoute);
  * ```
  */
-import { corsHeaders } from "../core/admin/cors";
-import { handleInvoke } from "../core/admin/invoke";
-import { handleMeta } from "../core/admin/meta";
-import { handleRender } from "../core/admin/render";
+import { corsHeaders } from "../../core/admin/cors";
+import { handleInvoke } from "../../core/admin/invoke";
+import { handleMeta } from "../../core/admin/meta";
+import { handleRender } from "../../core/admin/render";
 
 type HandlerFn = (ctx: { request: Request }) => Promise<Response> | Response;
 

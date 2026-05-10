@@ -4,7 +4,7 @@ const { onChangeListeners } = vi.hoisted(() => ({
   onChangeListeners: [] as Array<() => void>,
 }));
 
-vi.mock("../core/cms", () => ({
+vi.mock("../../core/cms", () => ({
   loadBlocks: vi.fn(),
   onChange: vi.fn((listener: () => void) => {
     onChangeListeners.push(listener);
@@ -12,7 +12,7 @@ vi.mock("../core/cms", () => ({
   resolvePageSections: vi.fn(),
 }));
 
-import { loadBlocks, resolvePageSections } from "../core/cms";
+import { loadBlocks, resolvePageSections } from "../../core/cms";
 import { __resetSiteGlobalsCache, resolveSiteGlobals, withSiteGlobals } from "./withSiteGlobals";
 
 const mockedLoadBlocks = loadBlocks as unknown as ReturnType<typeof vi.fn>;

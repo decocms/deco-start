@@ -300,9 +300,9 @@
       "require": "./dist/setup.cjs"
     },
     "./routes": {
-      "types": "./dist/routes/index.d.ts",
-      "import": "./dist/routes/index.js",
-      "require": "./dist/routes/index.cjs"
+      "types": "./dist/tanstack/routes/index.d.ts",
+      "import": "./dist/tanstack/routes/index.js",
+      "require": "./dist/tanstack/routes/index.cjs"
     },
     "./scripts/generate-blocks": {
       "types": "./dist/scripts/generate-blocks.d.ts",

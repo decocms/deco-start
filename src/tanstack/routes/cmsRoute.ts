@@ -30,8 +30,8 @@ import {
   setResponseHeader,
 } from "@tanstack/react-start/server";
 import { createElement } from "react";
-import { preloadSectionComponents } from "../core/cms/registry";
-import type { DeferredSection, MatcherContext, PageSeo, ResolvedSection } from "../core/cms/resolve";
+import { preloadSectionComponents } from "../../core/cms/registry";
+import type { DeferredSection, MatcherContext, PageSeo, ResolvedSection } from "../../core/cms/resolve";
 import {
   extractSeoFromProps,
   extractSeoFromSections,
@@ -40,17 +40,17 @@ import {
   resolveDecoPage,
   resolveDeferredSection,
   resolveDeferredSectionFull,
-} from "../core/cms/resolve";
-import { getSiteSeo } from "../core/cms/loader";
-import { runSectionLoaders, runSingleSectionLoader } from "../core/cms/sectionLoaders";
+} from "../../core/cms/resolve";
+import { getSiteSeo } from "../../core/cms/loader";
+import { runSectionLoaders, runSingleSectionLoader } from "../../core/cms/sectionLoaders";
 import {
   type CacheProfileName,
   cacheHeaders,
   detectCacheProfile,
   routeCacheDefaults,
-} from "../core/sdk/cacheHeaders";
-import { normalizeUrlsInObject } from "../core/sdk/normalizeUrls";
-import { type Device, detectDevice } from "../core/sdk/useDevice";
+} from "../../core/sdk/cacheHeaders";
+import { normalizeUrlsInObject } from "../../core/sdk/normalizeUrls";
+import { type Device, detectDevice } from "../../core/sdk/useDevice";
 
 const isServer = typeof document === "undefined";
 
