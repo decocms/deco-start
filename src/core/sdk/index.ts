@@ -1,12 +1,5 @@
 export { ANALYTICS_SCRIPT, type DataEventParams, gtmScript, useSendEvent } from "./analytics";
 export {
-  type CachedLoaderOptions,
-  type CachePolicy,
-  clearLoaderCache,
-  createCachedLoader,
-  getLoaderCacheStats,
-} from "../../tanstack/sdk/cachedLoader";
-export {
   type CacheProfileConfig,
   type CacheProfileName,
   type CacheProfileOverrides,
@@ -24,7 +17,6 @@ export {
 } from "./cacheHeaders";
 export { clx } from "./clx";
 export { decodeCookie, deleteCookie, getCookie, getServerSideCookie, setCookie } from "./cookie";
-export { forwardResponseCookies, getRequestCookieHeader } from "../../tanstack/sdk/cookiePassthrough";
 export { buildCSPHeaderValue, type CSPOptions, setCSPHeaders } from "./csp";
 export { djb2, djb2Hex } from "./djb2";
 export { isDevMode } from "./env";
@@ -59,7 +51,6 @@ export {
   type RedirectMap,
   registerRedirectResolveType,
 } from "./redirects";
-export { RequestContext, type RequestContextData } from "../../tanstack/sdk/requestContext";
 export { createServerTimings, type ServerTimings } from "./serverTimings";
 export { type ReactiveSignal, signal } from "./signal";
 export {
@@ -89,7 +80,6 @@ export {
   useScriptAsDataURI,
   useSection,
 } from "./useScript";
-export { createDecoWorkerEntry, type DecoWorkerEntryOptions } from "../../tanstack/sdk/workerEntry";
 export {
   isWrappedError,
   unwrapError,

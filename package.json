@@ -376,7 +376,7 @@
     "lint:unused": "knip",
     "format": "biome format src/ scripts/",
     "format:fix": "biome format --write src/ scripts/",
-    "check": "bun run typecheck && bun run lint && bun run lint:unused",
+    "check": "bun run typecheck && bun run lint && bun run lint:unused && bun run build && bunx tsx scripts/check-tier-boundaries.ts",
     "clean": "rm -rf node_modules .cache dist .wrangler/state node_modules/.vite && bun install"
   },
   "keywords": [
