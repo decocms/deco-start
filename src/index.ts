@@ -1,7 +1,7 @@
 // @decocms/start — framework layer for Deco storefronts
 export * from "./core/admin/index";
 export * from "./core/cms/index";
-export * from "./hooks/index";
+export * from "./tanstack/hooks/index";
 export * from "./middleware/index";
 // Observability surface — logger + instrumentWorker live behind their own
 // granular imports too (see `@decocms/start/sdk/logger`, `.../observability`).

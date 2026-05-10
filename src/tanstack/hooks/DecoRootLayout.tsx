@@ -1,7 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { HeadContent, Scripts, ScriptOnce } from "@tanstack/react-router";
 import { LiveControls } from "./LiveControls";
-import { ANALYTICS_SCRIPT } from "../core/sdk/analytics";
+import { ANALYTICS_SCRIPT } from "../../core/sdk/analytics";
 import { NavigationProgress } from "./NavigationProgress";
 import { StableOutlet } from "./StableOutlet";
 

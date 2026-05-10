@@ -40,9 +40,9 @@
       "require": "./dist/core/admin/index.cjs"
     },
     "./hooks": {
-      "types": "./dist/hooks/index.d.ts",
-      "import": "./dist/hooks/index.js",
-      "require": "./dist/hooks/index.cjs"
+      "types": "./dist/tanstack/hooks/index.d.ts",
+      "import": "./dist/tanstack/hooks/index.js",
+      "require": "./dist/tanstack/hooks/index.cjs"
     },
     "./types": {
       "types": "./dist/core/types/index.d.ts",

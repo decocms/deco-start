@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ComponentType } from "react";
-import { getSection } from "../core/cms/registry";
+import { getSection } from "../../core/cms/registry";
 
 const componentCache = new Map<string, ComponentType<any>>();
 

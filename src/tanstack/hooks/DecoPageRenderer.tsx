@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 import { Await, ClientOnly } from "@tanstack/react-router";
-import type { SectionOptions } from "../core/cms/registry";
+import type { SectionOptions } from "../../core/cms/registry";
 import {
   getResolvedComponent,
   getSectionOptions,
@@ -17,8 +17,8 @@ import {
   getSyncComponent,
   preloadSectionModule,
   setResolvedComponent,
-} from "../core/cms/registry";
-import type { DeferredSection, ResolvedSection } from "../core/cms/resolve";
+} from "../../core/cms/registry";
+import type { DeferredSection, ResolvedSection } from "../../core/cms/resolve";
 
 import { SectionErrorBoundary } from "./SectionErrorFallback";
 
@@ -84,7 +84,7 @@ function NestedSectionFallback() {
   return <div className="w-full h-24 bg-base-200 animate-pulse rounded" />;
 }
 
-import { isDevMode } from "../core/sdk/env";
+import { isDevMode } from "../../core/sdk/env";
 
 const isDev = isDevMode();
 
