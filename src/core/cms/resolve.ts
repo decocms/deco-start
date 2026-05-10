@@ -254,7 +254,9 @@ export interface MatcherContext {
   url?: string;
   path?: string;
   cookies?: Record<string, string>;
+  /** Optional. Standard Web API request headers as a plain object. */
   headers?: Record<string, string>;
+  /** Optional. Standard Web API Request — for matchers that need raw request access. */
   request?: Request;
 }
 
