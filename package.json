@@ -29,6 +29,11 @@
       "import": "./dist/core/index.js",
       "require": "./dist/core/index.cjs"
     },
+    "./tanstack": {
+      "types": "./dist/tanstack/index.d.ts",
+      "import": "./dist/tanstack/index.js",
+      "require": "./dist/tanstack/index.cjs"
+    },
     "./cms": {
       "types": "./dist/core/cms/index.d.ts",
       "import": "./dist/core/cms/index.js",

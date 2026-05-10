@@ -77,6 +77,7 @@ export default defineConfig([
     name: "src",
     entry: [
       "src/index.ts",
+      "src/tanstack/index.ts",
       "src/tanstack/hooks/index.ts",
       "src/tanstack/middleware/index.ts",
       "src/tanstack/middleware/healthMetrics.ts",
