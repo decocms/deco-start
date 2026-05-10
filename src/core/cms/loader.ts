@@ -1,5 +1,8 @@
-import * as asyncHooks from "node:async_hooks";
 import { djb2Hex } from "../sdk/djb2";
+import {
+  noopRequestStore,
+  type RequestStore,
+} from "../runtime/requestStore";
 
 export type Resolvable = {
   __resolveType?: string;
@@ -21,18 +24,28 @@ if (!G.__deco) G.__deco = {};
 let blockData: Record<string, unknown> = G.__deco.blockData ?? {};
 let revision: string | null = G.__deco.revision ?? null;
 
-interface ALSLike<T> {
-  getStore(): T | undefined;
-  run<R>(store: T, fn: () => R): R;
+// Per-request blocks-override storage. The default no-op implementation keeps
+// `withBlocksOverride` callable in client / non-server contexts; host
+// environments that need request-scoped isolation (e.g. Cloudflare Workers via
+// AsyncLocalStorage) inject a backing store with `setBlocksOverrideStore`.
+let blocksOverrideStore: RequestStore<Record<string, unknown>> =
+  noopRequestStore as RequestStore<Record<string, unknown>>;
+
+/**
+ * Inject the per-request store used by `withBlocksOverride` /
+ * `getActiveBlocksOverride`. Pass `undefined` to reset to the no-op default.
+ */
+export function setBlocksOverrideStore(
+  store: RequestStore<Record<string, unknown>> | undefined,
+): void {
+  blocksOverrideStore =
+    store ?? (noopRequestStore as RequestStore<Record<string, unknown>>);
 }
 
-// AsyncLocalStorage might not be available in client builds (Vite replaces
-// node:async_hooks with an empty shim). The namespace import avoids Rollup's
-// named-export validation, and the runtime check prevents construction errors.
-const ALS = (asyncHooks as any).AsyncLocalStorage;
-const blocksOverrideStorage: ALSLike<Record<string, unknown>> = ALS
-  ? new ALS()
-  : { getStore: () => undefined, run: (_s: any, fn: any) => fn() };
+/** Returns the active blocks override if inside a `withBlocksOverride` scope. */
+export function getActiveBlocksOverride(): Record<string, unknown> | undefined {
+  return blocksOverrideStore.get();
+}
 
 // ---------------------------------------------------------------------------
 // Change listeners
@@ -95,7 +108,7 @@ export function loadBlocks(): Record<string, unknown> {
     revision = G.__deco.revision ?? null;
   }
 
-  const override = blocksOverrideStorage.getStore();
+  const override = getActiveBlocksOverride();
   if (override) {
     const merged = { ...blockData };
     for (const [key, value] of Object.entries(override)) {
@@ -124,7 +137,7 @@ export function getRevision(): string | null {
  * affected (AsyncLocalStorage is per-request scoped).
  */
 export function withBlocksOverride<T>(override: Record<string, unknown>, fn: () => T): T {
-  return blocksOverrideStorage.run(override, fn);
+  return blocksOverrideStore.run(override, fn);
 }
 
 // Higher key wins. Compared lexicographically:
