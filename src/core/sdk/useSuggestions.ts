@@ -29,7 +29,7 @@
  */
 
 import { useCallback } from "react";
-import type { Resolved } from "../../types";
+import type { Resolved } from "../types";
 import { signal, type ReactiveSignal } from "./signal";
 
 /**

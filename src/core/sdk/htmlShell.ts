@@ -6,7 +6,7 @@
  * This module provides a single implementation to keep them consistent.
  */
 
-import { getRenderShellConfig } from "../../admin/setup";
+import { getRenderShellConfig } from "../admin/setup";
 
 export interface HtmlShellOptions {
   /** Content to inject into <body>. */

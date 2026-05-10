@@ -1,4 +1,4 @@
-import { djb2Hex } from "../core/sdk/djb2";
+import { djb2Hex } from "../sdk/djb2";
 import { composeMeta, type MetaResponse } from "./schema";
 
 // Use globalThis to share meta state across module instances.

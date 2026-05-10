@@ -18,14 +18,14 @@ import {
 	setDanglingReferenceHandler,
 	setResolveErrorHandler,
 } from "./core/cms/index";
-import { registerBuiltinMatchers } from "./matchers/builtins";
+import { registerBuiltinMatchers } from "./core/matchers/builtins";
 import { registerProductionOrigins } from "./core/sdk/normalizeUrls";
 import {
 	setInvokeLoaders,
 	setMetaData,
 	setPreviewWrapper,
 	setRenderShell,
-} from "./admin/index";
+} from "./core/admin/index";
 
 export interface SiteSetupOptions {
 	/**

@@ -25,7 +25,7 @@
  * ```
  */
 
-import { getRenderShellConfig } from "../admin/setup";
+import { getRenderShellConfig } from "../core/admin/setup";
 import { loadBlocks } from "../core/cms/loader";
 import type { MatcherContext } from "../core/cms/resolve";
 import { resolveDecoPage } from "../core/cms/resolve";

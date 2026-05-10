@@ -3,7 +3,7 @@ import {
   type LoaderConfig,
   registerActionSchemas,
   registerLoaderSchemas,
-} from "../../admin/schema";
+} from "../admin/schema";
 import { getMeter, MetricNames, withTracing } from "../../middleware/observability";
 import { djb2Hex } from "../sdk/djb2";
 import { normalizeUrlsInObject } from "../sdk/normalizeUrls";

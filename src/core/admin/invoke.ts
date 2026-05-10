@@ -13,7 +13,7 @@
  * copies those headers into the final HTTP Response.
  */
 
-import { RequestContext } from "../sdk/requestContext";
+import { RequestContext } from "../../sdk/requestContext";
 
 export type InvokeLoader = (props: any, request: Request) => Promise<any>;
 export type InvokeAction = (props: any, request: Request) => Promise<any>;

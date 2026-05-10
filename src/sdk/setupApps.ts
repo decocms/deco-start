@@ -19,7 +19,7 @@
  * ```
  */
 
-import { clearInvokeHandlers, registerInvokeHandlers } from "../admin/invoke";
+import { clearInvokeHandlers, registerInvokeHandlers } from "../core/admin/invoke";
 import { registerSections } from "../core/cms/registry";
 import {
   registerCommerceLoaders,

@@ -35,9 +35,9 @@
       "require": "./dist/core/cms/index.cjs"
     },
     "./admin": {
-      "types": "./dist/admin/index.d.ts",
-      "import": "./dist/admin/index.js",
-      "require": "./dist/admin/index.cjs"
+      "types": "./dist/core/admin/index.d.ts",
+      "import": "./dist/core/admin/index.js",
+      "require": "./dist/core/admin/index.cjs"
     },
     "./hooks": {
       "types": "./dist/hooks/index.d.ts",
@@ -45,14 +45,14 @@
       "require": "./dist/hooks/index.cjs"
     },
     "./types": {
-      "types": "./dist/types/index.d.ts",
-      "import": "./dist/types/index.js",
-      "require": "./dist/types/index.cjs"
+      "types": "./dist/core/types/index.d.ts",
+      "import": "./dist/core/types/index.js",
+      "require": "./dist/core/types/index.cjs"
     },
     "./types/widgets": {
-      "types": "./dist/types/widgets.d.ts",
-      "import": "./dist/types/widgets.js",
-      "require": "./dist/types/widgets.cjs"
+      "types": "./dist/core/types/widgets.d.ts",
+      "import": "./dist/core/types/widgets.js",
+      "require": "./dist/core/types/widgets.cjs"
     },
     "./sdk": {
       "types": "./dist/core/sdk/index.d.ts",
@@ -275,14 +275,14 @@
       "require": "./dist/middleware/validateSection.cjs"
     },
     "./matchers/posthog": {
-      "types": "./dist/matchers/posthog.d.ts",
-      "import": "./dist/matchers/posthog.js",
-      "require": "./dist/matchers/posthog.cjs"
+      "types": "./dist/core/matchers/posthog.d.ts",
+      "import": "./dist/core/matchers/posthog.js",
+      "require": "./dist/core/matchers/posthog.cjs"
     },
     "./matchers/builtins": {
-      "types": "./dist/matchers/builtins.d.ts",
-      "import": "./dist/matchers/builtins.js",
-      "require": "./dist/matchers/builtins.cjs"
+      "types": "./dist/core/matchers/builtins.d.ts",
+      "import": "./dist/core/matchers/builtins.js",
+      "require": "./dist/core/matchers/builtins.cjs"
     },
     "./apps": {
       "types": "./dist/apps/index.d.ts",

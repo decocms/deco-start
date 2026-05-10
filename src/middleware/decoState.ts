@@ -3,7 +3,7 @@
  * and passes through the request lifecycle.
  */
 import { createServerTimings, type ServerTimings } from "../core/sdk/serverTimings";
-import type { Flag } from "../types/index";
+import type { Flag } from "../core/types/index";
 
 export interface DecoState {
   /** Site name / identifier. */

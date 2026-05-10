@@ -1,5 +1,5 @@
-import { getRevision, loadBlocks, setBlocks } from "../core/cms/loader";
-import { clearLoaderCache } from "../sdk/cachedLoader";
+import { getRevision, loadBlocks, setBlocks } from "../cms/loader";
+import { clearLoaderCache } from "../../sdk/cachedLoader";
 import { invalidateMetaCache } from "./meta";
 
 export function handleDecofileRead(): Response {
