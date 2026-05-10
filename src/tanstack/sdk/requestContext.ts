@@ -63,7 +63,7 @@ export interface RequestContextData {
 
 const storage = new AsyncLocalStorage<RequestContextData>();
 
-import { isMobileUA } from "../core/sdk/useDevice";
+import { isMobileUA } from "../../core/sdk/useDevice";
 
 const BOT_RE =
   /bot|crawl|spider|slurp|bingpreview|facebookexternalhit|linkedinbot|twitterbot|whatsapp|telegram|googlebot|yandex|baidu|duckduck/i;

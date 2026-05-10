@@ -1,5 +1,5 @@
 import { getRevision, loadBlocks, setBlocks } from "../cms/loader";
-import { clearLoaderCache } from "../../sdk/cachedLoader";
+import { clearLoaderCache } from "../../tanstack/sdk/cachedLoader";
 import { invalidateMetaCache } from "./meta";
 
 export function handleDecofileRead(): Response {

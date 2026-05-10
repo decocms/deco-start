@@ -5,7 +5,7 @@ export {
   clearLoaderCache,
   createCachedLoader,
   getLoaderCacheStats,
-} from "../../sdk/cachedLoader";
+} from "../../tanstack/sdk/cachedLoader";
 export {
   type CacheProfileConfig,
   type CacheProfileName,
@@ -24,7 +24,7 @@ export {
 } from "./cacheHeaders";
 export { clx } from "./clx";
 export { decodeCookie, deleteCookie, getCookie, getServerSideCookie, setCookie } from "./cookie";
-export { forwardResponseCookies, getRequestCookieHeader } from "../../sdk/cookiePassthrough";
+export { forwardResponseCookies, getRequestCookieHeader } from "../../tanstack/sdk/cookiePassthrough";
 export { buildCSPHeaderValue, type CSPOptions, setCSPHeaders } from "./csp";
 export { djb2, djb2Hex } from "./djb2";
 export { isDevMode } from "./env";
@@ -59,7 +59,7 @@ export {
   type RedirectMap,
   registerRedirectResolveType,
 } from "./redirects";
-export { RequestContext, type RequestContextData } from "../../sdk/requestContext";
+export { RequestContext, type RequestContextData } from "../../tanstack/sdk/requestContext";
 export { createServerTimings, type ServerTimings } from "./serverTimings";
 export { type ReactiveSignal, signal } from "./signal";
 export {
@@ -81,7 +81,6 @@ export {
   TABLET_RE,
   useDevice,
 } from "./useDevice";
-export { useHydrated } from "./useHydrated";
 export { useId } from "./useId";
 export {
   inlineScript,
@@ -90,7 +89,7 @@ export {
   useScriptAsDataURI,
   useSection,
 } from "./useScript";
-export { createDecoWorkerEntry, type DecoWorkerEntryOptions } from "../../sdk/workerEntry";
+export { createDecoWorkerEntry, type DecoWorkerEntryOptions } from "../../tanstack/sdk/workerEntry";
 export {
   isWrappedError,
   unwrapError,

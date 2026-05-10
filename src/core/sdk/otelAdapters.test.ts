@@ -9,7 +9,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnalyticsEngineMeterAdapter, setRuntimeEnv } from "./otelAdapters";
-import { RequestContext } from "../../sdk/requestContext";
+import { RequestContext } from "../../tanstack/sdk/requestContext";
 
 describe("createAnalyticsEngineMeterAdapter", () => {
   afterEach(() => vi.restoreAllMocks());

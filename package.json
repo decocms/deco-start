@@ -110,9 +110,9 @@
       "require": "./dist/core/sdk/cookie.cjs"
     },
     "./sdk/cookiePassthrough": {
-      "types": "./dist/sdk/cookiePassthrough.d.ts",
-      "import": "./dist/sdk/cookiePassthrough.js",
-      "require": "./dist/sdk/cookiePassthrough.cjs"
+      "types": "./dist/tanstack/sdk/cookiePassthrough.d.ts",
+      "import": "./dist/tanstack/sdk/cookiePassthrough.js",
+      "require": "./dist/tanstack/sdk/cookiePassthrough.cjs"
     },
     "./sdk/analytics": {
       "types": "./dist/core/sdk/analytics.d.ts",
@@ -120,9 +120,9 @@
       "require": "./dist/core/sdk/analytics.cjs"
     },
     "./sdk/cachedLoader": {
-      "types": "./dist/sdk/cachedLoader.d.ts",
-      "import": "./dist/sdk/cachedLoader.js",
-      "require": "./dist/sdk/cachedLoader.cjs"
+      "types": "./dist/tanstack/sdk/cachedLoader.d.ts",
+      "import": "./dist/tanstack/sdk/cachedLoader.js",
+      "require": "./dist/tanstack/sdk/cachedLoader.cjs"
     },
     "./sdk/serverTimings": {
       "types": "./dist/core/sdk/serverTimings.d.ts",
@@ -175,14 +175,14 @@
       "require": "./dist/core/sdk/otelAdapters/clickhouseCollector.cjs"
     },
     "./sdk/observability": {
-      "types": "./dist/sdk/observability.d.ts",
-      "import": "./dist/sdk/observability.js",
-      "require": "./dist/sdk/observability.cjs"
+      "types": "./dist/tanstack/sdk/observability.d.ts",
+      "import": "./dist/tanstack/sdk/observability.js",
+      "require": "./dist/tanstack/sdk/observability.cjs"
     },
     "./sdk/workerEntry": {
-      "types": "./dist/sdk/workerEntry.d.ts",
-      "import": "./dist/sdk/workerEntry.js",
-      "require": "./dist/sdk/workerEntry.cjs"
+      "types": "./dist/tanstack/sdk/workerEntry.d.ts",
+      "import": "./dist/tanstack/sdk/workerEntry.js",
+      "require": "./dist/tanstack/sdk/workerEntry.cjs"
     },
     "./sdk/abTesting": {
       "types": "./dist/core/sdk/abTesting.d.ts",
@@ -205,9 +205,9 @@
       "require": "./dist/core/sdk/useDevice.cjs"
     },
     "./sdk/useHydrated": {
-      "types": "./dist/core/sdk/useHydrated.d.ts",
-      "import": "./dist/core/sdk/useHydrated.js",
-      "require": "./dist/core/sdk/useHydrated.cjs"
+      "types": "./dist/tanstack/sdk/useHydrated.d.ts",
+      "import": "./dist/tanstack/sdk/useHydrated.js",
+      "require": "./dist/tanstack/sdk/useHydrated.cjs"
     },
     "./sdk/wrapCaughtErrors": {
       "types": "./dist/core/sdk/wrapCaughtErrors.d.ts",
@@ -235,24 +235,24 @@
       "require": "./dist/core/sdk/mergeCacheControl.cjs"
     },
     "./sdk/requestContext": {
-      "types": "./dist/sdk/requestContext.d.ts",
-      "import": "./dist/sdk/requestContext.js",
-      "require": "./dist/sdk/requestContext.cjs"
+      "types": "./dist/tanstack/sdk/requestContext.d.ts",
+      "import": "./dist/tanstack/sdk/requestContext.js",
+      "require": "./dist/tanstack/sdk/requestContext.cjs"
     },
     "./sdk/createInvoke": {
-      "types": "./dist/sdk/createInvoke.d.ts",
-      "import": "./dist/sdk/createInvoke.js",
-      "require": "./dist/sdk/createInvoke.cjs"
+      "types": "./dist/tanstack/sdk/createInvoke.d.ts",
+      "import": "./dist/tanstack/sdk/createInvoke.js",
+      "require": "./dist/tanstack/sdk/createInvoke.cjs"
     },
     "./sdk/router": {
-      "types": "./dist/sdk/router.d.ts",
-      "import": "./dist/sdk/router.js",
-      "require": "./dist/sdk/router.cjs"
+      "types": "./dist/tanstack/sdk/router.d.ts",
+      "import": "./dist/tanstack/sdk/router.js",
+      "require": "./dist/tanstack/sdk/router.cjs"
     },
     "./sdk/setupApps": {
-      "types": "./dist/sdk/setupApps.d.ts",
-      "import": "./dist/sdk/setupApps.js",
-      "require": "./dist/sdk/setupApps.cjs"
+      "types": "./dist/tanstack/sdk/setupApps.d.ts",
+      "import": "./dist/tanstack/sdk/setupApps.js",
+      "require": "./dist/tanstack/sdk/setupApps.cjs"
     },
     "./middleware": {
       "types": "./dist/tanstack/middleware/index.d.ts",

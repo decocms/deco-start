@@ -19,12 +19,12 @@
  * ```
  */
 
-import { clearInvokeHandlers, registerInvokeHandlers } from "../core/admin/invoke";
-import { registerSections } from "../core/cms/registry";
+import { clearInvokeHandlers, registerInvokeHandlers } from "../../core/admin/invoke";
+import { registerSections } from "../../core/cms/registry";
 import {
   registerCommerceLoaders,
   unregisterCommerceLoader,
-} from "../core/cms/resolve";
+} from "../../core/cms/resolve";
 import { RequestContext } from "./requestContext";
 
 // ---------------------------------------------------------------------------

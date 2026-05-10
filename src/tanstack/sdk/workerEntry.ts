@@ -25,31 +25,31 @@
  * ```
  */
 
-import { getRenderShellConfig } from "../core/admin/setup";
-import { loadBlocks } from "../core/cms/loader";
-import { installTanStackRuntime } from "../tanstack/setup";
+import { getRenderShellConfig } from "../../core/admin/setup";
+import { loadBlocks } from "../../core/cms/loader";
+import { installTanStackRuntime } from "../setup";
 
 // Install ALS-backed RequestStore(s) on first module load. The Cloudflare
 // Worker module evaluates once per isolate, so this runs at boot and not on
 // every request. Idempotent — safe even if multiple bundles import this.
 installTanStackRuntime();
-import type { MatcherContext } from "../core/cms/resolve";
-import { resolveDecoPage } from "../core/cms/resolve";
-import { runSectionLoaders, runSingleSectionLoader } from "../core/cms/sectionLoaders";
-import { logRequest, recordRequestMetric, withTracing } from "../tanstack/middleware/observability";
+import type { MatcherContext } from "../../core/cms/resolve";
+import { resolveDecoPage } from "../../core/cms/resolve";
+import { runSectionLoaders, runSingleSectionLoader } from "../../core/cms/sectionLoaders";
+import { logRequest, recordRequestMetric, withTracing } from "../middleware/observability";
 import {
   type CacheProfileName,
   cacheHeaders,
   detectCacheProfile,
   edgeCacheConfig,
   getCacheProfile,
-} from "../core/sdk/cacheHeaders";
-import { buildHtmlShell } from "../core/sdk/htmlShell";
-import { setRuntimeEnv } from "../core/sdk/otelAdapters";
+} from "../../core/sdk/cacheHeaders";
+import { buildHtmlShell } from "../../core/sdk/htmlShell";
+import { setRuntimeEnv } from "../../core/sdk/otelAdapters";
 import { RequestContext } from "./requestContext";
 import { getAppMiddleware } from "./setupApps";
-import { cleanPathForCacheKey } from "../core/sdk/urlUtils";
-import { type Device, isMobileUA } from "../core/sdk/useDevice";
+import { cleanPathForCacheKey } from "../../core/sdk/urlUtils";
+import { type Device, isMobileUA } from "../../core/sdk/useDevice";
 
 /**
  * Build-time identifier injected by `decoVitePlugin()` (see

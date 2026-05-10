@@ -21,7 +21,7 @@ import {
   setupApps,
   type AppDefinition,
   type AppDefinitionWithHandlers,
-} from "../sdk/setupApps";
+} from "../tanstack/sdk/setupApps";
 
 /**
  * Shape of the secret resolver passed to each app's `configure()`. Matches

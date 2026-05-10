@@ -15,7 +15,7 @@
  * ```
  */
 
-import { getLoaderCacheStats } from "../../sdk/cachedLoader";
+import { getLoaderCacheStats } from "../sdk/cachedLoader";
 
 // ---------------------------------------------------------------------------
 // Counters
