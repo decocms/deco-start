@@ -30,27 +30,16 @@ import {
   setResponseHeader,
 } from "@tanstack/react-start/server";
 import { createElement } from "react";
+import { loadCmsPagePure } from "../../core/cms/loadCmsPagePure";
+import { resolveDeferredSectionPure } from "../../core/cms/resolveDeferredSectionPure";
 import { preloadSectionComponents } from "../../core/cms/registry";
-import type { DeferredSection, MatcherContext, PageSeo, ResolvedSection } from "../../core/cms/resolve";
-import {
-  extractSeoFromProps,
-  extractSeoFromSections,
-  getDeferredRawProps,
-  reExtractRawProps,
-  resolveDecoPage,
-  resolveDeferredSection,
-  resolveDeferredSectionFull,
-} from "../../core/cms/resolve";
-import { getSiteSeo } from "../../core/cms/loader";
-import { runSectionLoaders, runSingleSectionLoader } from "../../core/cms/sectionLoaders";
+import type { MatcherContext, PageSeo, ResolvedSection } from "../../core/cms/resolve";
 import {
   type CacheProfileName,
   cacheHeaders,
-  detectCacheProfile,
   routeCacheDefaults,
 } from "../../core/sdk/cacheHeaders";
-import { normalizeUrlsInObject } from "../../core/sdk/normalizeUrls";
-import { type Device, detectDevice } from "../../core/sdk/useDevice";
+import type { Device } from "../../core/sdk/useDevice";
 
 const isServer = typeof document === "undefined";
 
@@ -89,47 +78,33 @@ async function loadCmsPageInternal(fullPath: string) {
         : serverUrl.toString();
 
   const originRequest = getRequest();
+  const headers: Record<string, string> = {};
+  for (const [k, v] of originRequest.headers.entries()) headers[k] = v;
+
   const matcherCtx: MatcherContext = {
     userAgent: getRequestHeader("user-agent") ?? "",
     url: urlWithSearch,
     path: basePath,
     cookies: getCookies(),
+    headers,
     request: originRequest,
   };
-  const page = await resolveDecoPage(basePath, matcherCtx);
-  if (!page) return null;
 
-  const request = new Request(urlWithSearch, {
-    headers: originRequest.headers,
-  });
-  const enrichedSections = await runSectionLoaders(page.resolvedSections, request);
+  const result = await loadCmsPagePure(fullPath, matcherCtx);
+  if (!result) return null;
 
-  // Pre-import eager section modules so their default exports are cached
-  // in resolvedComponents. This ensures SSR renders with direct component
-  // refs, and the client hydration can skip React.lazy/Suspense.
-  const eagerKeys = enrichedSections.map((s) => s.component);
-  await preloadSectionComponents(eagerKeys);
+  // Translate cacheMetadata into TanStack response headers. The pure loader
+  // doesn't touch headers — that's the host's responsibility.
+  if (result.cacheMetadata.cacheable) {
+    if (result.cacheMetadata.cacheControl) {
+      setResponseHeader("Cache-Control", result.cacheMetadata.cacheControl);
+    }
+  }
 
-  const cacheProfile = detectCacheProfile(basePath);
-  const ua = getRequestHeader("user-agent") ?? "";
-  const device = detectDevice(ua);
-
-  // Build SEO: merge page-level seo block (primary) with section-contributed SEO (secondary)
-  const seo = await buildPageSeo(page.seoSection, enrichedSections, request);
-
-  // Destructure seoSection out — it's an internal artifact, not serialized to client
-  const { seoSection: _seo, ...pageData } = page;
-
-  return {
-    ...pageData,
-    resolvedSections: normalizeUrlsInObject(enrichedSections),
-    deferredSections: normalizeUrlsInObject(page.deferredSections),
-    cacheProfile,
-    pageUrl: urlWithSearch,
-    pagePath: basePath,
-    seo,
-    device,
-  };
+  // Strip cacheMetadata from the loader-data shape so SPA navigation payloads
+  // stay identical to the pre-pure-extraction format.
+  const { cacheMetadata: _cacheMetadata, ...pageData } = result;
+  return pageData;
 }
 
 export const loadCmsPage = createServerFn({ method: "GET" })
@@ -156,34 +131,28 @@ export const loadCmsHomePage = createServerFn({ method: "GET" }).handler(async (
   const request = getRequest();
   const ua = getRequestHeader("user-agent") ?? "";
   const serverUrl = getRequestUrl();
+  const headers: Record<string, string> = {};
+  for (const [k, v] of request.headers.entries()) headers[k] = v;
+
   const matcherCtx: MatcherContext = {
     userAgent: ua,
     url: serverUrl.toString(),
     path: "/",
     cookies: getCookies(),
+    headers,
     request,
   };
-  const page = await resolveDecoPage("/", matcherCtx);
-  if (!page) return null;
-  const enrichedSections = await runSectionLoaders(page.resolvedSections, request);
 
-  const eagerKeys = enrichedSections.map((s) => s.component);
-  await preloadSectionComponents(eagerKeys);
+  const result = await loadCmsPagePure("/", matcherCtx);
+  if (!result) return null;
 
-  const device = detectDevice(ua);
-  const seo = await buildPageSeo(page.seoSection, enrichedSections, request);
+  if (result.cacheMetadata.cacheable && result.cacheMetadata.cacheControl) {
+    setResponseHeader("Cache-Control", result.cacheMetadata.cacheControl);
+  }
 
-  const { seoSection: _seo, ...pageData } = page;
-
-  return {
-    ...pageData,
-    resolvedSections: normalizeUrlsInObject(enrichedSections),
-    deferredSections: normalizeUrlsInObject(page.deferredSections),
-    pagePath: "/",
-    pageUrl: serverUrl.toString(),
-    seo,
-    device,
-  };
+  // Homepage payload historically omits `cacheProfile` (route headers handle it).
+  const { cacheMetadata: _cm, cacheProfile: _cp, ...pageData } = result;
+  return pageData;
 });
 
 // ---------------------------------------------------------------------------
@@ -213,45 +182,35 @@ export const loadDeferredSection = createServerFn({ method: "POST" })
 
     const originRequest = getRequest();
     const serverUrl = getRequestUrl().toString();
+    const headers: Record<string, string> = {};
+    for (const [k, v] of originRequest.headers.entries()) headers[k] = v;
+
     const matcherCtx: MatcherContext = {
       userAgent: getRequestHeader("user-agent") ?? "",
       url: pageUrl || serverUrl,
       path: pagePath,
       cookies: getCookies(),
+      headers,
       request: originRequest,
     };
 
-    // Resolve rawProps: prefer client-provided (backward compat), then server cache,
-    // then re-extract from the page as a last resort (handles cross-isolate cache miss
-    // on Cloudflare Workers and TTL expiry for slow-scrolling users).
-    const rawProps = clientRawProps
-      ?? (index !== undefined ? getDeferredRawProps(pagePath, component, index) : null)
-      ?? (index !== undefined
-        ? await reExtractRawProps(pagePath, component, index, matcherCtx)
-        : null);
+    const result = await resolveDeferredSectionPure(pagePath, component, matcherCtx, {
+      rawProps: clientRawProps,
+      index,
+    });
+    if (!result) return null;
 
-    if (!rawProps) {
-      console.warn(`[CMS] Deferred section cache miss: ${component} at index ${index} on ${pagePath}`);
-      return null;
+    // Translate cacheMetadata into TanStack response headers.
+    // Without X-Deco-Cacheable, POST _serverFn responses are passed through
+    // by the worker entry (checkout actions, invoke mutations, etc.).
+    if (result.cacheMetadata.cacheable) {
+      setResponseHeader("X-Deco-Cacheable", "true");
+      if (result.cacheMetadata.cacheControl) {
+        setResponseHeader("Cache-Control", result.cacheMetadata.cacheControl);
+      }
     }
 
-    const section = await resolveDeferredSection(component, rawProps, pagePath, matcherCtx);
-    if (!section) return null;
-
-    // Preserve original index for correct ordering in SPA navigation merge
-    if (index !== undefined) section.index = index;
-
-    const request = new Request(pageUrl || serverUrl, {
-      headers: originRequest.headers,
-    });
-    const enriched = await runSingleSectionLoader(section, request);
-
-    // Signal to the worker entry that this response is safe to edge-cache.
-    // Without this header, POST _serverFn responses are passed through
-    // without caching (checkout actions, invoke mutations, etc.).
-    setResponseHeader("X-Deco-Cacheable", "true");
-
-    return normalizeUrlsInObject(enriched);
+    return result.section;
   });
 
 // ---------------------------------------------------------------------------
@@ -361,99 +320,6 @@ type CmsPageLoaderData = {
   device?: Device;
   resolvedSections?: Array<{ component: string }>;
 } | null;
-
-// ---------------------------------------------------------------------------
-// Page SEO assembly — merges page.seo block with section-contributed SEO
-// ---------------------------------------------------------------------------
-
-/**
- * Process the resolved SEO section from page.seo, run its section loader
- * if registered, apply title/description templates, and merge with
- * section-contributed SEO.
- */
-async function buildPageSeo(
-  seoSection: ResolvedSection | null | undefined,
-  enrichedSections: ResolvedSection[],
-  request: Request,
-): Promise<PageSeo> {
-  // Secondary source: SEO sections embedded in the sections array
-  const sectionSeo = extractSeoFromSections(enrichedSections);
-
-  // Site-wide SEO config from the "Site" app block — mirrors ctx.seo in
-  // the original deco-cx/deco framework. Provides fallback title,
-  // description, and templates when page-level seo doesn't supply them.
-  const siteSeo = getSiteSeo();
-
-  if (!seoSection) {
-    // No page.seo block — use site-wide SEO as primary, section-contributed as secondary
-    const merged: PageSeo = { ...sectionSeo };
-    if (siteSeo.title && !merged.title) merged.title = siteSeo.title;
-    if (siteSeo.description && !merged.description) merged.description = siteSeo.description;
-    if (siteSeo.image && !merged.image) merged.image = siteSeo.image;
-
-    // Apply site-level templates even when there is no page-level seo
-    // section. Without this, pages whose title comes from a content
-    // section (e.g. <h1> + sectionSeo) or from the site default would
-    // skip `siteSeo.titleTemplate`, causing prod-vs-worker title drift.
-    const titleTemplate = effectiveTemplate(siteSeo.titleTemplate);
-    const descTemplate = effectiveTemplate(siteSeo.descriptionTemplate);
-    if (titleTemplate && merged.title) {
-      merged.title = titleTemplate.replace("%s", merged.title);
-    }
-    if (descTemplate && merged.description) {
-      merged.description = descTemplate.replace("%s", merged.description);
-    }
-
-    return merged;
-  }
-
-  // Run the section loader on the seo section if one is registered
-  // (e.g., SEOPDP loader transforms {jsonLD: ProductDetailsPage} → {title, description, ...})
-  let enrichedProps = seoSection.props;
-  try {
-    const enriched = await runSingleSectionLoader(seoSection, request);
-    if (enriched) enrichedProps = enriched.props;
-  } catch {
-    // Section loader failed — use the raw resolved props
-  }
-
-  const pageSeo = extractSeoFromProps(enrichedProps);
-
-  // Replicate original SeoV2 loader logic: `_title ?? appTitle`
-  // When the page's seo block doesn't have a title/description,
-  // fall back to the Site app's seo config.
-  if (!pageSeo.title && siteSeo.title) pageSeo.title = siteSeo.title;
-  if (!pageSeo.description && siteSeo.description) pageSeo.description = siteSeo.description;
-  if (!pageSeo.image && siteSeo.image) pageSeo.image = siteSeo.image;
-
-  // Apply title/description templates.
-  // Priority: page-level template → site-level template → no-op.
-  // This mirrors the original: `(titleTemplate ?? "").trim().length === 0 ? "%s" : titleTemplate`
-  const rawProps = seoSection.props;
-  const titleTemplate =
-    effectiveTemplate(rawProps.titleTemplate as string | undefined) ??
-    effectiveTemplate(siteSeo.titleTemplate);
-  const descTemplate =
-    effectiveTemplate(rawProps.descriptionTemplate as string | undefined) ??
-    effectiveTemplate(siteSeo.descriptionTemplate);
-
-  if (titleTemplate && pageSeo.title) {
-    pageSeo.title = titleTemplate.replace("%s", pageSeo.title);
-  }
-  if (descTemplate && pageSeo.description) {
-    pageSeo.description = descTemplate.replace("%s", pageSeo.description);
-  }
-
-  // Primary source (page.seo) overrides secondary (section-contributed).
-  // Only truthy fields in pageSeo override — undefined keys don't clear sectionSeo.
-  return { ...sectionSeo, ...pageSeo };
-}
-
-/** Returns a non-trivial template string, or undefined for "%s" / empty / blank. */
-function effectiveTemplate(tmpl: string | undefined): string | undefined {
-  if (!tmpl || tmpl.trim() === "" || tmpl.trim() === "%s") return undefined;
-  return tmpl;
-}
 
 // ---------------------------------------------------------------------------
 // Head metadata builder
