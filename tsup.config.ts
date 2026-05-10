@@ -98,6 +98,8 @@ export default defineConfig([
       "src/core/types/widgets.ts",
       "src/core/runtime/index.ts",
       "src/core/runtime/*.ts",
+      "src/tanstack/runtime/index.ts",
+      "src/tanstack/runtime/*.ts",
     ],
     format: ["esm", "cjs"],
     dts: false,
