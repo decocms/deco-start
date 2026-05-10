@@ -65,6 +65,8 @@ export {
   setResolveErrorHandler,
   WELL_KNOWN_TYPES,
 } from "./resolve";
+export { loadCmsPagePure } from "./loadCmsPagePure";
+export type { LoadedCmsPage } from "./loadCmsPagePure";
 export type { SectionLoaderFn } from "./sectionLoaders";
 export {
   isLayoutSection,
