@@ -1,6 +1,6 @@
 {
   "name": "@decocms/start",
-  "version": "5.0.0",
+  "version": "5.1.0",
   "type": "module",
   "description": "Deco framework for TanStack Start - CMS bridge, admin protocol, hooks, schema generation",
   "main": "./dist/index.cjs",
@@ -420,7 +420,9 @@
     "vite": ">=6.0.0 || >=7.0.0 || >=8.0.0"
   },
   "peerDependenciesMeta": {
-    "next": { "optional": true }
+    "next": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.6",
