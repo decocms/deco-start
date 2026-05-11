@@ -13,10 +13,10 @@ export { LIVE_CONTROLS_SCRIPT } from "./liveControls";
 export { handleMeta, setMetaData } from "./meta";
 export { handleRender, setPreviewWrapper, setRenderShell } from "./render";
 export {
+  type ActionConfig,
   composeMeta,
   getRegisteredLoaders,
   getRegisteredMatchers,
-  type ActionConfig,
   type LoaderConfig,
   type MatcherConfig,
   type MetaResponse,
@@ -27,3 +27,4 @@ export {
   registerMatcherSchema,
   registerMatcherSchemas,
 } from "./schema";
+export { getRenderShellConfig } from "./setup";
