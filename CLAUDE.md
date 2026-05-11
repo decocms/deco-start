@@ -74,6 +74,15 @@ When adding new files, place them in the lowest-coupling tier that satisfies the
 
 Source `.ts` is compiled via `tsup` (JS) + `tsc` (declarations) to `dist/`. `package.json` exports point at `./dist/<path>.{js,cjs,d.ts}`. Source `.ts` files do NOT ship to npm. Run `bun run build` locally to produce `dist/`.
 
+## Release pipeline
+
+Two channels via semantic-release. The decision tree for which one to target lives in [`.agents/skills/decocms-start-release-workflow/SKILL.md`](./.agents/skills/decocms-start-release-workflow/SKILL.md) — read it before opening a PR.
+
+- **`main` → `@decocms/start@latest`** (e.g. `5.2.0`). Default for all consumers via `^` ranges. Routine fixes go here.
+- **`next` → `@decocms/start@next`** (e.g. `5.2.0-next.3`). Opt-in via `bun add @decocms/start@next`. Use for risky / behavior-changing / breaking work that benefits from a customer validating first. Promote to stable by opening a PR `next` → `main`.
+
+Hard rules: never push directly to `main` or `next`; never run `npm publish` locally; never include the canonical GitHub-Actions CI-skip token (the one documented at `.github/workflows/release.yml:3-21`) in a PR title or body targeting either branch — it silently suppresses the release workflow.
+
 ### Package Exports (from package.json)
 
 Every export maps to a source file — no dist indirection:

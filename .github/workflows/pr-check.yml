@@ -1,0 +1,56 @@
+name: pr-check
+
+# PR-time validation. Runs the gates we currently know pass cleanly on
+# main, so anything that would break the release workflow is caught at
+# PR time instead.
+#
+# Wired today:
+#   - bun run typecheck            (tsc --noEmit)
+#   - bun run build                (tsup + tsc declarations)
+#   - bun run test                 (vitest run)
+#   - scripts/check-tier-boundaries.ts
+#
+# NOT wired (existing debt on main — see follow-up cleanup PR):
+#   - bun run lint                 (biome — 193 errors, mostly format)
+#   - bun run lint:unused          (knip — unused exports, config hints)
+# Once those are clean, replace the individual steps below with the
+# single `bun run check` script (which already chains all five).
+#
+# Keep `bun-version` in sync with the `packageManager` field in
+# package.json and with lockfile-check.yml.
+
+on:
+  pull_request:
+    branches: [main, next]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.5
+
+      - name: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile
+
+      - name: typecheck
+        run: bun run typecheck
+
+      - name: build
+        run: bun run build
+
+      - name: tier boundaries
+        run: bunx tsx scripts/check-tier-boundaries.ts
+
+      - name: test
+        run: bun run test

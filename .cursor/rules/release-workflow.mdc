@@ -1,0 +1,27 @@
+---
+description: Two-channel release model for @decocms/start (main → @latest, next → @next). Always loaded. Defer to .agents/skills/decocms-start-release-workflow/SKILL.md for the PR-opening decision tree and operational runbooks.
+alwaysApply: true
+---
+
+# Release workflow (quick reference)
+
+`@decocms/start` ships through two long-lived branches mapped to two npm dist-tags:
+
+- **`main` → `@decocms/start@latest`** (e.g. `5.2.0`). All consumers using `"@decocms/start": "^X.Y.Z"` get this automatically on the next `bun install`. This is the default audience.
+- **`next` → `@decocms/start@next`** (e.g. `5.2.0-next.3`). Opt-in only — customers must `bun add @decocms/start@next` or pin the exact prerelease version. `^` ranges in customer `package.json` files do **not** resolve to prereleases.
+
+## Before opening a PR
+
+Always pick the base branch deliberately. The decision tree lives in [`.agents/skills/decocms-start-release-workflow/SKILL.md`](../../.agents/skills/decocms-start-release-workflow/SKILL.md). Short version:
+
+- Fix the whole customer base needs ASAP → `gh pr create --base main`.
+- Anything risky, behavior-changing, breaking, or that benefits from one customer validating first → `gh pr create --base next`. Promote later by opening `next` → `main`.
+- Docs/chore/test with no shipped surface change → `--base main` (semantic-release will no-op).
+
+## Hard rules
+
+- Never push directly to `main` or `next` — both are protected; releases must go through PRs.
+- Never run `npm publish` locally. The CI workflow holds the npm token and runs semantic-release so version, dist-tag, tag, and GitHub Release stay in sync.
+- Never include the canonical CI-skip token (the bracketed phrase "skip" + "ci" — see `.github/workflows/release.yml:3-21`) in PR titles or bodies targeting `main` or `next`. It silently skips the release workflow. Refer to it descriptively if you have to mention it.
+
+Conventional commit prefixes drive the version bump on both branches — see `.releaserc.json` for the mapping. Squash-merge is the convention; write the conventional-commit message on the PR title.
