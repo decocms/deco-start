@@ -326,38 +326,39 @@
     },
     "./scripts/generate-blocks": {
       "types": "./dist/scripts/generate-blocks.d.ts",
-      "import": "./dist/scripts/generate-blocks.js",
-      "require": "./dist/scripts/generate-blocks.cjs"
+      "default": "./dist/scripts/generate-blocks.cjs"
     },
     "./scripts/generate-schema": {
       "types": "./dist/scripts/generate-schema.d.ts",
-      "import": "./dist/scripts/generate-schema.js",
-      "require": "./dist/scripts/generate-schema.cjs"
+      "default": "./dist/scripts/generate-schema.cjs"
     },
     "./scripts/generate-invoke": {
       "types": "./dist/scripts/generate-invoke.d.ts",
-      "import": "./dist/scripts/generate-invoke.js",
-      "require": "./dist/scripts/generate-invoke.cjs"
+      "default": "./dist/scripts/generate-invoke.cjs"
+    },
+    "./scripts/generate-sections": {
+      "types": "./dist/scripts/generate-sections.d.ts",
+      "default": "./dist/scripts/generate-sections.cjs"
+    },
+    "./scripts/generate-loaders": {
+      "types": "./dist/scripts/generate-loaders.d.ts",
+      "default": "./dist/scripts/generate-loaders.cjs"
     },
     "./scripts/migrate": {
       "types": "./dist/scripts/migrate.d.ts",
-      "import": "./dist/scripts/migrate.js",
-      "require": "./dist/scripts/migrate.cjs"
+      "default": "./dist/scripts/migrate.cjs"
     },
     "./scripts/migrate-post-cleanup": {
       "types": "./dist/scripts/migrate-post-cleanup.d.ts",
-      "import": "./dist/scripts/migrate-post-cleanup.js",
-      "require": "./dist/scripts/migrate-post-cleanup.cjs"
+      "default": "./dist/scripts/migrate-post-cleanup.cjs"
     },
     "./scripts/migrate-to-cf-observability": {
       "types": "./dist/scripts/migrate-to-cf-observability.d.ts",
-      "import": "./dist/scripts/migrate-to-cf-observability.js",
-      "require": "./dist/scripts/migrate-to-cf-observability.cjs"
+      "default": "./dist/scripts/migrate-to-cf-observability.cjs"
     },
     "./scripts/tailwind-lint": {
       "types": "./dist/scripts/tailwind-lint.d.ts",
-      "import": "./dist/scripts/tailwind-lint.js",
-      "require": "./dist/scripts/tailwind-lint.cjs"
+      "default": "./dist/scripts/tailwind-lint.cjs"
     },
     "./vite": {
       "import": "./dist/tanstack/vite/plugin.js",

@@ -133,23 +133,33 @@ export default defineConfig([
       "scripts/generate-blocks.ts",
       "scripts/generate-schema.ts",
       "scripts/generate-invoke.ts",
+      "scripts/generate-sections.ts",
+      "scripts/generate-loaders.ts",
       "scripts/migrate.ts",
       "scripts/migrate-post-cleanup.ts",
       "scripts/migrate-to-cf-observability.ts",
       "scripts/htmx-analyze.ts",
       "scripts/tailwind-lint.ts",
     ],
-    format: ["esm", "cjs"],
+    // Scripts are CLI tools invoked via `node …/foo.cjs` — CJS only. ESM bundles
+    // of ts-morph (which inlines TypeScript) leave `require("fs")` callsites
+    // intact; in an ESM context those go through a __require shim that throws
+    // "Dynamic require of fs is not supported". package.json `"type": "module"`
+    // means a bare .js file would be loaded as ESM, so we don't ship one.
+    format: ["cjs"],
     dts: false,
     splitting: false,
     sourcemap: true,
     clean: false,
     outDir: "dist/scripts",
     target: "es2022",
+    // platform: "node" auto-externalizes Node built-ins and emits proper
+    // require() for bundled CJS deps. Avoids the dynamic-require shim that
+    // platform: "neutral" produces.
     external: sharedExternal,
     esbuildOptions(opts) {
       opts.jsx = "automatic";
-      opts.platform = "neutral";
+      opts.platform = "node";
       opts.outbase = "scripts";
     },
     ignoreWatch: ["**/*.test.ts", "**/*.test.tsx"],
