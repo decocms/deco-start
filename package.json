@@ -1,6 +1,6 @@
 {
   "name": "@decocms/start",
-  "version": "5.1.0",
+  "version": "5.1.1",
   "type": "module",
   "description": "Deco framework for TanStack Start - CMS bridge, admin protocol, hooks, schema generation",
   "main": "./dist/index.cjs",
