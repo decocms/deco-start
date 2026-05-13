@@ -23,10 +23,6 @@
       "prepareCmd": "npm version ${nextRelease.version} --no-git-tag-version",
       "publishCmd": "npm publish --access public --tag ${nextRelease.channel}"
     }],
-    "@semantic-release/github",
-    ["@semantic-release/git", {
-      "assets": ["package.json"],
-      "message": "chore(release): ${nextRelease.version} [skip ci]"
-    }]
+    "@semantic-release/github"
   ]
 }
