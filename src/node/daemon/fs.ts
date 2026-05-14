@@ -89,26 +89,39 @@ function applyPatch(
   content: string | null,
   patch: Patch,
 ): { conflict: boolean; content?: string } {
-  try {
-    if (patch.type === "json") {
-      const result = patch.payload.reduce(
-        fjp.applyReducer,
-        JSON.parse(content ?? "{}"),
-      );
-      return { conflict: false, content: JSON.stringify(result, null, 2) };
+  if (patch.type === "json") {
+    // The on-disk content must itself be valid JSON for a JSON patch to apply.
+    // Surface a non-JSON file as a soft conflict (the shape doesn't match the
+    // patch's expectations) rather than letting SyntaxError bubble to a 500.
+    let base: unknown;
+    try {
+      base = JSON.parse(content ?? "{}");
+    } catch {
+      return { conflict: true };
     }
-    if (patch.type === "text") {
+    try {
+      const result = patch.payload.reduce(fjp.applyReducer, base);
+      return { conflict: false, content: JSON.stringify(result, null, 2) };
+    } catch (err: unknown) {
+      if (err instanceof fjp.JsonPatchError && err.name === "TEST_OPERATION_FAILED") {
+        return { conflict: true };
+      }
+      throw err;
+    }
+  }
+  if (patch.type === "text") {
+    try {
       const result = patch.payload.reduce(
         fjp.applyReducer,
         content?.split("\n") ?? [],
       );
       return { conflict: false, content: (result as string[]).join("\n") };
+    } catch (err: unknown) {
+      if (err instanceof fjp.JsonPatchError && err.name === "TEST_OPERATION_FAILED") {
+        return { conflict: true };
+      }
+      throw err;
     }
-  } catch (err: unknown) {
-    if (err instanceof fjp.JsonPatchError && err.name === "TEST_OPERATION_FAILED") {
-      return { conflict: true };
-    }
-    throw err;
   }
   return { conflict: true };
 }
