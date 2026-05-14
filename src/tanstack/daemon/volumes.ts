@@ -10,6 +10,7 @@ import type { IncomingMessage, ServerResponse, Server as HttpServer } from "node
 import { WebSocketServer, WebSocket } from "ws";
 import fjp from "fast-json-patch";
 import type { Operation } from "fast-json-patch";
+import { isIgnoredPath } from "../../node/daemon/ignored";
 
 // ---------------------------------------------------------------------------
 // Types — ported from daemon/realtime/types.ts
@@ -122,15 +123,7 @@ async function walkFiles(
     for (const entry of entries) {
       if (!entry.isFile()) continue;
       const fullPath = join(entry.parentPath, entry.name);
-      const rel = toPosix(fullPath.replace(root, ""));
-      if (
-        rel.includes("/.git/") ||
-        rel.includes("/node_modules/") ||
-        rel.includes("/.agent-home/") ||
-        rel.includes("/.claude/")
-      ) {
-        continue;
-      }
+      if (isIgnoredPath(fullPath)) continue;
       results.push(fullPath);
     }
   } catch {
@@ -318,15 +311,8 @@ export function createVolumesHandler(opts: VolumesOptions) {
 
   // Broadcast file changes from Vite's watcher
   const broadcastChange = (filePath: string, deleted = false) => {
+    if (isIgnoredPath(filePath)) return;
     const rel = toPosix(filePath).replace(toPosix(cwd), "");
-    if (
-      rel.includes("/.git/") ||
-      rel.includes("/node_modules/") ||
-      rel.includes("/.agent-home/") ||
-      rel.includes("/.claude/")
-    ) {
-      return;
-    }
     broadcast(state, { path: rel, timestamp: Date.now(), deleted });
   };
 

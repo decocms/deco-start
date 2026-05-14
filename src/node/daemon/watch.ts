@@ -8,6 +8,7 @@
  */
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, sep } from "node:path";
+import { isIgnoredPath } from "./ignored";
 
 export interface FsEvent {
   type: "fs-sync" | "fs-snapshot" | "worker-status" | "meta-info";
@@ -29,15 +30,6 @@ export function subscribeFsEvents(listener: (event: FsEvent) => void): () => voi
 }
 
 const toPosix = (p: string) => p.replaceAll(sep, "/");
-
-function shouldIgnore(path: string): boolean {
-  return (
-    path.includes(`${sep}.git${sep}`) ||
-    path.includes(`${sep}node_modules${sep}`) ||
-    path.includes(`${sep}.agent-home${sep}`) ||
-    path.includes(`${sep}.claude${sep}`)
-  );
-}
 
 function inferBlockType(resolveType: string): string | null {
   if (!resolveType) return null;
@@ -92,7 +84,7 @@ export async function* scanDecoFiles(cwd: string, since: number): AsyncGenerator
     for (const entry of entries) {
       if (!entry.isFile()) continue;
       const fullPath = join(entry.parentPath, entry.name);
-      if (shouldIgnore(fullPath)) continue;
+      if (isIgnoredPath(fullPath)) continue;
 
       let mtime: number;
       try {
@@ -113,9 +105,12 @@ export async function* scanDecoFiles(cwd: string, since: number): AsyncGenerator
   yield { type: "fs-snapshot", detail: { timestamp: Date.now() } };
 }
 
-/** Common ignore predicate, exported for the watcher wrappers. */
-export function shouldIgnorePath(path: string): boolean {
-  return shouldIgnore(path);
-}
+/**
+ * Common ignore predicate, exported for the watcher wrappers.
+ *
+ * @deprecated Use `isIgnoredPath` from `./ignored` directly. This re-export
+ * exists for back-compat with existing imports inside the daemon module.
+ */
+export { isIgnoredPath as shouldIgnorePath } from "./ignored";
 
 export const toPosixPath = toPosix;
