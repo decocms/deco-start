@@ -203,6 +203,8 @@ export default defineConfig([
       "src/next/*.tsx",
       "src/node/index.ts",
       "src/node/*.ts",
+      "src/node/daemon/index.ts",
+      "src/node/daemon/*.ts",
     ],
     format: ["esm", "cjs"],
     dts: false,
