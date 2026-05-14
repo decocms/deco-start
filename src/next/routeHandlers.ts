@@ -6,27 +6,34 @@ import {
 export interface DecoAdminRouteHandlers {
   GET: (req: Request) => Promise<Response>;
   POST: (req: Request) => Promise<Response>;
+  PATCH: (req: Request) => Promise<Response>;
+  DELETE: (req: Request) => Promise<Response>;
 }
 
 /**
- * Build a `{ GET, POST }` pair suitable for one-line `export` from every
- * App Router route file under your `app/` tree. Instantiate once in a shared
- * module and re-export from each route file.
+ * Build a `{ GET, POST, PATCH, DELETE }` quartet suitable for one-line `export`
+ * from every App Router route file under your `app/` tree. Instantiate once in
+ * a shared module and re-export from each route file — the same set works for
+ * read-only routes (`/_healthcheck`, `/live/_meta`) and the mutating
+ * `/fs/file/*` flows alike, because the dispatcher branches on method
+ * internally.
  *
  * @example
  * // app/lib/deco-admin.ts
  * import { createDecoAdminRouteHandlers } from "@decocms/start/next";
- * export const { GET, POST } = createDecoAdminRouteHandlers({ site: "my-site" });
+ * export const { GET, POST, PATCH, DELETE } = createDecoAdminRouteHandlers({
+ *   site: "my-site",
+ * });
  *
- * // app/%5Fhealthcheck/route.ts
+ * // app/%5Fhealthcheck/route.ts (and every other route file)
  * export const dynamic = "force-dynamic";
- * export { GET, POST } from "@/lib/deco-admin";
+ * export { GET, POST, PATCH, DELETE } from "@/lib/deco-admin";
  */
 export function createDecoAdminRouteHandlers(
   opts: DecoAdminRouteOptions = {},
 ): DecoAdminRouteHandlers {
   const handler = createDecoAdminRoute(opts);
-  return { GET: handler, POST: handler };
+  return { GET: handler, POST: handler, PATCH: handler, DELETE: handler };
 }
 
 /**
@@ -48,4 +55,6 @@ function getDefaultHandlers(): DecoAdminRouteHandlers {
 export const decoAdminRouteHandlers: DecoAdminRouteHandlers = {
   GET: (req) => getDefaultHandlers().GET(req),
   POST: (req) => getDefaultHandlers().POST(req),
+  PATCH: (req) => getDefaultHandlers().PATCH(req),
+  DELETE: (req) => getDefaultHandlers().DELETE(req),
 };

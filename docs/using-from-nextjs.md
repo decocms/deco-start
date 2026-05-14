@@ -91,7 +91,7 @@ Instantiate the dispatcher once:
 // app/lib/deco-admin.ts
 import { createDecoAdminRouteHandlers } from "@decocms/start/next";
 
-export const { GET, POST } = createDecoAdminRouteHandlers({
+export const { GET, POST, PATCH, DELETE } = createDecoAdminRouteHandlers({
   site: "my-site",
   // Optional — defaults shown:
   //   enabled: true
@@ -109,15 +109,17 @@ Then every route file is two lines:
 ```ts
 // app/%5Fhealthcheck/route.ts (and every other route file above)
 export const dynamic = "force-dynamic";
-export { GET, POST } from "@/lib/deco-admin";
+export { GET, POST, PATCH, DELETE } from "@/lib/deco-admin";
 ```
+
+`PATCH` and `DELETE` are required by `/fs/file/*` (admin's edit-and-save flow). They're harmless to re-export from read-only routes — the dispatcher branches on method internally — so a single set works everywhere.
 
 ### Disabling specific routes
 
 Each group has its own flag:
 
 ```ts
-export const { GET, POST } = createDecoAdminRouteHandlers({
+export const { GET, POST, PATCH, DELETE } = createDecoAdminRouteHandlers({
   site: "my-site",
   watch: false,             // disable dev-time SSE even in dev
   fs: false,                // disable dev-time filesystem REST

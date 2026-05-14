@@ -26,12 +26,17 @@ import {
  * Each route file is two lines:
  *
  *   export const dynamic = "force-dynamic";
- *   export { GET, POST } from "@/lib/deco-admin";  // ← your config module
+ *   export { GET, POST, PATCH, DELETE } from "@/lib/deco-admin";  // ← your config module
  *
  * Where `@/lib/deco-admin` instantiates a single configuration:
  *
  *   import { createDecoAdminRouteHandlers } from "@decocms/start/next";
- *   export const { GET, POST } = createDecoAdminRouteHandlers({ site: "my-site" });
+ *   export const { GET, POST, PATCH, DELETE } = createDecoAdminRouteHandlers({
+ *     site: "my-site",
+ *   });
+ *
+ * (PATCH and DELETE are required by `/fs/file/*`; harmless to re-export from
+ *  read-only routes — the dispatcher branches on method internally.)
  *
  * For one-off mounting without a config module, `handleDecoAdminRoute` is the
  * pre-instantiated default. It reads `DECO_SITE` from the environment for JWT
