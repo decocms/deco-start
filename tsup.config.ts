@@ -1,6 +1,98 @@
-import { promises as fs } from "node:fs";
-import { join } from "node:path";
+import { existsSync, promises as fs } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { defineConfig } from "tsup";
+
+const ROOT = process.cwd();
+
+// Source files / directories whose module-level state MUST live in exactly one
+// published bundle. Without this, tsup's per-entry self-contained bundles each
+// inline a copy of the module, producing independent module-private state per
+// bundle (writers and readers disagree → "Unknown handler" 404s and similar
+// silent state-split bugs). See the invoke registry incident, May 2026.
+//
+// Rule: any RELATIVE import that resolves to one of these targets gets
+// rewritten to the canonical bare subpath and marked `external`, unless the
+// importer is itself the owner. Node's module loader dedupes bare specifiers
+// at runtime → single shared module instance.
+
+// Directory-based ownership: any source file under `dir` → `subpath`.
+// Importers inside the same dir inline (the owning bundle inlines its own
+// internals); cross-dir importers externalize.
+const DIR_OWNERS: ReadonlyArray<{ dir: string; subpath: string }> = [
+  { dir: "src/core/admin/", subpath: "@decocms/start/admin" },
+  { dir: "src/core/cms/", subpath: "@decocms/start/cms" },
+];
+
+// File-based ownership: any non-self import targeting this file externalizes.
+// Used for sdk files that publish their own subpath and own mutable state.
+const FILE_OWNERS: Readonly<Record<string, string>> = {
+  "src/core/sdk/requestContext.ts": "@decocms/start/sdk/requestContext",
+  "src/core/sdk/normalizeUrls.ts": "@decocms/start/sdk/normalizeUrls",
+  "src/core/sdk/logger.ts": "@decocms/start/sdk/logger",
+  "src/core/sdk/otel.ts": "@decocms/start/sdk/otel",
+};
+
+function toPosix(p: string): string {
+  return p.split(sep).join("/");
+}
+
+function resolveRelativeImport(importer: string, importPath: string): string | null {
+  const base = resolve(dirname(importer), importPath);
+  // Extension-less imports only (TS convention). `base` itself is intentionally
+  // not a candidate — `existsSync` returns true for directories, which would
+  // mismatch `../../core/cms` (a dir) before falling through to `.../index.ts`.
+  const candidates = [
+    `${base}.ts`,
+    `${base}.tsx`,
+    `${base}.js`,
+    join(base, "index.ts"),
+    join(base, "index.tsx"),
+    join(base, "index.js"),
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return c;
+  }
+  return null;
+}
+
+function ownerOf(absPath: string): { subpath: string; key: string } | null {
+  const rel = toPosix(relative(ROOT, absPath));
+  if (FILE_OWNERS[rel]) {
+    return { subpath: FILE_OWNERS[rel], key: rel };
+  }
+  for (const { dir, subpath } of DIR_OWNERS) {
+    if (rel.startsWith(dir)) {
+      return { subpath, key: dir };
+    }
+  }
+  return null;
+}
+
+const externalizeStatefulPlugin = {
+  name: "externalize-stateful-subpaths",
+  setup(build: {
+    onResolve: (
+      opts: { filter: RegExp },
+      cb: (args: {
+        path: string;
+        importer: string;
+      }) => { path: string; external: boolean } | null | undefined,
+    ) => void;
+  }) {
+    build.onResolve({ filter: /^\.{1,2}\// }, (args) => {
+      if (!args.importer) return null;
+      const resolved = resolveRelativeImport(args.importer, args.path);
+      if (!resolved) return null;
+      const target = ownerOf(resolved);
+      if (!target) return null;
+      const source = ownerOf(args.importer);
+      // Same owner (dir-or-file) → inline. The owning bundle has the impl;
+      // everyone else gets a runtime require/import of the bare subpath.
+      if (source && source.subpath === target.subpath) return null;
+      return { path: target.subpath, external: true };
+    });
+  },
+};
 
 const BIN_FILES = [
   "dist/scripts/migrate.cjs",
@@ -111,6 +203,8 @@ export default defineConfig([
       "src/next/*.tsx",
       "src/node/index.ts",
       "src/node/*.ts",
+      "src/node/daemon/index.ts",
+      "src/node/daemon/*.ts",
     ],
     format: ["esm", "cjs"],
     dts: false,
@@ -120,6 +214,7 @@ export default defineConfig([
     outDir: "dist",
     target: "es2022",
     external: sharedExternal,
+    esbuildPlugins: [externalizeStatefulPlugin],
     esbuildOptions(opts) {
       opts.jsx = "automatic";
       opts.platform = "neutral";

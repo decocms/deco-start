@@ -6,15 +6,17 @@
 
 ```bash
 bun add @decocms/start
-# Required peer dependencies (you almost certainly already have these in a Next 15 app)
+# Required peer dependencies (you almost certainly already have these in a Next 15/16 app)
 bun add next@^15 react@^19 react-dom@^19
 ```
 
-`tsconfig.json` must use `moduleResolution: "bundler"` (the Next 15 default).
+`tsconfig.json` must use `moduleResolution: "bundler"` (the Next 15+ default).
 
 ## Configure
 
 No `transpilePackages` in `next.config.js` is needed — the package ships compiled JavaScript.
+
+Set `DECO_SITE=<your-site>` in your environment so the admin protocol routes can validate JWTs from `admin.deco.cx`.
 
 ## Render a CMS page from a route
 
@@ -34,12 +36,11 @@ export default async function Page() {
   const result = await loadCmsPage(req);
   if (!result) notFound();
 
-  // Render result.resolvedSections via your component map.
   return <YourSectionsRenderer result={result} />;
 }
 ```
 
-To populate `x-url` / `x-pathname`, install a Next.js middleware:
+Populate `x-url` / `x-pathname` from a Next middleware:
 
 ```ts
 // middleware.ts
@@ -55,14 +56,102 @@ export const config = { matcher: ["/((?!_next).*)"] };
 
 ## Wire admin protocol routes
 
-The Deco admin UI talks to your storefront via `/live/_meta`, `/.decofile`, `/live/previews/*`, and `/deco/invoke/*`. Expose them with a single catch-all:
+The Deco admin UI talks to your storefront via:
+
+- `/_healthcheck`, `/_ready` — hosting probes
+- `/live/_meta`, `/.decofile`, `/live/previews/*`, `/deco/render`, `/deco/invoke/*` — admin protocol
+- `/_watch`, `/fs/*` — dev-time admin editor (auto-disabled in production)
+
+**Do not mount a single root-level catchall.** Earlier versions of these docs recommended `app/(deco-admin)/[...path]/route.ts`, which intercepts every non-root request in your app and breaks any storefront with pages at `/products`, `/cart`, etc. Use dedicated route files instead.
+
+### One config module + dedicated route files
+
+App Router treats `_folder` as a *private folder* and excludes it from routing, so daemon paths starting with `_` need to be escaped in the folder name. Turbopack does not URL-decode `%2E`, so `.`-prefixed folders must use a literal dot. The exact layout that works:
+
+```
+app/
+├── lib/
+│   └── deco-admin.ts
+├── %5Fhealthcheck/route.ts
+├── %5Fready/route.ts
+├── %5Fwatch/route.ts
+├── .decofile/route.ts                 (literal . — NOT %2E)
+├── live/
+│   ├── %5Fmeta/route.ts
+│   └── previews/[[...path]]/route.ts
+├── deco/
+│   ├── render/route.ts
+│   └── invoke/[[...path]]/route.ts
+└── fs/file/[[...path]]/route.ts
+```
+
+Instantiate the dispatcher once:
 
 ```ts
-// app/(deco-admin)/[...path]/route.ts
-import { handleDecoAdminRoute } from "@decocms/start/next";
-export const GET = handleDecoAdminRoute;
-export const POST = handleDecoAdminRoute;
+// app/lib/deco-admin.ts
+import { createDecoAdminRouteHandlers } from "@decocms/start/next";
+
+export const { GET, POST, PATCH, DELETE } = createDecoAdminRouteHandlers({
+  site: "my-site",
+  // Optional — defaults shown:
+  //   enabled: true
+  //   healthcheck: true
+  //   readiness: true
+  //   adminProtocol: true
+  //   watch: NODE_ENV !== "production"
+  //   fs: NODE_ENV !== "production"
+  //   cwd: process.cwd()
+});
 ```
+
+Then every route file is two lines:
+
+```ts
+// app/%5Fhealthcheck/route.ts (and every other route file above)
+export const dynamic = "force-dynamic";
+export { GET, POST, PATCH, DELETE } from "@/lib/deco-admin";
+```
+
+`PATCH` and `DELETE` are required by `/fs/file/*` (admin's edit-and-save flow). They're harmless to re-export from read-only routes — the dispatcher branches on method internally — so a single set works everywhere.
+
+### Per-request setup hook
+
+Some setups need to run something before every dispatched admin request — most commonly hydrating the block registry from disk if `setBlocks` is async. Pass `onRequest`; it runs once per request, after the master `enabled` check, before pathname dispatch:
+
+```ts
+export const { GET, POST, PATCH, DELETE } = createDecoAdminRouteHandlers({
+  site: "my-site",
+  onRequest: () => ensureSetup(),   // awaited before any handler runs
+});
+```
+
+Return `undefined` (the default) to continue. Return a `Response` to short-circuit — useful for custom auth gates, maintenance-mode banners, or any early-out the consumer needs in front of the daemon's own dispatch:
+
+```ts
+export const { GET, POST, PATCH, DELETE } = createDecoAdminRouteHandlers({
+  site: "my-site",
+  onRequest: (req) => {
+    if (process.env.MAINTENANCE === "1") {
+      return new Response("under maintenance", { status: 503 });
+    }
+  },
+});
+```
+
+### Disabling specific routes
+
+Each group has its own flag:
+
+```ts
+export const { GET, POST, PATCH, DELETE } = createDecoAdminRouteHandlers({
+  site: "my-site",
+  watch: false,             // disable dev-time SSE even in dev
+  fs: false,                // disable dev-time filesystem REST
+  adminProtocol: false,     // disable admin editing entirely against this deploy
+});
+```
+
+Disabled groups return 404 — callers cannot distinguish a disabled deploy from one that never had the route.
 
 ## Register sections
 
@@ -82,10 +171,9 @@ registerSectionsSync({
 
 Import this from `app/layout.tsx` (or any module that runs at boot) so it executes before any page renders.
 
-`registerSectionsSync` populates both the sync component cache AND the lazy-loader registry (so `getSection()` finds sync-registered sections — see issue #163 gotcha #1).
-
 ## Limitations
 
 - App Router only. Pages Router is not supported.
+- `/volumes/<id>/files` (WebSocket) is **not** supported — it requires `httpServer.on("upgrade")`, which Next App Router does not expose. Calls to that path return 501. Use the TanStack/Vite daemon if you need volumes.
 - The minimal `DecoPage` server component is a starting point; production renderers should provide their own.
 - `@decocms/start/next/client` exports only `useDevice` and `signal`. The TanStack-specific hooks (`LiveControls`, `LazySection`) are not yet ported.

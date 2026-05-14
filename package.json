@@ -49,6 +49,11 @@
       "import": "./dist/node/index.js",
       "require": "./dist/node/index.cjs"
     },
+    "./node/daemon": {
+      "types": "./dist/node/daemon/index.d.ts",
+      "import": "./dist/node/daemon/index.js",
+      "require": "./dist/node/daemon/index.cjs"
+    },
     "./cms": {
       "types": "./dist/core/cms/index.d.ts",
       "import": "./dist/core/cms/index.js",
@@ -428,7 +433,6 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.6",
     "@semantic-release/exec": "^7.1.0",
-    "@semantic-release/git": "^10.0.1",
     "@tanstack/react-query": "^5.96.0",
     "@tanstack/store": "^0.9.1",
     "@types/react": "^19.0.0",
