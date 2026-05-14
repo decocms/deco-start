@@ -49,6 +49,11 @@
       "import": "./dist/node/index.js",
       "require": "./dist/node/index.cjs"
     },
+    "./node/daemon": {
+      "types": "./dist/node/daemon/index.d.ts",
+      "import": "./dist/node/daemon/index.js",
+      "require": "./dist/node/daemon/index.cjs"
+    },
     "./cms": {
       "types": "./dist/core/cms/index.d.ts",
       "import": "./dist/core/cms/index.js",

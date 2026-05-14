@@ -1,19 +1,22 @@
 /**
- * Daemon middleware — intercepts x-daemon-api requests, applies auth,
- * and routes to volumes API or watch SSE.
+ * Daemon middleware — Connect-style entry point used by Vite's middleware
+ * stack.
  *
- * Admin runtime routes (/live/_meta, /.decofile) are NOT handled here —
- * they fall through to Vite SSR (worker-entry.ts) where setMetaData()
- * and setBlocks() have populated shared state. The daemon middleware loads
- * modules via native import() which creates separate module instances.
- *
- * Ported from: deco-cx/deco daemon/daemon.ts
+ * All HTTP-shape routes (probes, fs, watch, admin protocol) are composed by
+ * `createDecoAdminRoute` from `src/node/daemon/route.ts` and wrapped via
+ * `toNodeMiddleware`. The volumes WebSocket binding stays in this file
+ * because it needs `httpServer.on("upgrade")`, which is not expressible via
+ * Request → Response.
  */
 import type { IncomingMessage, ServerResponse, Server as HttpServer } from "node:http";
 import { createAuthMiddleware } from "./auth";
-import { createFSHandler } from "./fs";
+import {
+  createDecoAdminRoute,
+  type DecoAdminRouteOptions,
+} from "../../node/daemon/route";
+import { toNodeMiddleware } from "../../node/daemon/nodeHttpAdapter";
+import { bindWatcherToChannel } from "../../node/daemon/watcher";
 import { createVolumesHandler } from "./volumes";
-import { createWatchHandler, watchFS } from "./watch";
 
 const DAEMON_API_SPECIFIER = "x-daemon-api";
 const HYPERVISOR_API_SPECIFIER = "x-hypervisor-api";
@@ -26,48 +29,46 @@ export interface DaemonOptions {
     httpServer: HttpServer | null;
     watcher: { on(event: string, cb: (...args: unknown[]) => void): void };
   };
+  /**
+   * Optional per-group toggles, forwarded to createDecoAdminRoute.
+   * Site is taken from the top-level `site` field; the watch port defaults
+   * to the Vite httpServer's bound port.
+   */
+  routes?: Omit<DecoAdminRouteOptions, "site" | "getPort">;
 }
 
-// Creates a Connect-style middleware that:
-// 1. Checks for x-daemon-api or x-hypervisor-api header
-// 2. Applies JWT auth
-// 3. Routes to volumes API or SSE watch
-// 4. Falls through to Vite for other daemon requests (admin routes)
 export function createDaemonMiddleware(opts: DaemonOptions) {
   const auth = createAuthMiddleware(opts.site);
   const httpServer = opts.server.httpServer;
 
-  // Volumes handler (includes WebSocket upgrade registration)
+  // Volumes still owns its httpServer.on("upgrade") binding — not portable.
   const volumes = httpServer
-    ? createVolumesHandler({
-        httpServer,
-        watcher: opts.server.watcher,
-      })
+    ? createVolumesHandler({ httpServer, watcher: opts.server.watcher })
     : null;
 
-  // FS REST API handler (/fs/file/* — read, patch, delete)
-  const fs = createFSHandler();
+  // Vite's watcher feeds the shared broadcast channel.
+  bindWatcherToChannel(opts.server.watcher);
 
-  // SSE watch handler — lazy port resolver for /live/_meta fetch
-  const watch = createWatchHandler({
+  const webRouteHandler = createDecoAdminRoute({
+    site: opts.site,
     getPort: () => {
       const addr = httpServer?.address();
       return typeof addr === "object" && addr ? addr.port : 5173;
     },
+    // Vite already provides the watcher via `bindWatcherToChannel` above;
+    // skip the Next-style lazy chokidar singleton so we don't double-watch.
+    manageWatcher: false,
+    ...opts.routes,
   });
 
-  // Wire Vite's file watcher to the broadcast channel
-  watchFS(opts.server.watcher);
+  const webMiddleware = toNodeMiddleware(async (req) => {
+    // All routes delegate to the Web-standard dispatcher. Volumes paths return
+    // 501 from createDecoAdminRoute (TanStack handles them via the volumes
+    // branch above); anything unrecognised gets a 404 — no null fall-through.
+    return webRouteHandler(req);
+  });
 
-  // Version reported to admin.deco.cx — must satisfy admin's minimum version check.
-  // Admin compares against deco-cx/deco versions (e.g. 1.177.x), not @decocms/start versions.
-  const VERSION = "1.177.5";
-
-  return (
-    req: IncomingMessage,
-    res: ServerResponse,
-    next: () => void,
-  ): void => {
+  return (req: IncomingMessage, res: ServerResponse, next: () => void): void => {
     let pathname: string;
     try {
       pathname = new URL(req.url ?? "/", "http://localhost").pathname;
@@ -75,30 +76,17 @@ export function createDaemonMiddleware(opts: DaemonOptions) {
       pathname = req.url ?? "/";
     }
 
-    // Healthcheck — no auth required, admin uses this to verify env is reachable
-    if (pathname === "/_healthcheck") {
-      res.writeHead(200, {
-        "Content-Type": "text/plain",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET",
-        "Access-Control-Allow-Headers": "Content-Type",
-      });
-      res.end(VERSION);
+    // Probes — no auth, no x-daemon-api header required.
+    if (pathname === "/_healthcheck" || pathname === "/_ready") {
+      webMiddleware(req, res, next);
       return;
     }
-
-    // Admin runtime routes (/live/_meta, /.decofile) are NOT handled here.
-    // They fall through to Vite SSR (worker-entry.ts / TanStack routes) where
-    // setMetaData() and setBlocks() have already populated the shared state.
-    // The daemon middleware loads modules via native import() which creates
-    // separate module instances from Vite SSR — they don't share state.
 
     const isDaemonAPI =
       req.headers[DAEMON_API_SPECIFIER] ??
       req.headers[HYPERVISOR_API_SPECIFIER] ??
       false;
 
-    // Also check query param: ?x-daemon-api=true
     if (!isDaemonAPI) {
       try {
         const url = new URL(req.url ?? "/", "http://localhost");
@@ -112,7 +100,7 @@ export function createDaemonMiddleware(opts: DaemonOptions) {
       }
     }
 
-    // Add CORS headers for admin.deco.cx
+    // CORS for admin.deco.cx.
     const origin = req.headers.origin;
     if (origin) {
       res.setHeader("Access-Control-Allow-Origin", origin);
@@ -120,37 +108,21 @@ export function createDaemonMiddleware(opts: DaemonOptions) {
       res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-daemon-api, x-hypervisor-api");
       res.setHeader("Access-Control-Allow-Credentials", "true");
     }
-
-    // Handle CORS preflight
     if (req.method === "OPTIONS") {
       res.writeHead(204);
       res.end();
       return;
     }
 
-    // Auth → then route
+    // Auth before any /fs/*, /watch, /volumes/*, admin protocol routes.
     auth(req, res, () => {
-      // FS REST API: /fs/file/* (read, patch, delete .deco/ files)
-      if (pathname.startsWith("/fs/")) {
-        fs(req, res, next);
-        return;
-      }
-
-      // Volumes API: /volumes/:id/files/*
+      // Volumes API — TanStack-only, requires raw httpServer.
       if (pathname.includes("/volumes/") && pathname.includes("/files") && volumes) {
         volumes(req, res, next);
         return;
       }
-
-      // SSE watch: /watch or root /
-      if (pathname === "/watch" || pathname === "/") {
-        watch(req, res, next);
-        return;
-      }
-
-      // Everything else falls through to Vite/TanStack admin routes
-      // (e.g., /live/_meta, /.decofile, /live/previews, /deco/invoke)
-      next();
+      // All other HTTP-shape routes flow through the Web-standard dispatcher.
+      webMiddleware(req, res, next);
     });
   };
 }

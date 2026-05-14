@@ -15,7 +15,7 @@ name: Release
 # semantic-release skip token") instead of pasting the literal.
 #
 # Recover with a no-op commit whose entire message — title and body
-# — does NOT contain the literal token.
+# — does NOT contain the literal token. Past occurrences: #171, #175.
 #
 # References:
 #  - https://docs.github.com/en/actions/managing-workflow-runs/skipping-workflow-runs

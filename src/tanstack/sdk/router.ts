@@ -46,6 +46,43 @@ export interface CreateDecoRouterOptions {
 	routeTree: AnyRoute;
 	scrollRestoration?: boolean;
 	defaultPreload?: "intent" | "viewport" | "render" | false;
+	/**
+	 * How long a preloaded route stays "fresh" before a click re-fetches it.
+	 * When using `defaultPreload: "intent"`, this is what makes hover → click
+	 * navigation truly instant. Without it, TanStack uses a short default and
+	 * the prefetched data may be considered stale by the time the user clicks.
+	 *
+	 * Recommended for commerce storefronts: 60_000 (1 minute).
+	 * @default undefined (TanStack default — short)
+	 */
+	defaultPreloadStaleTime?: number;
+	/**
+	 * How long a preloaded route stays in memory before garbage collection.
+	 * @default undefined (TanStack default)
+	 */
+	defaultPreloadGcTime?: number;
+	/**
+	 * Delay before firing a preload after `hover`/`touchstart`.
+	 * @default undefined (TanStack default — ~50ms)
+	 */
+	defaultPreloadDelay?: number;
+	/**
+	 * Default staleTime applied to all route loaders (not just preload).
+	 * @default undefined (TanStack default — 0)
+	 */
+	defaultStaleTime?: number;
+	/**
+	 * Milliseconds to wait before showing the pending component on slow
+	 * navigations. Useful when `eager` sections block the route swap.
+	 * @default undefined (TanStack default)
+	 */
+	defaultPendingMs?: number;
+	/**
+	 * Minimum milliseconds the pending component must be shown once revealed.
+	 * Prevents flash if the loader resolves right after the pending UI appears.
+	 * @default undefined (TanStack default)
+	 */
+	defaultPendingMinMs?: number;
 	trailingSlash?: TrailingSlashOption;
 	/**
 	 * Router context — passed to all route loaders/components via routeContext.
@@ -68,12 +105,22 @@ export interface CreateDecoRouterOptions {
  * - URLSearchParams-based search serialization (not JSON)
  * - Scroll restoration enabled
  * - Preload on intent
+ *
+ * For commerce storefronts, pair `defaultPreload: "intent"` (default) with
+ * `defaultPreloadStaleTime: 60_000` so hover prefetch is reused on click —
+ * see the `deco-pdp-fast-navigation` skill for the full pattern.
  */
 export function createDecoRouter(options: CreateDecoRouterOptions) {
 	const {
 		routeTree,
 		scrollRestoration = true,
 		defaultPreload = "intent",
+		defaultPreloadStaleTime,
+		defaultPreloadGcTime,
+		defaultPreloadDelay,
+		defaultStaleTime,
+		defaultPendingMs,
+		defaultPendingMinMs,
 		trailingSlash,
 		context,
 		Wrap,
@@ -83,6 +130,12 @@ export function createDecoRouter(options: CreateDecoRouterOptions) {
 		routeTree,
 		scrollRestoration,
 		defaultPreload,
+		defaultPreloadStaleTime,
+		defaultPreloadGcTime,
+		defaultPreloadDelay,
+		defaultStaleTime,
+		defaultPendingMs,
+		defaultPendingMinMs,
 		trailingSlash,
 		context: context as any,
 		Wrap,
