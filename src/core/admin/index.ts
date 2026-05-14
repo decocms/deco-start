@@ -28,3 +28,5 @@ export {
   registerMatcherSchemas,
 } from "./schema";
 export { getRenderShellConfig } from "./setup";
+export { ADMIN_COMPAT_VERSION } from "./version";
+export { handleDecoReadiness } from "./readiness";
