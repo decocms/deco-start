@@ -39,6 +39,20 @@ export interface DecoAdminRouteOptions {
    * inotify handles.
    */
   manageWatcher?: boolean;
+  /**
+   * Hook awaited once per request before any pathname dispatch — including
+   * before route-group enable checks. Use it for prerequisites that must run
+   * before any admin handler reads shared state (the most common case:
+   * `await ensureSetup()` so `setBlocks` has populated the block registry
+   * before `handleMeta` / `handleDecofileRead` / `handleDecoReadiness` look
+   * at it).
+   *
+   * Returning `undefined` (the default) continues to the dispatcher.
+   * Returning a `Response` short-circuits the request — useful for custom
+   * auth, maintenance-mode responses, or any early-out the consumer needs
+   * before the daemon's own dispatch runs.
+   */
+  onRequest?: (req: Request) => void | Response | Promise<void | Response>;
 }
 
 interface ResolvedOptions {
@@ -52,6 +66,7 @@ interface ResolvedOptions {
   site?: string;
   getPort: () => number;
   manageWatcher: boolean;
+  onRequest?: (req: Request) => void | Response | Promise<void | Response>;
 }
 
 function resolve(opts: DecoAdminRouteOptions): ResolvedOptions {
@@ -67,6 +82,7 @@ function resolve(opts: DecoAdminRouteOptions): ResolvedOptions {
     site: opts.site,
     getPort: opts.getPort ?? (() => 5173),
     manageWatcher: opts.manageWatcher ?? true,
+    onRequest: opts.onRequest,
   };
   const authGroupActive =
     resolved.enabled && (resolved.adminProtocol || resolved.watch || resolved.fs);
@@ -112,6 +128,14 @@ export function createDecoAdminRoute(
 
   return async (req: Request): Promise<Response> => {
     if (!cfg.enabled) return notFound();
+
+    // Per-request hook — runs before pathname dispatch, after the master
+    // enabled check. Returning a Response short-circuits; undefined continues.
+    if (cfg.onRequest) {
+      const early = await cfg.onRequest(req);
+      if (early) return early;
+    }
+
     const { pathname } = new URL(req.url);
 
     // Probes — no auth.

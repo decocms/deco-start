@@ -114,6 +114,30 @@ export { GET, POST, PATCH, DELETE } from "@/lib/deco-admin";
 
 `PATCH` and `DELETE` are required by `/fs/file/*` (admin's edit-and-save flow). They're harmless to re-export from read-only routes — the dispatcher branches on method internally — so a single set works everywhere.
 
+### Per-request setup hook
+
+Some setups need to run something before every dispatched admin request — most commonly hydrating the block registry from disk if `setBlocks` is async. Pass `onRequest`; it runs once per request, after the master `enabled` check, before pathname dispatch:
+
+```ts
+export const { GET, POST, PATCH, DELETE } = createDecoAdminRouteHandlers({
+  site: "my-site",
+  onRequest: () => ensureSetup(),   // awaited before any handler runs
+});
+```
+
+Return `undefined` (the default) to continue. Return a `Response` to short-circuit — useful for custom auth gates, maintenance-mode banners, or any early-out the consumer needs in front of the daemon's own dispatch:
+
+```ts
+export const { GET, POST, PATCH, DELETE } = createDecoAdminRouteHandlers({
+  site: "my-site",
+  onRequest: (req) => {
+    if (process.env.MAINTENANCE === "1") {
+      return new Response("under maintenance", { status: 503 });
+    }
+  },
+});
+```
+
 ### Disabling specific routes
 
 Each group has its own flag:

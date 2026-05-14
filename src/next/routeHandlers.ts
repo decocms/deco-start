@@ -28,6 +28,14 @@ export interface DecoAdminRouteHandlers {
  * // app/%5Fhealthcheck/route.ts (and every other route file)
  * export const dynamic = "force-dynamic";
  * export { GET, POST, PATCH, DELETE } from "@/lib/deco-admin";
+ *
+ * @example
+ * // Per-request setup (e.g. hydrate the block registry before any handler runs).
+ * // The onRequest hook runs once per request, before pathname dispatch.
+ * export const { GET, POST, PATCH, DELETE } = createDecoAdminRouteHandlers({
+ *   site: "my-site",
+ *   onRequest: () => ensureSetup(),
+ * });
  */
 export function createDecoAdminRouteHandlers(
   opts: DecoAdminRouteOptions = {},

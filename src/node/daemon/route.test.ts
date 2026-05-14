@@ -108,4 +108,53 @@ describe("createDecoAdminRoute", () => {
       }),
     ).not.toThrow();
   });
+
+  it("awaits onRequest exactly once per request before pathname dispatch", async () => {
+    let calls = 0;
+    const handler = createDecoAdminRoute({
+      site: "my-site",
+      onRequest: async () => {
+        calls++;
+      },
+    });
+    const res = await handler(new Request("http://t/_healthcheck"));
+    expect(res.status).toBe(200);
+    expect(calls).toBe(1);
+
+    await handler(new Request("http://t/_ready"));
+    expect(calls).toBe(2);
+  });
+
+  it("short-circuits with the Response returned by onRequest", async () => {
+    const handler = createDecoAdminRoute({
+      site: "my-site",
+      onRequest: () => new Response("maintenance", { status: 503 }),
+    });
+    const res = await handler(new Request("http://t/_healthcheck"));
+    expect(res.status).toBe(503);
+    expect(await res.text()).toBe("maintenance");
+  });
+
+  it("continues to the dispatcher when onRequest returns undefined", async () => {
+    const handler = createDecoAdminRoute({
+      site: "my-site",
+      onRequest: () => undefined,
+    });
+    const res = await handler(new Request("http://t/_healthcheck"));
+    expect(res.status).toBe(200);
+  });
+
+  it("skips onRequest entirely when enabled is false", async () => {
+    let called = false;
+    const handler = createDecoAdminRoute({
+      site: "my-site",
+      enabled: false,
+      onRequest: () => {
+        called = true;
+      },
+    });
+    const res = await handler(new Request("http://t/_healthcheck"));
+    expect(res.status).toBe(404);
+    expect(called).toBe(false);
+  });
 });
