@@ -199,6 +199,11 @@
       "import": "./dist/core/sdk/otelHttpMeter.js",
       "require": "./dist/core/sdk/otelHttpMeter.cjs"
     },
+    "./sdk/otelHttpErrorLog": {
+      "types": "./dist/core/sdk/otelHttpErrorLog.d.ts",
+      "import": "./dist/core/sdk/otelHttpErrorLog.js",
+      "require": "./dist/core/sdk/otelHttpErrorLog.cjs"
+    },
     "./sdk/urlRedaction": {
       "types": "./dist/core/sdk/urlRedaction.d.ts",
       "import": "./dist/core/sdk/urlRedaction.js",

@@ -395,3 +395,107 @@ describe("instrumentWorker — OTLP/HTTP metrics exporter wiring", () => {
     expect(ctx.waited).toHaveLength(1);
   });
 });
+
+describe("instrumentWorker — OTLP/HTTP error-log channel wiring", () => {
+  beforeEach(() => {
+    _resetBootStateForTests();
+  });
+
+  afterEach(() => {
+    _resetBootStateForTests();
+    vi.restoreAllMocks();
+  });
+
+  function makeFetchSpy() {
+    const calls: Array<{ url: string; body: string }> = [];
+    const impl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(input), body: String(init?.body ?? "") });
+      return new Response("{}", { status: 200 });
+    });
+    return { impl: impl as unknown as typeof fetch, calls };
+  }
+
+  it("routes logger.error through the direct-POST channel when env is set", async () => {
+    const { impl, calls } = makeFetchSpy();
+    const handler = {
+      fetch: vi.fn(async () => {
+        logger.logger.error("payment failed", { stage: "checkout", reason: "declined" });
+        return new Response("ok");
+      }),
+    };
+    const wrapped = instrumentWorker(handler, {
+      serviceName: "smoke-site",
+      otlpErrorLogsFetchImpl: impl,
+    });
+
+    const env: TestEnv = {
+      DECO_OTEL_LOGS_ENDPOINT: "https://ingest.test/v1/logs",
+    } as TestEnv & { DECO_OTEL_LOGS_ENDPOINT: string };
+    const ctx = fakeCtx();
+    await wrapped.fetch(new Request("https://example.test/"), env, ctx);
+
+    // ctx.waitUntil(flushErrors) was queued.
+    expect(ctx.waited.length).toBeGreaterThanOrEqual(1);
+    await Promise.all(ctx.waited);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://ingest.test/v1/logs");
+    const payload = JSON.parse(calls[0].body) as {
+      resourceLogs: Array<{
+        scopeLogs: Array<{
+          logRecords: Array<{ severityText: string; body: { stringValue: string } }>;
+        }>;
+      }>;
+    };
+    const rec = payload.resourceLogs[0].scopeLogs[0].logRecords[0];
+    expect(rec.severityText).toBe("error");
+    expect(rec.body.stringValue).toBe("payment failed");
+  });
+
+  it("info / warn / debug calls do NOT trigger a direct POST", async () => {
+    const { impl, calls } = makeFetchSpy();
+    const handler = {
+      fetch: vi.fn(async () => {
+        logger.logger.info("info msg");
+        logger.logger.warn("warn msg");
+        logger.logger.debug("debug msg");
+        return new Response("ok");
+      }),
+    };
+    const wrapped = instrumentWorker(handler, {
+      otlpErrorLogsFetchImpl: impl,
+    });
+
+    const env: TestEnv = {
+      DECO_OTEL_LOGS_ENDPOINT: "https://ingest.test/v1/logs",
+    } as TestEnv & { DECO_OTEL_LOGS_ENDPOINT: string };
+    const ctx = fakeCtx();
+    await wrapped.fetch(new Request("https://example.test/"), env, ctx);
+    await Promise.all(ctx.waited);
+
+    expect(calls).toHaveLength(0);
+  });
+
+  it("otlpErrorLogsEnabled=false disables the channel even when env is set", async () => {
+    const { impl, calls } = makeFetchSpy();
+    const handler = {
+      fetch: vi.fn(async () => {
+        logger.logger.error("boom");
+        return new Response("ok");
+      }),
+    };
+    const wrapped = instrumentWorker(handler, {
+      otlpErrorLogsEnabled: false,
+      otlpErrorLogsFetchImpl: impl,
+    });
+
+    const env: TestEnv = {
+      DECO_OTEL_LOGS_ENDPOINT: "https://ingest.test/v1/logs",
+    } as TestEnv & { DECO_OTEL_LOGS_ENDPOINT: string };
+    const ctx = fakeCtx();
+    await wrapped.fetch(new Request("https://example.test/"), env, ctx);
+    await Promise.all(ctx.waited);
+
+    expect(calls).toHaveLength(0);
+  });
+});

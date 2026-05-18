@@ -8,15 +8,22 @@
  *    `/v1/metrics` — when `env.DECO_OTEL_METRICS_ENDPOINT` is set. Buffered
  *    per-isolate, flushed via `ctx.waitUntil` at the end of every request.
  *    See `otelHttpMeter.ts` for the aggregation + flush model.
+ *  - OTLP/HTTP error-log channel, direct POST to `deco-otel-ingest`
+ *    `/v1/logs` — when `env.DECO_OTEL_LOGS_ENDPOINT` is set. Carries
+ *    `logger.error(...)` calls at 100% capture (rate-limited per
+ *    isolate) so head-sampled CF Destinations don't drop them.
+ *    See `otelHttpErrorLog.ts` for the rate limiter + flush model.
  *  - Bridges framework-internal `withTracing()` calls onto the global
  *    `@opentelemetry/api` tracer, stamping `deco.*` attributes on every span
  *    so they survive Cloudflare's platform-managed trace export
  *
- * **Transport split.** Logs and traces flow through Cloudflare Destinations
- * (configured in `wrangler.jsonc` `observability.{logs,traces}.destinations`).
- * Metrics are NOT supported by Destinations today (CF only exports OTLP for
- * logs and traces), so the framework POSTs them directly. Same OTLP/HTTP
- * JSON wire format, same ingest Worker, different transport path.
+ * **Transport split.** Logs (info/warn) and traces flow through Cloudflare
+ * Destinations (configured in `wrangler.jsonc`
+ * `observability.{logs,traces}.destinations`). Metrics are NOT supported
+ * by Destinations today (CF only exports OTLP for logs and traces), so the
+ * framework POSTs them directly. Errors travel BOTH paths — via
+ * `console.error` (sampled by CF Destinations) and direct POST (100%
+ * capture). Same OTLP/HTTP JSON wire format, same ingest Worker.
  *
  * Required `wrangler.jsonc` block (run `scripts/migrate-to-cf-observability.ts`
  * to inject this automatically). Sampling defaults follow the fleet-scale cost
@@ -52,10 +59,11 @@
  */
 
 import { SpanStatusCode, trace } from "@opentelemetry/api";
-import { createCompositeMeter } from "./composite";
+import { createCompositeLogger, createCompositeMeter } from "./composite";
 import { configureLogger, defaultLoggerAdapter, setLoggerAttributeFloor } from "./logger";
 import { configureMeter, configureTracer } from "./observability";
 import { createAnalyticsEngineMeterAdapter } from "./otelAdapters";
+import { createOtlpHttpErrorLogAdapter, type OtlpHttpErrorLog } from "./otelHttpErrorLog";
 import { createOtlpHttpMeterAdapter, type OtlpHttpMeter } from "./otelHttpMeter";
 
 // ---------------------------------------------------------------------------
@@ -81,6 +89,16 @@ export interface OtelOptions {
   /** Set to `false` to disable the OTLP/HTTP metrics exporter explicitly. */
   otlpMetricsEnabled?: boolean;
   /**
+   * Env var name holding the OTLP/HTTP logs endpoint used by the
+   * direct-POST error-log channel. Defaults to `"DECO_OTEL_LOGS_ENDPOINT"`.
+   * When set (and `otlpErrorLogsEnabled !== false`), `logger.error(...)`
+   * dual-emits via `console.error` (CF Destinations path, head-sampled)
+   * AND a direct POST to this endpoint (100% capture, rate-limited).
+   */
+  otlpErrorLogsEndpointEnvVar?: string;
+  /** Set to `false` to disable the OTLP/HTTP error-log exporter explicitly. */
+  otlpErrorLogsEnabled?: boolean;
+  /**
    * Version of `@decocms/start` to advertise as `deco.runtime.version`
    * on every span and every log line. Falls back to a build-time constant;
    * override only for tests.
@@ -93,6 +111,8 @@ export interface OtelOptions {
    * exporter without touching the worker's outbound fetch.
    */
   otlpMetricsFetchImpl?: typeof fetch;
+  /** Test seam — replace the global `fetch` used by the error-log exporter. */
+  otlpErrorLogsFetchImpl?: typeof fetch;
 }
 
 interface WorkerExecutionContext {
@@ -122,6 +142,13 @@ let booted = false;
  * window of real time before the isolate sleeps.
  */
 let otlpMeter: OtlpHttpMeter | null = null;
+
+/**
+ * Module-level handle to the OTLP/HTTP error-log exporter — installed
+ * by `bootObservability` when `DECO_OTEL_LOGS_ENDPOINT` is set on `env`.
+ * Flushed alongside the metrics exporter via `ctx.waitUntil(...)`.
+ */
+let otlpErrorLog: OtlpHttpErrorLog | null = null;
 
 /**
  * Per-span attribute floor — stamped on every span we create via
@@ -200,15 +227,23 @@ export function instrumentWorker(
       try {
         return await handler.fetch(request, env, ctx);
       } finally {
-        // Drain the OTLP metrics buffer via ctx.waitUntil so the POST
-        // doesn't block the response. The exporter throttles itself per
-        // isolate — calling on every request is cheap, the network only
-        // fires when the cooldown elapses or the buffer fills.
+        // Drain the OTLP metrics + error-log buffers via ctx.waitUntil
+        // so neither POST blocks the response. Both exporters throttle
+        // themselves per isolate — calling on every request is cheap;
+        // the network only fires when the cooldown elapses or the
+        // buffer fills.
         if (otlpMeter) {
           try {
             ctx.waitUntil(otlpMeter.flush());
           } catch {
             /* ctx.waitUntil throwing is benign — never block the response */
+          }
+        }
+        if (otlpErrorLog) {
+          try {
+            ctx.waitUntil(otlpErrorLog.flush());
+          } catch {
+            /* swallow */
           }
         }
       }
@@ -254,8 +289,60 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
   // key collision (see logger.ts).
   setLoggerAttributeFloor(floor);
 
-  // Logger: structured JSON to console.*, captured by CF observability.logs.
-  configureLogger(defaultLoggerAdapter);
+  // Logger — two paths composed:
+  //
+  //  - `defaultLoggerAdapter`: structured JSON to `console.*`. CF
+  //    Workers Logs captures this and CF Destinations forwards a
+  //    `logs.head_sampling_rate` fraction to `deco-otel-ingest/v1/logs`.
+  //    Carries debug / info / warn / error.
+  //  - `otlpErrorLog.adapter`: direct POST to `/v1/logs` for level=error
+  //    only, rate-limited (default 100/min, burst 20), buffered, flushed
+  //    via `ctx.waitUntil` at request end. Guarantees ≥99% error capture
+  //    regardless of the CF Destinations sampling rate. See
+  //    `otelHttpErrorLog.ts` for the aggregation + rate-limit details.
+  //
+  // The two paths land in the SAME `default.otel_logs` table, so the
+  // ingestor's existing PII redaction applies uniformly and dashboards
+  // need no changes. Records from the direct-POST path are
+  // distinguishable from CF-Destinations records by `ScopeName =
+  // "@decocms/start"` if needed (CF stamps its own scope).
+  const otlpLogsEnvVar = opts.otlpErrorLogsEndpointEnvVar ?? "DECO_OTEL_LOGS_ENDPOINT";
+  const otlpLogsEndpoint = (env[otlpLogsEnvVar] as string | undefined) ?? "";
+  const otlpErrorLogsEnabled =
+    opts.otlpErrorLogsEnabled !== false && otlpLogsEndpoint.length > 0;
+  if (otlpErrorLogsEnabled) {
+    otlpErrorLog = createOtlpHttpErrorLogAdapter({
+      endpoint: otlpLogsEndpoint,
+      resourceAttributes: floor,
+      scopeVersion: decoRuntimeVersion,
+      fetchImpl: opts.otlpErrorLogsFetchImpl,
+      onError: (kind, err) => {
+        // Don't recurse — use console.warn directly, not logger.warn.
+        // The whole point of this adapter is to bypass the logger path
+        // for high-fidelity error capture, so logging back into it
+        // would be circular.
+        try {
+          console.warn(
+            JSON.stringify({
+              level: "warn",
+              msg: "otlp error-log exporter",
+              kind,
+              error: err instanceof Error ? err.message : String(err),
+              timestamp: new Date().toISOString(),
+            }),
+          );
+        } catch {
+          /* swallow */
+        }
+      },
+    });
+  } else {
+    otlpErrorLog = null;
+  }
+
+  configureLogger(
+    createCompositeLogger([defaultLoggerAdapter, otlpErrorLog ? otlpErrorLog.adapter : null]),
+  );
 
   // Meter — fan out to two backends when both are configured:
   //
@@ -312,6 +399,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
     service: serviceName,
     analyticsEngine: aeEnabled,
     otlpMetrics: otlpEnabled,
+    otlpErrorLogs: otlpErrorLogsEnabled,
     runtimeVersion: decoRuntimeVersion,
     deploymentEnvironment,
     ...(serviceVersion ? { serviceVersion } : {}),
@@ -326,6 +414,7 @@ export function _resetBootStateForTests(): void {
   booted = false;
   spanAttributeFloor = {};
   otlpMeter = null;
+  otlpErrorLog = null;
   setLoggerAttributeFloor({});
 }
 
