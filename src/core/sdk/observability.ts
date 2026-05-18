@@ -205,12 +205,23 @@ export function recordRequestMetric(
 export type CacheDecision = "HIT" | "STALE-HIT" | "STALE-ERROR" | "MISS" | "BYPASS";
 
 /**
- * Record a cache hit/miss metric.
+ * Record a cache hit/miss metric. Also stamps the decision on the active
+ * trace span (when one exists) as `deco.cache.decision` / `deco.cache.profile`
+ * so operators can filter ClickStack traces by cache decision directly,
+ * without joining to metrics.
  *
  * `decision` is optional — when omitted, the metric still records HIT vs MISS
  * but dashboards can't distinguish SWR/SIE paths. Pass it whenever known.
  */
 export function recordCacheMetric(hit: boolean, profile?: string, decision?: CacheDecision) {
+  // Stamp on the active span FIRST so the attribute survives even if the
+  // meter is a no-op (e.g. on tests, or in dev without DECO_METRICS).
+  const active = getActiveSpan();
+  if (active) {
+    if (decision) active.setAttribute?.("deco.cache.decision", decision);
+    if (profile) active.setAttribute?.("deco.cache.profile", profile);
+  }
+
   if (!meter) return;
   const labels: Labels = {};
   if (profile) labels.profile = profile;

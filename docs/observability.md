@@ -48,6 +48,13 @@
 
 All framework spans also carry the per-span attribute floor described under **Identity**.
 
+When a request makes a cache decision, the **active span** is also stamped with:
+
+- `deco.cache.decision` — `HIT` | `STALE-HIT` | `STALE-ERROR` | `MISS` | `BYPASS`
+- `deco.cache.profile` — the cache profile name (`product`, `listing`, etc.)
+
+This makes it possible to filter traces by cache decision directly in ClickStack without joining to the metric tables. The stamp lives on the closest enclosing span — typically `deco.http.request` for the page-level decision, and the local `deco.cache.lookup` / `deco.cache.store` spans for cache operations they wrap.
+
 ## What's measured
 
 The meter is plugged at boot when `DECO_METRICS` (Workers Analytics Engine) is bound:
