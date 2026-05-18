@@ -12,9 +12,9 @@
  *   "observability": {
  *     "enabled": true,
  *     "logs":   { "enabled": true, "invocation_logs": true,
- *                 "head_sampling_rate": 1, "persist": true },
+ *                 "head_sampling_rate": 1,    "persist": true },
  *     "traces": { "enabled": true,
- *                 "head_sampling_rate": 0.1, "persist": true }
+ *                 "head_sampling_rate": 0.01, "persist": true }
  *   }
  *
  * `enabled: true` at the top level is the master switch — without it
@@ -55,7 +55,7 @@
  *   --write                   Apply the change. Otherwise prints diff and exits 1.
  *   --destination-logs <n>    Optional CF destination name to forward logs to.
  *   --destination-traces <n>  Optional CF destination name to forward traces to.
- *   --traces-rate <r>         head_sampling_rate for traces (default: 0.1)
+ *   --traces-rate <r>         head_sampling_rate for traces (default: 0.01; see docs/observability.md for the cost model)
  *   --logs-rate <r>           head_sampling_rate for logs   (default: 1.0)
  *   --no-persist              Set persist:false (do not keep data in CF dashboard)
  *   --persist                 Set persist:true (default — required if no destination)
@@ -69,6 +69,10 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import {
+  parseJsonc,
+  stripJsoncComments as sharedStripJsoncComments,
+} from "./lib/jsonc";
 
 interface CliOpts {
   source: string;
@@ -89,7 +93,7 @@ function parseArgs(argv: string[]): CliOpts {
     write: false,
     logsDest: "",
     tracesDest: "",
-    tracesRate: 0.1,
+    tracesRate: 0.01,
     logsRate: 1.0,
     // CF dashboard persistence on by default — without either persist:true
     // OR a destination, observability data is captured and discarded.
@@ -148,7 +152,7 @@ function showHelp(): void {
     --write                    Apply the edit. Without it, prints diff and exits 1.
     --destination-logs <n>     Optional CF destination slug to also forward logs to.
     --destination-traces <n>   Optional CF destination slug to also forward traces to.
-    --traces-rate <r>          head_sampling_rate for traces (default: 0.1)
+    --traces-rate <r>          head_sampling_rate for traces (default: 0.01; see docs/observability.md)
     --logs-rate <r>            head_sampling_rate for logs   (default: 1.0)
     --persist                  Keep the dashboard storage tier (default)
     --no-persist               Drop the dashboard tier (only sane when forwarding)
@@ -172,58 +176,12 @@ function showHelp(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Strip line and block comments from a JSONC string so the result parses
- * with vanilla `JSON.parse`. Preserves quoted strings (handles escaped
- * quotes), preserves whitespace/newlines so line numbers in error
- * messages stay stable.
+ * Strip line and block comments from a JSONC string. Delegates to the
+ * shared helper in `scripts/lib/jsonc.ts` — kept as a local alias so the
+ * rest of this file's call sites stay readable.
  */
 function stripJsoncComments(src: string): string {
-  let out = "";
-  let i = 0;
-  let inString = false;
-  let stringQuote = "";
-  while (i < src.length) {
-    const ch = src[i];
-    const next = src[i + 1];
-    if (inString) {
-      out += ch;
-      if (ch === "\\" && i + 1 < src.length) {
-        out += next;
-        i += 2;
-        continue;
-      }
-      if (ch === stringQuote) {
-        inString = false;
-      }
-      i++;
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      inString = true;
-      stringQuote = ch;
-      out += ch;
-      i++;
-      continue;
-    }
-    if (ch === "/" && next === "/") {
-      // Line comment — skip to newline (preserve newline for line counts).
-      while (i < src.length && src[i] !== "\n") i++;
-      continue;
-    }
-    if (ch === "/" && next === "*") {
-      // Block comment — skip to */, preserving newlines for line counts.
-      i += 2;
-      while (i < src.length - 1 && !(src[i] === "*" && src[i + 1] === "/")) {
-        if (src[i] === "\n") out += "\n";
-        i++;
-      }
-      i += 2;
-      continue;
-    }
-    out += ch;
-    i++;
-  }
-  return out;
+  return sharedStripJsoncComments(src);
 }
 
 /**
@@ -496,7 +454,7 @@ function isAlreadyCanonical(src: string, opts: CliOpts): boolean {
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(stripJsoncComments(src));
+    parsed = parseJsonc(src);
   } catch {
     return false;
   }
@@ -532,7 +490,7 @@ function isAlreadyCanonical(src: string, opts: CliOpts): boolean {
 
 function validateJson(src: string): { ok: true } | { ok: false; error: string } {
   try {
-    JSON.parse(stripJsoncComments(src));
+    parseJsonc(src);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };

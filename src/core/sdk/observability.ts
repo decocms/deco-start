@@ -44,6 +44,13 @@ export interface Span {
   end(): void;
   setError?(error: unknown): void;
   setAttribute?(key: string, value: string | number | boolean): void;
+  /**
+   * Return W3C trace context for the current span. Used by helpers that
+   * need to correlate logs to traces (`logger`) or propagate context to
+   * downstream services (`injectTraceContext`). Optional — adapters that
+   * can't expose it simply leave it off and callers no-op gracefully.
+   */
+  spanContext?(): { traceId: string; spanId: string; traceFlags: number };
 }
 
 export interface TracerAdapter {
@@ -83,6 +90,35 @@ export function getActiveSpan(): Span | null {
 /** Set an attribute on the active span, if one exists. */
 export function setSpanAttribute(key: string, value: string | number | boolean) {
   getActiveSpan()?.setAttribute?.(key, value);
+}
+
+/**
+ * Inject the active span's W3C trace context into outbound request headers
+ * as a `traceparent` header (RFC W3C-tracecontext format
+ * `version-traceId-parentId-flags`). Call this from outbound `fetch`
+ * wrappers (e.g. `createInstrumentedFetch` in `@decocms/apps`) so upstream
+ * services that participate in OTel can correlate their spans with ours.
+ *
+ * No-op when no active span exists, when the active span has no
+ * `spanContext()` adapter method, or when the trace/span IDs aren't
+ * populated. Never throws.
+ *
+ * @example
+ * ```ts
+ * import { injectTraceContext } from "@decocms/start/sdk/observability";
+ *
+ * async function tracedFetch(url: string, init?: RequestInit) {
+ *   const headers = new Headers(init?.headers);
+ *   injectTraceContext(headers);
+ *   return fetch(url, { ...init, headers });
+ * }
+ * ```
+ */
+export function injectTraceContext(headers: Headers): void {
+  const ctx = getActiveSpan()?.spanContext?.();
+  if (!ctx || !ctx.traceId || !ctx.spanId) return;
+  const flags = (ctx.traceFlags & 0xff).toString(16).padStart(2, "0");
+  headers.set("traceparent", `00-${ctx.traceId}-${ctx.spanId}-${flags}`);
 }
 
 export async function withTracing<T>(
@@ -158,11 +194,38 @@ export function recordRequestMetric(
 }
 
 /**
- * Record a cache hit/miss metric.
+ * Cache decision label. Mirrors the `X-Cache` response header we set in
+ * `workerEntry.ts` so dashboards can join on it.
+ *  - `HIT`         — fresh entry returned from cache
+ *  - `STALE-HIT`   — stale entry served, async revalidation kicked off (SWR)
+ *  - `STALE-ERROR` — stale entry served because origin errored (SIE)
+ *  - `MISS`        — cache lookup returned nothing, origin fetched
+ *  - `BYPASS`      — request not eligible for caching (private, cookies, etc.)
  */
-export function recordCacheMetric(hit: boolean, profile?: string) {
+export type CacheDecision = "HIT" | "STALE-HIT" | "STALE-ERROR" | "MISS" | "BYPASS";
+
+/**
+ * Record a cache hit/miss metric. Also stamps the decision on the active
+ * trace span (when one exists) as `deco.cache.decision` / `deco.cache.profile`
+ * so operators can filter ClickStack traces by cache decision directly,
+ * without joining to metrics.
+ *
+ * `decision` is optional — when omitted, the metric still records HIT vs MISS
+ * but dashboards can't distinguish SWR/SIE paths. Pass it whenever known.
+ */
+export function recordCacheMetric(hit: boolean, profile?: string, decision?: CacheDecision) {
+  // Stamp on the active span FIRST so the attribute survives even if the
+  // meter is a no-op (e.g. on tests, or in dev without DECO_METRICS).
+  const active = getActiveSpan();
+  if (active) {
+    if (decision) active.setAttribute?.("deco.cache.decision", decision);
+    if (profile) active.setAttribute?.("deco.cache.profile", profile);
+  }
+
   if (!meter) return;
-  const labels: Labels = profile ? { profile } : {};
+  const labels: Labels = {};
+  if (profile) labels.profile = profile;
+  if (decision) labels.decision = decision;
   meter.counterInc(hit ? MetricNames.CACHE_HIT : MetricNames.CACHE_MISS, 1, labels);
 }
 
@@ -201,6 +264,7 @@ export function logRequest(
       `${color}${request.method}\x1b[0m ${url.pathname} ${status} ${durationMs.toFixed(0)}ms${extraStr}`,
     );
   } else {
+    const ctx = getActiveSpan()?.spanContext?.();
     console.log(
       JSON.stringify({
         level: status >= 500 ? "error" : "info",
@@ -209,6 +273,7 @@ export function logRequest(
         status,
         durationMs: Math.round(durationMs),
         timestamp: new Date().toISOString(),
+        ...(ctx ? { trace_id: ctx.traceId, span_id: ctx.spanId } : {}),
         ...extra,
       }),
     );

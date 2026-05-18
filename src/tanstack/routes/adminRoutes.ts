@@ -17,6 +17,22 @@ import { corsHeaders } from "../../core/admin/cors";
 import { handleInvoke } from "../../core/admin/invoke";
 import { handleMeta } from "../../core/admin/meta";
 import { handleRender } from "../../core/admin/render";
+import { withTracing } from "../../core/sdk/observability";
+
+function invokeAttrs(request: Request): Record<string, string | boolean> {
+  const url = new URL(request.url);
+  const invokeKey = url.pathname.split("/deco/invoke/")[1] ?? "";
+  return {
+    "invoke.key": invokeKey || "(batch)",
+    "invoke.batch": invokeKey === "",
+  };
+}
+
+function renderAttrs(request: Request): Record<string, string> {
+  const url = new URL(request.url);
+  const pathComponent = url.pathname.split("/deco/render/")[1] ?? "";
+  return { "cms.component": pathComponent || "(page)" };
+}
 
 type HandlerFn = (ctx: { request: Request }) => Promise<Response> | Response;
 
@@ -48,7 +64,9 @@ function optionsHandler(ctx: { request: Request }): Response {
 export const decoMetaRoute = {
   server: {
     handlers: {
-      GET: withCors(({ request }) => handleMeta(request)),
+      GET: withCors(({ request }) =>
+        withTracing("deco.admin.meta", async () => handleMeta(request)),
+      ),
       OPTIONS: optionsHandler,
     },
   },
@@ -61,8 +79,20 @@ export const decoMetaRoute = {
 export const decoRenderRoute = {
   server: {
     handlers: {
-      GET: withCors(async ({ request }) => handleRender(request)),
-      POST: withCors(async ({ request }) => handleRender(request)),
+      GET: withCors(({ request }) =>
+        withTracing(
+          "deco.admin.render",
+          () => Promise.resolve(handleRender(request)),
+          renderAttrs(request),
+        ),
+      ),
+      POST: withCors(({ request }) =>
+        withTracing(
+          "deco.admin.render",
+          () => Promise.resolve(handleRender(request)),
+          renderAttrs(request),
+        ),
+      ),
       OPTIONS: optionsHandler,
     },
   },
@@ -75,8 +105,12 @@ export const decoRenderRoute = {
 export const decoInvokeRoute = {
   server: {
     handlers: {
-      GET: withCors(async ({ request }) => handleInvoke(request)),
-      POST: withCors(async ({ request }) => handleInvoke(request)),
+      GET: withCors(({ request }) =>
+        withTracing("deco.admin.invoke", () => handleInvoke(request), invokeAttrs(request)),
+      ),
+      POST: withCors(({ request }) =>
+        withTracing("deco.admin.invoke", () => handleInvoke(request), invokeAttrs(request)),
+      ),
       OPTIONS: optionsHandler,
     },
   },

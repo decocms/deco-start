@@ -24,6 +24,8 @@
  * ```
  */
 
+import { getActiveSpan } from "./observability";
+
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 const LEVEL_RANK: Record<LogLevel, number> = {
@@ -227,14 +229,26 @@ export function serializeError(err: unknown): SerializedError {
 
 function emit(level: LogLevel, msg: string, attrs?: Record<string, unknown>): void {
   if (!shouldLog(level)) return;
-  // Merge floor → caller attrs so caller can override any floor key.
-  // Skipped entirely when the floor is empty so the no-op path stays cheap.
-  const merged: Record<string, unknown> | undefined =
-    Object.keys(attributeFloor).length === 0
-      ? attrs
-      : attrs
-        ? { ...attributeFloor, ...attrs }
-        : { ...attributeFloor };
+  // Pull trace context from the active span so every log line correlates
+  // to its trace in ClickStack/HyperDX. No active span → no-op; caller
+  // attrs always win so explicit `trace_id` overrides keep working.
+  const ctx = getActiveSpan()?.spanContext?.();
+  const traceAttrs: Record<string, unknown> | undefined = ctx
+    ? { trace_id: ctx.traceId, span_id: ctx.spanId }
+    : undefined;
+  // Merge order: floor → trace context → caller attrs. Caller wins; trace
+  // context only overrides floor (which never sets trace_id anyway).
+  const hasFloor = Object.keys(attributeFloor).length > 0;
+  let merged: Record<string, unknown> | undefined;
+  if (!hasFloor && !traceAttrs && !attrs) {
+    merged = undefined;
+  } else {
+    merged = {
+      ...(hasFloor ? attributeFloor : {}),
+      ...(traceAttrs ?? {}),
+      ...(attrs ?? {}),
+    };
+  }
   try {
     activeAdapter.log(level, msg, merged);
   } catch {

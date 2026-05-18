@@ -16,7 +16,8 @@
     "deco-migrate": "./dist/scripts/migrate.cjs",
     "deco-post-cleanup": "./dist/scripts/migrate-post-cleanup.cjs",
     "deco-htmx-analyze": "./dist/scripts/htmx-analyze.cjs",
-    "deco-cf-observability": "./dist/scripts/migrate-to-cf-observability.cjs"
+    "deco-cf-observability": "./dist/scripts/migrate-to-cf-observability.cjs",
+    "deco-audit-observability": "./dist/scripts/audit-observability-config.cjs"
   },
   "exports": {
     ".": {
@@ -194,6 +195,21 @@
       "import": "./dist/core/sdk/otelAdapters/clickhouseCollector.js",
       "require": "./dist/core/sdk/otelAdapters/clickhouseCollector.cjs"
     },
+    "./sdk/otelHttpMeter": {
+      "types": "./dist/core/sdk/otelHttpMeter.d.ts",
+      "import": "./dist/core/sdk/otelHttpMeter.js",
+      "require": "./dist/core/sdk/otelHttpMeter.cjs"
+    },
+    "./sdk/otelHttpErrorLog": {
+      "types": "./dist/core/sdk/otelHttpErrorLog.d.ts",
+      "import": "./dist/core/sdk/otelHttpErrorLog.js",
+      "require": "./dist/core/sdk/otelHttpErrorLog.cjs"
+    },
+    "./sdk/urlRedaction": {
+      "types": "./dist/core/sdk/urlRedaction.d.ts",
+      "import": "./dist/core/sdk/urlRedaction.js",
+      "require": "./dist/core/sdk/urlRedaction.cjs"
+    },
     "./sdk/observability": {
       "types": "./dist/tanstack/sdk/observability.d.ts",
       "import": "./dist/tanstack/sdk/observability.js",
@@ -355,6 +371,10 @@
     "./scripts/migrate-to-cf-observability": {
       "types": "./dist/scripts/migrate-to-cf-observability.d.ts",
       "default": "./dist/scripts/migrate-to-cf-observability.cjs"
+    },
+    "./scripts/audit-observability-config": {
+      "types": "./dist/scripts/audit-observability-config.d.ts",
+      "default": "./dist/scripts/audit-observability-config.cjs"
     },
     "./scripts/tailwind-lint": {
       "types": "./dist/scripts/tailwind-lint.d.ts",

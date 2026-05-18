@@ -31,14 +31,15 @@ import {
 } from "@tanstack/react-start/server";
 import { createElement } from "react";
 import { loadCmsPagePure } from "../../core/cms/loadCmsPagePure";
-import { resolveDeferredSectionPure } from "../../core/cms/resolveDeferredSectionPure";
 import { preloadSectionComponents } from "../../core/cms/registry";
 import type { MatcherContext, PageSeo, ResolvedSection } from "../../core/cms/resolve";
+import { resolveDeferredSectionPure } from "../../core/cms/resolveDeferredSectionPure";
 import {
   type CacheProfileName,
   cacheHeaders,
   routeCacheDefaults,
 } from "../../core/sdk/cacheHeaders";
+import { withTracing } from "../../core/sdk/observability";
 import type { Device } from "../../core/sdk/useDevice";
 
 const isServer = typeof document === "undefined";
@@ -194,10 +195,19 @@ export const loadDeferredSection = createServerFn({ method: "POST" })
       request: originRequest,
     };
 
-    const result = await resolveDeferredSectionPure(pagePath, component, matcherCtx, {
-      rawProps: clientRawProps,
-      index,
-    });
+    const result = await withTracing(
+      "deco.section.deferred.load",
+      () =>
+        resolveDeferredSectionPure(pagePath, component, matcherCtx, {
+          rawProps: clientRawProps,
+          index,
+        }),
+      {
+        "section.name": component,
+        "page.path": pagePath,
+        ...(typeof index === "number" ? { "section.index": index } : {}),
+      },
+    );
     if (!result) return null;
 
     // Translate cacheMetadata into TanStack response headers.
@@ -430,8 +440,7 @@ export function cmsRouteConfig(options: CmsRouteOptions) {
     // Catch-all search validation: preserve all URL search params so they
     // reach loaderDeps. Without this, TanStack Router may strip unknown
     // params (e.g. ?q=, filter.*, page, sort) during SPA navigation.
-    validateSearch: (search: Record<string, unknown>) =>
-      search as Record<string, string>,
+    validateSearch: (search: Record<string, unknown>) => search as Record<string, string>,
 
     loaderDeps: ({ search }: { search: Record<string, string> }) => {
       const filtered = Object.fromEntries(
@@ -511,7 +520,13 @@ export function cmsHomeRouteConfig(options: {
   /** Minimum display time (ms) for pending component. Default: 300. */
   pendingMinMs?: number;
 }) {
-  const { defaultTitle, defaultDescription, siteName, pendingMs = 200, pendingMinMs = 300 } = options;
+  const {
+    defaultTitle,
+    defaultDescription,
+    siteName,
+    pendingMs = 200,
+    pendingMinMs = 300,
+  } = options;
 
   return {
     loader: async () => {

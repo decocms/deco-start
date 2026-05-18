@@ -7,6 +7,7 @@ const BIN_FILES = [
   "dist/scripts/migrate-post-cleanup.cjs",
   "dist/scripts/htmx-analyze.cjs",
   "dist/scripts/migrate-to-cf-observability.cjs",
+  "dist/scripts/audit-observability-config.cjs",
 ];
 
 async function addShebangs() {
@@ -138,6 +139,7 @@ export default defineConfig([
       "scripts/migrate.ts",
       "scripts/migrate-post-cleanup.ts",
       "scripts/migrate-to-cf-observability.ts",
+      "scripts/audit-observability-config.ts",
       "scripts/htmx-analyze.ts",
       "scripts/tailwind-lint.ts",
     ],

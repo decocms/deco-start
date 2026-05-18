@@ -53,6 +53,7 @@ export {
 } from "./redirects";
 export { createServerTimings, type ServerTimings } from "./serverTimings";
 export { type ReactiveSignal, signal } from "./signal";
+export { redactUrl, type RedactUrlOptions } from "./urlRedaction";
 export {
   canonicalUrl,
   cleanPathForCacheKey,

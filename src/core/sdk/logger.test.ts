@@ -265,3 +265,69 @@ describe("serializeError", () => {
     });
   });
 });
+
+describe("trace correlation", () => {
+  afterEach(() => {
+    configureLogger(defaultLoggerAdapter);
+    setLogLevel("info");
+  });
+
+  it("includes trace_id/span_id when emitted inside withTracing", async () => {
+    const { configureTracer, setObservabilitySpanStore, withTracing } = await import(
+      "./observability"
+    );
+
+    let current: unknown = null;
+    setObservabilitySpanStore({
+      get: () => current as never,
+      run<R>(value: never, fn: () => R): R {
+        const prev = current;
+        current = value;
+        try {
+          const result = fn();
+          if (result instanceof Promise) {
+            return result.finally(() => {
+              current = prev;
+            }) as unknown as R;
+          }
+          current = prev;
+          return result;
+        } catch (err) {
+          current = prev;
+          throw err;
+        }
+      },
+    });
+    configureTracer({
+      startSpan: () => ({
+        end: () => {},
+        spanContext: () => ({
+          traceId: "deadbeefdeadbeefdeadbeefdeadbeef",
+          spanId: "1234567890abcdef",
+          traceFlags: 1,
+        }),
+      }),
+    });
+
+    const seen: Array<Record<string, unknown> | undefined> = [];
+    configureLogger({
+      log(_l, _m, attrs) {
+        seen.push(attrs);
+      },
+    });
+
+    await withTracing("t", async () => {
+      logger.info("inside-span", { custom: "yes" });
+    });
+    logger.info("outside-span", { custom: "no" });
+
+    expect(seen[0]).toMatchObject({
+      trace_id: "deadbeefdeadbeefdeadbeefdeadbeef",
+      span_id: "1234567890abcdef",
+      custom: "yes",
+    });
+    expect(seen[1]).toEqual({ custom: "no" });
+
+    setObservabilitySpanStore(undefined);
+  });
+});
