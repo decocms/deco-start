@@ -205,6 +205,10 @@ describe("instrumentWorker — tracer bridge", () => {
     observability.configureTracer({
       startSpan: () => ({ end: () => {} }),
     });
+    // installBridgeWithFakeOtelSpan() below uses vi.spyOn(trace, "getTracer").
+    // Without restoring, that spy leaks into any later test that touches the
+    // real OTel API.
+    vi.restoreAllMocks();
   });
 
   function installBridgeWithFakeOtelSpan() {

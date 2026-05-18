@@ -15,14 +15,15 @@
  * destination.
  *
  * Required `wrangler.jsonc` block (run `scripts/migrate-to-cf-observability.ts`
- * to inject this automatically):
+ * to inject this automatically). Sampling defaults follow the fleet-scale cost
+ * model documented in `docs/observability.md`:
  * ```jsonc
  * "observability": {
  *   "enabled": true,
  *   "logs":   { "enabled": true, "invocation_logs": true,
- *               "head_sampling_rate": 1,   "persist": true },
+ *               "head_sampling_rate": 1,    "persist": true },
  *   "traces": { "enabled": true,
- *               "head_sampling_rate": 0.1, "persist": true }
+ *               "head_sampling_rate": 0.01, "persist": true }
  * },
  * "version_metadata":          { "binding": "CF_VERSION_METADATA" },
  * "analytics_engine_datasets": [{ "binding": "DECO_METRICS",

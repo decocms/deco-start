@@ -104,7 +104,7 @@ That makes it possible to jump from any log line straight to its trace in ClickS
     },
     "traces": {
       "enabled": true,
-      "head_sampling_rate": 0.1,
+      "head_sampling_rate": 0.01,
       "persist": true,
       "destinations": [
         {
@@ -183,12 +183,42 @@ async function tracedFetch(url: string, init?: RequestInit) {
 
 ## Sampling
 
-`head_sampling_rate` on `observability.traces` decides at trace start whether to forward to the destination. Cloudflare Destinations does NOT support tail sampling (status-aware filtering). The current pragmatic default is:
+`head_sampling_rate` on `observability.traces` and `observability.logs` decides at the very start of a trace/log whether Cloudflare Destinations forwards it to the deco-otel-ingest endpoint. CF Destinations does NOT support tail sampling (status-aware filtering after the trace completes), so the framework leans on head sampling for cost control plus a separate direct-POST channel for error logs (so 100% of errors are captured regardless of the head sampling rate).
 
-- `traces.head_sampling_rate: 0.1` — keep 10% of traces
-- `logs.head_sampling_rate: 1.0` — keep 100% of logs (logs are cheap, error context comes from here)
+**Recommended defaults:**
 
-When dashboards need 100% of error traces, the upgrade path is **ingest-side filtering**: set `head_sampling_rate: 1.0` and let `deco-otel-ingest` drop OK traces deterministically by `TraceId` while keeping all error traces. Lives in the ingest Worker, not the framework.
+- `traces.head_sampling_rate: 0.01` — 1% of traces forward via CF Destinations.
+- `logs.head_sampling_rate: 1.0` — 100% of logs forward today; will drop to `0.01` once the direct-POST error channel ships (`@decocms/start/sdk/observability`'s `errorLog()` will bypass CF and emit straight to `/v1/logs` at 100%, so info/warn can safely be sampled at the boundary).
+
+**Per-site override tier (heavy traffic only):**
+
+- `traces.head_sampling_rate: 0.001` — 0.1% — for sites projected over 100M requests/month, with explicit team sign-off in the site repo's commit message or PR. NOT a codemod default, NOT documented as a recommended floor for all sites.
+
+**Why 1% and not 10%:** at the fleet scale we operate (`~2.5B req/month`, 100 sites, `~20` spans/req), shipping 10% of traces through CF Destinations puts the account at meaningful risk of tripping the 5B-events/day cap (CF auto-applies forced 1% sampling for the rest of the day once you cross it, drowning out every site's signal — a single viral campaign on one storefront becomes a fleet-wide outage of telemetry). 1% gives us a 2.5x headroom and keeps annual telemetry cost in the low hundreds of dollars.
+
+**Why no documented rate above 1%:** every value above `0.01` shipped as an "example" or "documented recommendation" is an attractive nuisance: someone copy-pastes it into a high-traffic site's `wrangler.jsonc` to "debug an incident" and forgets to revert, and the next month the team eats a five-figure CF bill. Higher rates are technically possible and may be temporarily appropriate for a specific investigation — they just shouldn't be documented as defaults anywhere. Audit rule `wrangler.head_sampling_rate_elevated` flags any value above `0.01`.
+
+**Upgrade path for 100% error traces (NOT recommended at our scale):** ingest-side filtering. Set `head_sampling_rate: 1.0` and let `deco-otel-ingest` drop OK traces deterministically by `TraceId` while keeping all error traces. Costs ~$44K/mo at our scale (verified against current CF and DO pricing), versus ~$420/mo for the chosen path of head-sample-1% + direct-POST-errors. Lives in the ingest Worker, not the framework, and only worth it when downstream cost stops mattering.
+
+## Cost model (fleet of 100 sites, 2.5B req/month)
+
+Verified against Cloudflare's current public pricing (Workers requests `$0.30/M`, Workers Logs `$0.60/M` after the 20M/mo free tier, AE data points `$0.25/M` after 10M/mo, AE reads `$1.00/M` after 1M/mo) and ClickHouse Cloud storage at the projected compressed volume:
+
+| Strategy | CF Destinations $/mo | Ingestor + CH $/mo | AE $/mo | DO $/mo | Total fleet $/mo |
+|----------|---------------------:|-------------------:|--------:|--------:|-----------------:|
+| **head=1% + errors via direct POST + metrics via direct POST (chosen)** | ~$360 | ~$20 | ~$39 | $0 | **~$420** |
+| head=0.1% (heavy-site tier) | ~$18 | ~$20 | ~$39 | $0 | ~$70 |
+| head=10% + 100% logs | ~$8.8K | ~$10 | ~$39 | $0 | ~$8.8K |
+| head=100% + DO-buffered tail-on-error | ~$36K | ~$20 | ~$39 | ~$8K | ~$44K |
+
+Numbers assume `~20` spans per request, `~4` log lines per request, and `~5` AE writes per request. The chosen-path breakdown:
+
+- `~$360` — CF Destinations carrying 1% of traces (`~500M/mo`) and 100% of info/warn logs (`~10B/mo` — see note below) through the Workers Logs billing tier.
+- `~$20` — ingestor `Worker` requests + CPU + ClickHouse Cloud writes (`~14M POSTs/mo` from CF Destinations + direct-POST flushes combined).
+- `~$39` — AE writes (`~125M/mo` at the same 1% sample as traces, coupled via the trace-id hash) + AE reads (operator dashboards).
+- `$0` — no Durable Objects (the tail-on-error buffer was rejected; see "Out of scope").
+
+> The `~10B/mo` log volume is the current state (logs at `head_sampling_rate: 1`). Once the direct-POST error channel lands, logs drop to `head_sampling_rate: 0.01` for info/warn and the CF Destinations cost falls by another `~$50/mo`, with errors carried 100% through direct POST at a few dollars on the ingestor side.
 
 ## Identity & cardinality notes
 

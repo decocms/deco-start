@@ -12,9 +12,9 @@
  *   "observability": {
  *     "enabled": true,
  *     "logs":   { "enabled": true, "invocation_logs": true,
- *                 "head_sampling_rate": 1, "persist": true },
+ *                 "head_sampling_rate": 1,    "persist": true },
  *     "traces": { "enabled": true,
- *                 "head_sampling_rate": 0.1, "persist": true }
+ *                 "head_sampling_rate": 0.01, "persist": true }
  *   }
  *
  * `enabled: true` at the top level is the master switch — without it
@@ -55,7 +55,7 @@
  *   --write                   Apply the change. Otherwise prints diff and exits 1.
  *   --destination-logs <n>    Optional CF destination name to forward logs to.
  *   --destination-traces <n>  Optional CF destination name to forward traces to.
- *   --traces-rate <r>         head_sampling_rate for traces (default: 0.1)
+ *   --traces-rate <r>         head_sampling_rate for traces (default: 0.01; see docs/observability.md for the cost model)
  *   --logs-rate <r>           head_sampling_rate for logs   (default: 1.0)
  *   --no-persist              Set persist:false (do not keep data in CF dashboard)
  *   --persist                 Set persist:true (default — required if no destination)
@@ -89,7 +89,7 @@ function parseArgs(argv: string[]): CliOpts {
     write: false,
     logsDest: "",
     tracesDest: "",
-    tracesRate: 0.1,
+    tracesRate: 0.01,
     logsRate: 1.0,
     // CF dashboard persistence on by default — without either persist:true
     // OR a destination, observability data is captured and discarded.
@@ -148,7 +148,7 @@ function showHelp(): void {
     --write                    Apply the edit. Without it, prints diff and exits 1.
     --destination-logs <n>     Optional CF destination slug to also forward logs to.
     --destination-traces <n>   Optional CF destination slug to also forward traces to.
-    --traces-rate <r>          head_sampling_rate for traces (default: 0.1)
+    --traces-rate <r>          head_sampling_rate for traces (default: 0.01; see docs/observability.md)
     --logs-rate <r>            head_sampling_rate for logs   (default: 1.0)
     --persist                  Keep the dashboard storage tier (default)
     --no-persist               Drop the dashboard tier (only sane when forwarding)

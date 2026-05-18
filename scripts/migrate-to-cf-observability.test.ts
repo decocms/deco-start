@@ -72,7 +72,7 @@ describe("migrate-to-cf-observability codemod", () => {
     expect(result).toContain('"enabled": true');
     // Both leaves present with rates and persist.
     expect(result).toContain('"head_sampling_rate": 1');
-    expect(result).toContain('"head_sampling_rate": 0.1');
+    expect(result).toContain('"head_sampling_rate": 0.01');
     expect(result.match(/"persist": true/g)?.length).toBe(2);
     // No destinations by default.
     expect(result).not.toContain('"destinations"');
@@ -137,7 +137,7 @@ describe("migrate-to-cf-observability codemod", () => {
     expect(result).toContain('"observability"');
     expect(result).toContain('"enabled": true');
     expect(result).toContain('"head_sampling_rate": 1');
-    expect(result).toContain('"head_sampling_rate": 0.1');
+    expect(result).toContain('"head_sampling_rate": 0.01');
     expect(result).not.toContain('"destinations"');
     expect(() => JSON.parse(stripJsoncComments(result))).not.toThrow();
   });
