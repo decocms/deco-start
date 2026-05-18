@@ -155,7 +155,22 @@ export function createInstrumentedFetch(
     const rawUrl =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const safeUrl = redactUrl(rawUrl, { keepQueryKeys });
-    const method = init?.method || "GET";
+    // Per the Fetch spec, when both a Request and an `init.method` are
+    // passed to `fetch()`, init.method replaces the Request's method.
+    // When init.method is omitted, the Request's method survives. So:
+    //
+    //  - explicit `init.method` wins
+    //  - else, if `input` is a Request, fall back to `input.method`
+    //  - else, "GET" (matches `new Request(url).method` default)
+    //
+    // Without this, a caller like `fetch(new Request(url, { method: "POST" }))`
+    // would surface as a GET in `http.method` on the span AND in the URL
+    // router's `resolveOperation(url, method)` callback — mislabeling
+    // POST traffic as GET in dashboards and routing decisions.
+    const method =
+      init?.method ??
+      (typeof input !== "string" && !(input instanceof URL) ? input.method : undefined) ??
+      "GET";
     const startTime = performance.now();
 
     // Resolve the operation BEFORE we touch init, then strip `operation`

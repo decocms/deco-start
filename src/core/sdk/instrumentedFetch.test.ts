@@ -461,6 +461,47 @@ describe("createInstrumentedFetch — traceparent injection", () => {
     expect(spans[0].name).toBe("vtex.from-call");
   });
 
+  it("derives method from a Request input when init.method is omitted", async () => {
+    // Without this, `fetch(new Request(url, { method: "POST" }))` would
+    // surface as GET on the span and in the URL-router callback —
+    // mislabeling POST traffic in dashboards.
+    const { tracer, spans } = makeFakeTracer();
+    configureTracer(tracer);
+    const resolveOperation = vi.fn(
+      (_url: string, method: string) => `inferred.${method.toLowerCase()}`,
+    );
+    const baseFetch = vi.fn(async () => new Response("ok"));
+
+    const f = createInstrumentedFetch({
+      name: "vtex",
+      baseFetch: baseFetch as unknown as typeof fetch,
+      logging: false,
+      resolveOperation,
+    });
+    await f(new Request("https://api.test/x", { method: "POST" }));
+
+    expect(resolveOperation).toHaveBeenCalledWith("https://api.test/x", "POST");
+    expect(spans[0].attrs["http.method"]).toBe("POST");
+    expect(spans[0].name).toBe("vtex.inferred.post");
+  });
+
+  it("init.method overrides the Request's method (Fetch spec)", async () => {
+    const { tracer, spans } = makeFakeTracer();
+    configureTracer(tracer);
+    const baseFetch = vi.fn(async () => new Response("ok"));
+
+    const f = createInstrumentedFetch({
+      name: "vtex",
+      baseFetch: baseFetch as unknown as typeof fetch,
+      logging: false,
+    });
+    await f(new Request("https://api.test/x", { method: "POST" }), {
+      method: "DELETE",
+    });
+
+    expect(spans[0].attrs["http.method"]).toBe("DELETE");
+  });
+
   it("passes the resolved operation to onComplete", async () => {
     const baseFetch = vi.fn(async () => new Response("ok"));
     const onComplete = vi.fn();
