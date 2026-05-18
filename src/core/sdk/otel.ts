@@ -46,10 +46,9 @@
  * does not change — only the transport layer wires up.
  */
 
-import { trace } from "@opentelemetry/api";
-
-import { configureMeter, configureTracer } from "./observability";
+import { SpanStatusCode, trace } from "@opentelemetry/api";
 import { configureLogger, defaultLoggerAdapter, setLoggerAttributeFloor } from "./logger";
+import { configureMeter, configureTracer } from "./observability";
 import { createAnalyticsEngineMeterAdapter } from "./otelAdapters";
 
 // ---------------------------------------------------------------------------
@@ -141,9 +140,19 @@ export function instrumentWorker(
       return {
         end: () => span.end(),
         setError: (error) => {
+          const message = error instanceof Error ? error.message : String(error);
           if (error instanceof Error) span.recordException(error);
+          span.setStatus({ code: SpanStatusCode.ERROR, message });
         },
         setAttribute: (k, v) => span.setAttribute(k, v),
+        spanContext: () => {
+          const ctx = span.spanContext();
+          return {
+            traceId: ctx.traceId,
+            spanId: ctx.spanId,
+            traceFlags: ctx.traceFlags,
+          };
+        },
       };
     },
   });
@@ -171,11 +180,20 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
   const serviceName = opts.serviceName ?? (env.DECO_SITE_NAME as string | undefined) ?? "deco-site";
   const decoRuntimeVersion = opts.decoRuntimeVersion ?? DECO_RUNTIME_VERSION;
   const deploymentEnvironment = (env.DECO_ENV_NAME as string | undefined) ?? "production";
+  const serviceVersion = (env.CF_VERSION_METADATA as { id?: string } | undefined)?.id;
 
+  // service.name and service.version are OTel resource conventions. CF's
+  // managed export already stamps service.name at the resource level (from
+  // the Worker name in wrangler.jsonc) but framework-created spans don't
+  // inherit resource attrs, so we stamp them per-span/per-log defensively.
+  // service.version comes from the CF_VERSION_METADATA binding which is
+  // unique per deployment — needed to correlate regressions with releases.
   const floor: Record<string, string> = {
+    "service.name": serviceName,
     "deco.runtime.version": decoRuntimeVersion,
     "deployment.environment": deploymentEnvironment,
   };
+  if (serviceVersion) floor["service.version"] = serviceVersion;
   if (opts.decoAppsVersion) floor["deco.apps.version"] = opts.decoAppsVersion;
 
   // Stamp on every span we create. CF-managed trace export emits its own
@@ -210,6 +228,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
     analyticsEngine: aeEnabled,
     runtimeVersion: decoRuntimeVersion,
     deploymentEnvironment,
+    ...(serviceVersion ? { serviceVersion } : {}),
   });
 }
 

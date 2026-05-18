@@ -9,10 +9,11 @@
  *     forward `fetch` to the wrapped handler, no flush registry, no
  *     `ctx.waitUntil` for telemetry plumbing.
  */
+import { SpanStatusCode, trace } from "@opentelemetry/api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as observability from "./observability";
 import * as composite from "./composite";
 import * as logger from "./logger";
+import * as observability from "./observability";
 import { _resetBootStateForTests, instrumentWorker } from "./otel";
 import * as adapters from "./otelAdapters";
 import { createClickhouseCollectorAdapter } from "./otelAdapters/clickhouseCollector";
@@ -147,5 +148,131 @@ describe("instrumentWorker — CF-native default boot", () => {
     await wrapped.fetch(new Request("https://example.test/"), env, fakeCtx());
 
     expect(handler.fetch).toHaveBeenCalledOnce();
+  });
+});
+
+describe("instrumentWorker — identity floor", () => {
+  beforeEach(() => {
+    _resetBootStateForTests();
+  });
+
+  afterEach(() => {
+    _resetBootStateForTests();
+  });
+
+  it("stamps service.name and service.version on the logger floor", async () => {
+    const handler = { fetch: vi.fn().mockResolvedValue(new Response("ok")) };
+    const wrapped = instrumentWorker(handler, { serviceName: "casaevideo-tanstack" });
+
+    const env: TestEnv = { CF_VERSION_METADATA: { id: "abc123" } };
+    await wrapped.fetch(new Request("https://example.test/"), env, fakeCtx());
+
+    const floor = logger._getLoggerAttributeFloorForTests();
+    expect(floor["service.name"]).toBe("casaevideo-tanstack");
+    expect(floor["service.version"]).toBe("abc123");
+  });
+
+  it("falls back to DECO_SITE_NAME for service.name", async () => {
+    const handler = { fetch: vi.fn().mockResolvedValue(new Response("ok")) };
+    const wrapped = instrumentWorker(handler);
+
+    const env: TestEnv = { DECO_SITE_NAME: "fallback-site" };
+    await wrapped.fetch(new Request("https://example.test/"), env, fakeCtx());
+
+    const floor = logger._getLoggerAttributeFloorForTests();
+    expect(floor["service.name"]).toBe("fallback-site");
+  });
+
+  it("omits service.version when CF_VERSION_METADATA is absent", async () => {
+    const handler = { fetch: vi.fn().mockResolvedValue(new Response("ok")) };
+    const wrapped = instrumentWorker(handler, { serviceName: "no-version-site" });
+
+    const env: TestEnv = {};
+    await wrapped.fetch(new Request("https://example.test/"), env, fakeCtx());
+
+    const floor = logger._getLoggerAttributeFloorForTests();
+    expect("service.version" in floor).toBe(false);
+  });
+});
+
+describe("instrumentWorker — tracer bridge", () => {
+  beforeEach(() => {
+    _resetBootStateForTests();
+  });
+
+  afterEach(() => {
+    _resetBootStateForTests();
+    observability.configureTracer({
+      startSpan: () => ({ end: () => {} }),
+    });
+  });
+
+  function installBridgeWithFakeOtelSpan() {
+    const span = {
+      end: vi.fn(),
+      recordException: vi.fn(),
+      setStatus: vi.fn(),
+      setAttribute: vi.fn(),
+      spanContext: vi.fn(() => ({
+        traceId: "0123456789abcdef0123456789abcdef",
+        spanId: "fedcba9876543210",
+        traceFlags: 1,
+      })),
+    };
+    const getTracer = vi.spyOn(trace, "getTracer").mockReturnValue({
+      startSpan: () => span,
+      startActiveSpan: () => undefined,
+    } as unknown as ReturnType<typeof trace.getTracer>);
+    const handler = { fetch: vi.fn().mockResolvedValue(new Response("ok")) };
+    const wrapped = instrumentWorker(handler);
+    return { span, wrapped, getTracer };
+  }
+
+  it("setError sets SpanStatusCode.ERROR and records exception", async () => {
+    const { span, wrapped } = installBridgeWithFakeOtelSpan();
+    await wrapped.fetch(new Request("https://example.test/"), {}, fakeCtx());
+
+    // Drive a span through the bridge via withTracing.
+    await expect(
+      observability.withTracing("t", async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+
+    expect(span.recordException).toHaveBeenCalledOnce();
+    expect(span.setStatus).toHaveBeenCalledWith({
+      code: SpanStatusCode.ERROR,
+      message: "boom",
+    });
+  });
+
+  it("setError sets ERROR status for non-Error throws too", async () => {
+    const { span, wrapped } = installBridgeWithFakeOtelSpan();
+    await wrapped.fetch(new Request("https://example.test/"), {}, fakeCtx());
+
+    await expect(
+      observability.withTracing("t", async () => {
+        throw "string-error";
+      }),
+    ).rejects.toBe("string-error");
+
+    expect(span.recordException).not.toHaveBeenCalled();
+    expect(span.setStatus).toHaveBeenCalledWith({
+      code: SpanStatusCode.ERROR,
+      message: "string-error",
+    });
+  });
+
+  it("spanContext round-trips traceId/spanId/traceFlags", async () => {
+    const { wrapped } = installBridgeWithFakeOtelSpan();
+    await wrapped.fetch(new Request("https://example.test/"), {}, fakeCtx());
+
+    const tracer = observability.getTracer();
+    const span = tracer?.startSpan("t");
+    expect(span?.spanContext?.()).toEqual({
+      traceId: "0123456789abcdef0123456789abcdef",
+      spanId: "fedcba9876543210",
+      traceFlags: 1,
+    });
   });
 });

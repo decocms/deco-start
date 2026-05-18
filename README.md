@@ -264,6 +264,10 @@ The full v2 docs live at **[docs.deco.cx/v2](https://docs.deco.cx/v2/en/getting-
 - [Migration](https://docs.deco.cx/v2/en/migration/overview) — v1 → v2 playbook + script + skill.
 - [Case studies](https://docs.deco.cx/v2/en/case-studies/overview) — three production stores end-to-end.
 
+In-repo references:
+
+- [Observability](./docs/observability.md) — `instrumentWorker`, span/metric reference, Cloudflare wiring, ClickHouse query patterns.
+
 ---
 
 ## Peer dependencies

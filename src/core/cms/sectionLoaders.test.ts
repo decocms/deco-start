@@ -1,9 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { configureTracer, type Span } from "../sdk/observability";
 import type { ResolvedSection } from "./resolve";
 import {
   registerCacheableSections,
   registerLayoutSections,
   registerSectionLoader,
+  runSectionLoaders,
   runSingleSectionLoader,
 } from "./sectionLoaders";
 
@@ -25,9 +27,7 @@ const makeSection = (component: string, props: Record<string, unknown> = {}): Re
 describe("runSingleSectionLoader — page context injection", () => {
   it("injects __pageUrl and __pagePath into loader props", async () => {
     // Two-arg signature so loader.mock.calls[0] types as [props, req].
-    const loader = vi.fn(
-      async (props: Record<string, unknown>, _req: Request) => props,
-    );
+    const loader = vi.fn(async (props: Record<string, unknown>, _req: Request) => props);
     registerSectionLoader("site/sections/SearchBanner.tsx", loader);
 
     const section = makeSection("site/sections/SearchBanner.tsx", { foo: "bar" });
@@ -272,5 +272,37 @@ describe("runSingleSectionLoader — nested section recursion", () => {
       foo: "bar",
       ran: true,
     });
+  });
+});
+
+describe("runSectionLoaders — batch span", () => {
+  afterEach(() => {
+    configureTracer({ startSpan: () => ({ end: () => {} }) });
+  });
+
+  it("emits one deco.section.loaders.batch parent with section.count", async () => {
+    const spans: Array<{ name: string; attrs?: Record<string, unknown> }> = [];
+    configureTracer({
+      startSpan: (name, attrs) => {
+        spans.push({ name, attrs });
+        const s: Span = { end: () => {} };
+        return s;
+      },
+    });
+
+    registerSectionLoader("a", async (p) => p);
+    registerSectionLoader("b", async (p) => p);
+
+    await runSectionLoaders(
+      [makeSection("a"), makeSection("b"), makeSection("c-no-loader")],
+      new Request("https://site/"),
+    );
+
+    const batch = spans.find((s) => s.name === "deco.section.loaders.batch");
+    expect(batch).toBeDefined();
+    expect(batch?.attrs).toMatchObject({ "section.count": 3 });
+
+    const perSection = spans.filter((s) => s.name === "deco.section.loader");
+    expect(perSection).toHaveLength(3);
   });
 });

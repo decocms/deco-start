@@ -30,20 +30,14 @@
  * ```
  */
 
-export { buildDecoState, type DecoState } from "./decoState";
 export {
-  getHealthMetrics,
-  type HealthMetrics,
-  handleHealthCheck,
-  trackRequest,
-} from "./healthMetrics";
-export { handleLiveness } from "./liveness";
-export {
+  type CacheDecision,
   configureMeter,
   configureTracer,
   getActiveSpan,
   getMeter,
   getTracer,
+  injectTraceContext,
   logRequest,
   type MeterAdapter,
   MetricNames,
@@ -54,8 +48,15 @@ export {
   type TracerAdapter,
   withTracing,
 } from "../../core/sdk/observability";
-
+export { buildDecoState, type DecoState } from "./decoState";
+export {
+  getHealthMetrics,
+  type HealthMetrics,
+  handleHealthCheck,
+  trackRequest,
+} from "./healthMetrics";
 export { buildHydrationContext, type HydrationContext } from "./hydrationContext";
+export { handleLiveness } from "./liveness";
 export {
   createSectionValidator,
   type DeferredSectionInput,

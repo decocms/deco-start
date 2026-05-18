@@ -33,10 +33,10 @@ import { installTanStackRuntime } from "../setup";
 // Worker module evaluates once per isolate, so this runs at boot and not on
 // every request. Idempotent — safe even if multiple bundles import this.
 installTanStackRuntime();
+
 import type { MatcherContext } from "../../core/cms/resolve";
 import { resolveDecoPage } from "../../core/cms/resolve";
 import { runSectionLoaders, runSingleSectionLoader } from "../../core/cms/sectionLoaders";
-import { logRequest, recordRequestMetric, withTracing } from "../../core/sdk/observability";
 import {
   type CacheProfileName,
   cacheHeaders,
@@ -45,11 +45,17 @@ import {
   getCacheProfile,
 } from "../../core/sdk/cacheHeaders";
 import { buildHtmlShell } from "../../core/sdk/htmlShell";
+import {
+  logRequest,
+  recordCacheMetric,
+  recordRequestMetric,
+  withTracing,
+} from "../../core/sdk/observability";
 import { setRuntimeEnv } from "../../core/sdk/otelAdapters";
 import { RequestContext } from "../../core/sdk/requestContext";
-import { getAppMiddleware } from "./setupApps";
 import { cleanPathForCacheKey } from "../../core/sdk/urlUtils";
 import { type Device, isMobileUA } from "../../core/sdk/useDevice";
+import { getAppMiddleware } from "./setupApps";
 
 /**
  * Build-time identifier injected by `decoVitePlugin()` (see
@@ -903,7 +909,8 @@ export function createDecoWorkerEntry(
           headers: { ...admin.corsHeaders(request), ...ADMIN_NO_CACHE },
         });
       }
-      return addCors(admin.handleMeta(request), request);
+      const resp = await withTracing("deco.admin.meta", async () => admin.handleMeta(request));
+      return addCors(resp, request);
     }
 
     if (pathname === "/.decofile") {
@@ -914,9 +921,15 @@ export function createDecoWorkerEntry(
         });
       }
       if (method === "POST") {
-        return addCors(await admin.handleDecofileReload(request), request);
+        const resp = await withTracing("deco.admin.decofile.reload", () =>
+          Promise.resolve(admin.handleDecofileReload(request)),
+        );
+        return addCors(resp, request);
       }
-      return addCors(admin.handleDecofileRead(), request);
+      const resp = await withTracing("deco.admin.decofile.read", async () =>
+        admin.handleDecofileRead(),
+      );
+      return addCors(resp, request);
     }
 
     if (pathname === "/deco/_liveness") {
@@ -945,7 +958,13 @@ export function createDecoWorkerEntry(
           headers: { ...admin.corsHeaders(request), ...ADMIN_NO_CACHE },
         });
       }
-      return addCors(await admin.handleRender(request), request);
+      const pathComponent = pathname.slice("/live/previews/".length);
+      const resp = await withTracing(
+        "deco.admin.render",
+        () => Promise.resolve(admin.handleRender(request)),
+        { "cms.component": pathComponent || "(page)" },
+      );
+      return addCors(resp, request);
     }
 
     return null;
@@ -1245,7 +1264,11 @@ export function createDecoWorkerEntry(
       let sfnCached: Response | undefined;
       if (serverFnCache) {
         try {
-          sfnCached = (await serverFnCache.match(sfnCacheKey)) ?? undefined;
+          sfnCached = await withTracing(
+            "deco.cache.lookup",
+            async () => (await serverFnCache.match(sfnCacheKey)) ?? undefined,
+            { "cache.profile": sfnProfile, "cache.kind": "serverFn" },
+          );
         } catch {
           /* Cache API unavailable */
         }
@@ -1256,6 +1279,7 @@ export function createDecoWorkerEntry(
         const ageSec = storedAt > 0 ? (Date.now() - storedAt) / 1000 : Infinity;
 
         if (ageSec < sfnEdge.fresh) {
+          recordCacheMetric(true, sfnProfile, "HIT");
           const out = new Response(sfnCached.body, sfnCached);
           const hdrs = cacheHeaders(sfnProfile);
           for (const [k, v] of Object.entries(hdrs)) out.headers.set(k, v);
@@ -1265,6 +1289,7 @@ export function createDecoWorkerEntry(
         }
 
         if (ageSec < sfnEdge.fresh + sfnEdge.swr) {
+          recordCacheMetric(true, sfnProfile, "STALE-HIT");
           // Stale-while-revalidate: serve stale, refresh in background
           ctx.waitUntil(
             (async () => {
@@ -1301,6 +1326,7 @@ export function createDecoWorkerEntry(
       }
 
       // Cache MISS — fetch origin with the body we already read
+      recordCacheMetric(false, sfnProfile, "MISS");
       const origin = await serverEntry.fetch(originClone, env, ctx);
 
       // Only cache responses explicitly marked as cacheable by the handler
@@ -1331,7 +1357,12 @@ export function createDecoWorkerEntry(
           toStore.headers.set("X-Deco-Stored-At", String(Date.now()));
           toStore.headers.delete("CDN-Cache-Control");
           toStore.headers.delete("X-Deco-Cacheable");
-          ctx.waitUntil(serverFnCache.put(sfnCacheKey, toStore));
+          ctx.waitUntil(
+            withTracing("deco.cache.store", () => serverFnCache.put(sfnCacheKey, toStore), {
+              "cache.profile": sfnProfile,
+              "cache.kind": "serverFn",
+            }),
+          );
         } catch {
           /* Cache API unavailable */
         }
@@ -1451,7 +1482,12 @@ export function createDecoWorkerEntry(
         toStore.headers.set("Cache-Control", `public, max-age=${storageTtl}`);
         toStore.headers.set("X-Deco-Stored-At", String(Date.now()));
         toStore.headers.delete("CDN-Cache-Control");
-        ctx.waitUntil(cache.put(cacheKey, toStore));
+        ctx.waitUntil(
+          withTracing("deco.cache.store", () => cache.put(cacheKey, toStore), {
+            "cache.profile": profile,
+            "cache.kind": "html",
+          }),
+        );
       } catch {
         // Cache API unavailable
       }
@@ -1483,7 +1519,11 @@ export function createDecoWorkerEntry(
     let cached: Response | undefined;
     if (cache) {
       try {
-        cached = (await cache.match(cacheKey)) ?? undefined;
+        cached = await withTracing(
+          "deco.cache.lookup",
+          async () => (await cache.match(cacheKey)) ?? undefined,
+          { "cache.profile": profile, "cache.kind": "html" },
+        );
       } catch {
         // Cache API unavailable
       }
@@ -1497,11 +1537,13 @@ export function createDecoWorkerEntry(
 
       if (ageSec < edgeConfig.fresh) {
         // FRESH HIT — serve immediately
+        recordCacheMetric(true, profile, "HIT");
         return dressResponse(cached, "HIT");
       }
 
       if (ageSec < edgeConfig.fresh + edgeConfig.swr) {
         // STALE-HIT within SWR window — serve stale, revalidate in background
+        recordCacheMetric(true, profile, "STALE-HIT");
         revalidateInBackground();
         return dressResponse(cached, "STALE-HIT", { "X-Cache-Age": String(Math.round(ageSec)) });
       }
@@ -1511,6 +1553,7 @@ export function createDecoWorkerEntry(
     }
 
     // Cache MISS or past SWR window — fetch from origin
+    recordCacheMetric(false, profile, "MISS");
     let origin: Response;
     try {
       origin = await serverEntry.fetch(request, env, ctx);
@@ -1524,6 +1567,7 @@ export function createDecoWorkerEntry(
           console.warn(
             `[edge-cache] Origin threw, serving stale (age=${Math.round(ageSec)}s, sie=${edgeConfig.sie}s)`,
           );
+          recordCacheMetric(true, profile, "STALE-ERROR");
           return dressResponse(cached, "STALE-ERROR", {
             "X-Cache-Age": String(Math.round(ageSec)),
           });
@@ -1543,6 +1587,7 @@ export function createDecoWorkerEntry(
             console.warn(
               `[edge-cache] Origin ${origin.status}, serving stale (age=${Math.round(ageSec)}s)`,
             );
+            recordCacheMetric(true, profile, "STALE-ERROR");
             return dressResponse(cached, "STALE-ERROR", {
               "X-Cache-Age": String(Math.round(ageSec)),
               "X-Cache-Origin-Status": String(origin.status),
