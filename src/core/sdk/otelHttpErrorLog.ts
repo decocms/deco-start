@@ -111,9 +111,7 @@ const SEVERITY_NUMBER: Record<LogLevel, number> = {
 // Factory
 // ---------------------------------------------------------------------------
 
-export function createOtlpHttpErrorLogAdapter(
-  options: OtlpHttpErrorLogOptions,
-): OtlpHttpErrorLog {
+export function createOtlpHttpErrorLogAdapter(options: OtlpHttpErrorLogOptions): OtlpHttpErrorLog {
   const endpoint = options.endpoint;
   const resourceAttributes = options.resourceAttributes;
   const scopeName = options.scopeName ?? "@decocms/start";
@@ -166,7 +164,10 @@ export function createOtlpHttpErrorLogAdapter(
       }
 
       if (buffer.length >= maxBuffer) {
-        onError?.("overflow", new Error(`error-log buffer at cap (${maxBuffer}) — dropping record`));
+        onError?.(
+          "overflow",
+          new Error(`error-log buffer at cap (${maxBuffer}) — dropping record`),
+        );
         return;
       }
 
@@ -198,31 +199,55 @@ export function createOtlpHttpErrorLogAdapter(
     });
 
     const restoreOnFailure = () => {
-      // Restore intelligently respecting the cap. If the buffer has
-      // grown during the POST and there's no room for everything, keep
-      // the oldest (most-likely-causal) records by truncating the tail
-      // of the snapshot before re-prepending.
-      const room = Math.max(0, maxBuffer - buffer.length);
-      if (room === 0) {
-        onError?.(
-          "overflow",
-          new Error(
-            `error-log buffer full after flush failure — dropped ${snapshot.length} records`,
-          ),
-        );
+      // The snapshot was buffered BEFORE any records that landed during
+      // the failed POST — its contents are older and more likely to be
+      // the originating-error context operators care about. Restore
+      // policy preserves the snapshot first, evicts the NEWEST records
+      // when the cap is tight:
+      //
+      //  1. If snapshot + current buffer fit under the cap → unshift,
+      //     done.
+      //  2. Otherwise, drop newest-tail records from the current buffer
+      //     (records that arrived during the failed POST). If that
+      //     suffices, unshift the full snapshot.
+      //  3. Only if the snapshot ALONE exceeds the cap do we truncate
+      //     the snapshot — and even then, we keep its OLDEST end
+      //     (`snapshot.length = maxBuffer`) and drop the newest tail.
+      //
+      // This is the inverse of the original (buggy) restore which kept
+      // newer records by truncating the older snapshot.
+      const total = snapshot.length + buffer.length;
+      if (total <= maxBuffer) {
+        buffer.unshift(...snapshot);
         return;
       }
-      if (snapshot.length > room) {
-        const dropped = snapshot.length - room;
-        onError?.(
-          "overflow",
-          new Error(
-            `error-log buffer full after flush failure — dropped ${dropped} oldest-tail records`,
-          ),
-        );
-        snapshot.length = room;
+
+      let overflow = total - maxBuffer;
+      let droppedFromBuffer = 0;
+      if (buffer.length > 0 && overflow > 0) {
+        droppedFromBuffer = Math.min(buffer.length, overflow);
+        buffer.length -= droppedFromBuffer;
+        overflow -= droppedFromBuffer;
+      }
+      let droppedFromSnapshot = 0;
+      if (overflow > 0) {
+        // Snapshot alone exceeds the cap. Keep the oldest `maxBuffer`
+        // entries and drop the rest from the newest tail.
+        droppedFromSnapshot = Math.min(snapshot.length, overflow);
+        snapshot.length -= droppedFromSnapshot;
       }
       buffer.unshift(...snapshot);
+
+      const parts = [`dropped ${droppedFromBuffer} newer records from buffer`];
+      if (droppedFromSnapshot > 0) {
+        parts.push(`${droppedFromSnapshot} newest-tail records from snapshot`);
+      }
+      onError?.(
+        "overflow",
+        new Error(
+          `error-log buffer overflow on restore — ${parts.join(" and ")} (preserved ${snapshot.length} originating-error records)`,
+        ),
+      );
     };
 
     const controller = new AbortController();
@@ -311,10 +336,7 @@ interface SerializeOpts {
   scopeVersion: string;
 }
 
-function serializeOtlp(
-  records: PendingRecord[],
-  opts: SerializeOpts,
-): { resourceLogs: unknown[] } {
+function serializeOtlp(records: PendingRecord[], opts: SerializeOpts): { resourceLogs: unknown[] } {
   const otlpRecords = records.map((r) => ({
     timeUnixNano: r.timeUnixNano,
     observedTimeUnixNano: r.observedTimeUnixNano,
