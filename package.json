@@ -16,7 +16,8 @@
     "deco-migrate": "./dist/scripts/migrate.cjs",
     "deco-post-cleanup": "./dist/scripts/migrate-post-cleanup.cjs",
     "deco-htmx-analyze": "./dist/scripts/htmx-analyze.cjs",
-    "deco-cf-observability": "./dist/scripts/migrate-to-cf-observability.cjs"
+    "deco-cf-observability": "./dist/scripts/migrate-to-cf-observability.cjs",
+    "deco-audit-observability": "./dist/scripts/audit-observability-config.cjs"
   },
   "exports": {
     ".": {
@@ -370,6 +371,10 @@
     "./scripts/migrate-to-cf-observability": {
       "types": "./dist/scripts/migrate-to-cf-observability.d.ts",
       "default": "./dist/scripts/migrate-to-cf-observability.cjs"
+    },
+    "./scripts/audit-observability-config": {
+      "types": "./dist/scripts/audit-observability-config.d.ts",
+      "default": "./dist/scripts/audit-observability-config.cjs"
     },
     "./scripts/tailwind-lint": {
       "types": "./dist/scripts/tailwind-lint.d.ts",

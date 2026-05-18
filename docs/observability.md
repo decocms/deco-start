@@ -233,6 +233,32 @@ Numbers assume `~20` spans per request, `~4` log lines per request, and `~5` AE 
 - `cache.profile` is one of the built-in profiles (`product`, `listing`, `search`, `static`, `cart`, `private`, `none`) plus any custom profile registered via the site's `cacheHeaders` overrides. Small, fixed set — safe as a label.
 - `deco.section` carries the section component key (e.g. `site/sections/ProductShelf.tsx`). Cardinality scales with the number of sections in the catalog — typically <100, fine for ClickHouse but **not** safe as an AE metric label (use it as a span attribute only).
 
+## Auditing the config
+
+A site's `wrangler.jsonc` can drift away from the canonical block above
+between migrations. The audit catches that drift in CI:
+
+```bash
+npx -p @decocms/start deco-audit-observability        # exits 1 on findings
+npx -p @decocms/start deco-audit-observability --json # machine-readable
+```
+
+Rule set (each rule maps 1:1 to a `deco-cf-observability --write …` fix
+flag — there is no detect-only rule):
+
+| Rule id                            | Severity | What it catches                                                                                              |
+| ---------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------ |
+| `observability_missing`            | error    | No `observability` key at all. Cloudflare captures nothing.                                                  |
+| `observability_disabled`           | error    | `observability.enabled: false`. Master switch off.                                                           |
+| `traces_disabled` / `logs_disabled`| warn     | Sub-block `enabled: false`. Often intentional during incident triage; flagged so it doesn't go un-noticed.   |
+| `head_sampling_rate_elevated`      | error    | `traces.head_sampling_rate > 0.01`. Fleet-scale cost trap; see [Sampling](#sampling).                        |
+| `logs_head_sampling_rate_low`      | warn     | `logs.head_sampling_rate < 1`. Info/warn logs are cheap; errors already bypass head sampling via direct POST.|
+| `persist_disabled_no_destination`  | error    | `persist: false` with no destinations. Data captured then discarded.                                         |
+
+A CF Tail Worker pre-merge check can run this audit against the
+storefront repo's `wrangler.jsonc`; pair with the codemod for one-shot
+remediation.
+
 ## Out of scope
 
 - **In-Worker OTLP exporter.** Removed in 5.0.0. CF Destinations handles transport; the framework only emits.

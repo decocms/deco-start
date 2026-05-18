@@ -69,6 +69,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { stripJsoncComments as sharedStripJsoncComments } from "./lib/jsonc";
 
 interface CliOpts {
   source: string;
@@ -172,58 +173,12 @@ function showHelp(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Strip line and block comments from a JSONC string so the result parses
- * with vanilla `JSON.parse`. Preserves quoted strings (handles escaped
- * quotes), preserves whitespace/newlines so line numbers in error
- * messages stay stable.
+ * Strip line and block comments from a JSONC string. Delegates to the
+ * shared helper in `scripts/lib/jsonc.ts` — kept as a local alias so the
+ * rest of this file's call sites stay readable.
  */
 function stripJsoncComments(src: string): string {
-  let out = "";
-  let i = 0;
-  let inString = false;
-  let stringQuote = "";
-  while (i < src.length) {
-    const ch = src[i];
-    const next = src[i + 1];
-    if (inString) {
-      out += ch;
-      if (ch === "\\" && i + 1 < src.length) {
-        out += next;
-        i += 2;
-        continue;
-      }
-      if (ch === stringQuote) {
-        inString = false;
-      }
-      i++;
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      inString = true;
-      stringQuote = ch;
-      out += ch;
-      i++;
-      continue;
-    }
-    if (ch === "/" && next === "/") {
-      // Line comment — skip to newline (preserve newline for line counts).
-      while (i < src.length && src[i] !== "\n") i++;
-      continue;
-    }
-    if (ch === "/" && next === "*") {
-      // Block comment — skip to */, preserving newlines for line counts.
-      i += 2;
-      while (i < src.length - 1 && !(src[i] === "*" && src[i + 1] === "/")) {
-        if (src[i] === "\n") out += "\n";
-        i++;
-      }
-      i += 2;
-      continue;
-    }
-    out += ch;
-    i++;
-  }
-  return out;
+  return sharedStripJsoncComments(src);
 }
 
 /**
