@@ -1,32 +1,46 @@
 # Observability
 
-`@decocms/start` ships a thin, opinionated observability layer for Deco storefronts on Cloudflare Workers. Spans, logs, and metrics flow through Cloudflare's managed export — there is no in-Worker OTLP exporter. The framework's job is to emit a well-shaped signal; transport is solved by Cloudflare Destinations and the `deco-otel-ingest` Worker.
+`@decocms/start` ships a thin, opinionated observability layer for Deco storefronts on Cloudflare Workers. Three signals — spans, logs, and metrics — flow to the same downstream (stats-lake / ClickStack) along two complementary transport paths:
+
+1. **CF Destinations (head-sampled, indirect):** spans + info/warn logs are captured by Cloudflare's managed pipeline at `head_sampling_rate` and pushed to `deco-otel-ingest`.
+2. **Direct POST (un-sampled, in-Worker):** metrics (no CF Destinations support) and error logs (`level: "error"`, bypassing head sampling for 100% capture) are batched in-isolate and POSTed directly to `deco-otel-ingest` via `ctx.waitUntil`.
+
+The framework's job is to emit a well-shaped signal on whichever path makes sense for the signal — never on both. No in-Worker OTLP exporter for spans/info-logs; no CF-Destinations path for metrics/errors.
 
 ## Architecture
 
 ```
-┌────────────────────────────┐
-│ site Worker                │  instrumentWorker(handler, ...) wires:
-│   instrumentWorker(...)    │   - structured JSON logger → console.* (capture by CF Logs)
-│   withTracing(...)         │   - AE meter (when DECO_METRICS binding present)
-│   logger.info|warn|error   │   - bridge to @opentelemetry/api global tracer
-└─────────────┬──────────────┘
-              │ OTLP/HTTP JSON via observability.{logs,traces}.destinations
-              ▼
-┌────────────────────────────┐
-│ deco-otel-ingest (Worker)  │   Maps OTLP → ClickHouse clickhouseexporter schema,
-│   redacts PII (cookie,     │   redacts sensitive headers, persists to stats-lake.
-│   authorization, x-vtex-*) │
-└─────────────┬──────────────┘
-              ▼
-┌────────────────────────────┐
-│ stats-lake ClickHouse      │   default.otel_traces / default.otel_logs (30-day TTL)
-└─────────────┬──────────────┘
-              ▼
-┌────────────────────────────┐
-│ ClickStack UI              │   hyperdx.clickhouse.cloud
-│  (HyperDX-compatible)      │
-└────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│ site Worker (instrumentWorker + withTracing) │
+│                                              │
+│   logger.info / .warn ──┐    traces ─────┐   │
+│   logger.error ────┐    │                │   │
+│   meter.counter / .histogram ──────┐     │   │
+└────────────────────┬───┬───────────┬─────┬───┘
+                     │   │           │     │
+       direct POST   │   │ CF        │     │ CF
+       (waitUntil)   │   │ Logs      │     │ Traces
+                     ▼   ▼ Dest.     ▼     ▼ Dest.
+                  ┌────────────────────────────┐
+                  │ deco-otel-ingest (Worker)  │
+                  │   /v1/traces  /v1/logs     │
+                  │   /v1/metrics              │
+                  │   redacts cookie, auth,    │
+                  │   x-vtex-* headers          │
+                  └─────────────┬──────────────┘
+                                ▼
+                  ┌────────────────────────────┐
+                  │ stats-lake ClickHouse      │
+                  │   otel_traces              │
+                  │   otel_logs                │
+                  │   otel_metrics_{sum,       │
+                  │     gauge, histogram}      │
+                  └─────────────┬──────────────┘
+                                ▼
+                  ┌────────────────────────────┐
+                  │ ClickStack UI              │
+                  │  hyperdx.clickhouse.cloud  │
+                  └────────────────────────────┘
 ```
 
 ## What's instrumented
@@ -57,8 +71,6 @@ This makes it possible to filter traces by cache decision directly in ClickStack
 
 ## What's measured
 
-The meter is plugged at boot when `DECO_METRICS` (Workers Analytics Engine) is bound:
-
 | Metric                         | Type      | Source                              | Labels                          |
 | ------------------------------ | --------- | ----------------------------------- | ------------------------------- |
 | `http_requests_total`          | counter   | `workerEntry`                       | `method`, `path`, `status`      |
@@ -69,6 +81,24 @@ The meter is plugged at boot when `DECO_METRICS` (Workers Analytics Engine) is b
 | `resolve_duration_ms`          | histogram | `resolveDecoPage`                   | —                               |
 
 `decision` values mirror the `X-Cache` response header: `HIT`, `STALE-HIT`, `STALE-ERROR`, `MISS`, `BYPASS`.
+
+### Metrics: AE vs OTLP (the two-meter split)
+
+`instrumentWorker` plugs **up to two meters in parallel**, composed via `createCompositeMeter`:
+
+| Path                                            | Destination                                | When wired                                          |
+| ----------------------------------------------- | ------------------------------------------ | --------------------------------------------------- |
+| **AE (Analytics Engine)**                       | `DECO_METRICS` AE binding                  | When the binding exists in `wrangler.jsonc`         |
+| **OTLP/HTTP (direct POST)**                     | `${DECO_OTEL_METRICS_ENDPOINT}/v1/metrics` | When the env var resolves; off otherwise            |
+
+Each emitted metric goes to **both** (composite). They serve different jobs:
+
+- **AE** is the hot-path operator dashboard: high-cardinality, sub-second query, raw datapoints retained for `~30` days. Best for short-window incident triage from the CF dashboard. Cost scales with **datapoint writes** — pricing is well below ClickHouse Cloud for write-heavy metrics.
+- **OTLP → ClickHouse** is the long-horizon, cross-source analytical store: SQL-joinable with `otel_traces` / `otel_logs`, multi-month retention, hooks into ClickStack panels. Best for cross-fleet rollups (per-tenant, per-deploy, per-app-version), and for any metric an operator wants to chart alongside spans.
+
+Dropping AE entirely is supported (don't bind `DECO_METRICS`) — you lose the hot-path CF dashboard view but the ClickStack panel still works. Dropping OTLP is the default until `DECO_OTEL_METRICS_ENDPOINT` is set. Running both is the recommended posture and what the cost model in this doc assumes.
+
+CF Destinations does **not** support OTLP metrics natively (only traces + logs). That's why the OTLP metrics channel is a direct POST from the Worker, batched in-isolate and flushed via `ctx.waitUntil` rather than carried by CF.
 
 ## Identity stamped on every span and log
 
@@ -145,6 +175,15 @@ export default instrumentWorker(handler, { serviceName: "my-store" });
 
 `OtelOptions` also accepts a function `(env) => OtelOptions` if your service name comes from env.
 
+The direct-POST channels are wired automatically when the relevant env vars resolve. Defaults work for the standard fleet ingestor URL — explicit overrides are only needed for staging or private ingestors:
+
+| Env var (default name)             | Channel              | Default                | Behavior when unset                                  |
+| ---------------------------------- | -------------------- | ---------------------- | ---------------------------------------------------- |
+| `DECO_OTEL_METRICS_ENDPOINT`       | OTLP metrics POST    | `""` (unset)           | OTLP meter is not created; AE-only metrics           |
+| `DECO_OTEL_LOGS_ENDPOINT`          | OTLP error-log POST  | `""` (unset)           | Error logs ride CF Destinations only (head-sampled)  |
+
+Both are opt-out via `OtelOptions.otlpMetricsEnabled: false` / `otlpErrorLogsEnabled: false` if you need to disable them at boot for a specific environment without changing the env vars.
+
 ## Log shape (and how to query it)
 
 Cloudflare Destinations wraps every `console.log` line into an OTLP `LogRecord` with the JSON body in `body.stringValue`. The ingest Worker maps that to ClickHouse's `otel_logs.Body` verbatim. To filter logs by a structured field, use `JSONExtract` in ClickHouse:
@@ -190,12 +229,12 @@ async function tracedFetch(url: string, init?: RequestInit) {
 
 ## Sampling
 
-`head_sampling_rate` on `observability.traces` and `observability.logs` decides at the very start of a trace/log whether Cloudflare Destinations forwards it to the deco-otel-ingest endpoint. CF Destinations does NOT support tail sampling (status-aware filtering after the trace completes), so the framework leans on head sampling for cost control plus a separate direct-POST channel for error logs (so 100% of errors are captured regardless of the head sampling rate).
+`head_sampling_rate` on `observability.traces` and `observability.logs` decides at the very start of a trace/log whether Cloudflare Destinations forwards it to the deco-otel-ingest endpoint. CF Destinations does NOT support tail sampling (status-aware filtering after the trace completes), so the framework leans on head sampling for cost control plus a separate direct-POST channel for error logs and metrics (100% of errors and metrics are captured regardless of the head sampling rate).
 
 **Recommended defaults:**
 
 - `traces.head_sampling_rate: 0.01` — 1% of traces forward via CF Destinations.
-- `logs.head_sampling_rate: 1.0` — 100% of logs forward today; will drop to `0.01` once the direct-POST error channel ships (`@decocms/start/sdk/observability`'s `errorLog()` will bypass CF and emit straight to `/v1/logs` at 100%, so info/warn can safely be sampled at the boundary).
+- `logs.head_sampling_rate: 1.0` — 100% of info/warn logs forward via CF Destinations. **Errors are not subject to this rate** — when `DECO_OTEL_LOGS_ENDPOINT` is set, the `instrumentWorker` direct-POST error channel captures 100% of `logger.error(...)` records regardless of CF head sampling. It's safe to drop `logs.head_sampling_rate` to `0.01` for the noisier info/warn tier once you've confirmed the direct-POST channel is healthy in the CF dashboard (look for the boot log `otel: enabled service=… otlpErrorLogs=true`).
 
 **Per-site override tier (heavy traffic only):**
 
@@ -225,7 +264,7 @@ Numbers assume `~20` spans per request, `~4` log lines per request, and `~5` AE 
 - `~$39` — AE writes (`~125M/mo` at the same 1% sample as traces, coupled via the trace-id hash) + AE reads (operator dashboards).
 - `$0` — no Durable Objects (the tail-on-error buffer was rejected; see "Out of scope").
 
-> The `~10B/mo` log volume is the current state (logs at `head_sampling_rate: 1`). Once the direct-POST error channel lands, logs drop to `head_sampling_rate: 0.01` for info/warn and the CF Destinations cost falls by another `~$50/mo`, with errors carried 100% through direct POST at a few dollars on the ingestor side.
+> The `~10B/mo` log volume is the current state with logs at `head_sampling_rate: 1`. With the direct-POST error channel shipped (Phase 4), sites can safely move info/warn logs to `head_sampling_rate: 0.01` and the CF Destinations cost falls by another `~$50/mo`. Errors are then carried 100% through the direct POST channel at a few dollars on the ingestor side.
 
 ## Identity & cardinality notes
 
@@ -259,9 +298,27 @@ A CF Tail Worker pre-merge check can run this audit against the
 storefront repo's `wrangler.jsonc`; pair with the codemod for one-shot
 remediation.
 
+## Data loss profile
+
+Different signals have different durability guarantees. Knowing where data can be silently dropped matters more than knowing where it can't.
+
+| Signal                 | Path                          | Sampling                         | Buffer location          | Loss conditions                                                                                                                                |
+| ---------------------- | ----------------------------- | -------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Traces (spans)**     | CF Destinations               | head 1% (`0.01`)                 | Cloudflare-managed       | 99% intentionally dropped at head. Of the 1% that survives, only loss is a CF Destinations outage or an ingestor 5xx (no retries from CF).      |
+| **Info / warn logs**   | CF Destinations               | head 1.0 (currently 100%)        | Cloudflare-managed       | Same as traces — only platform-side outage. Once dropped to `0.01`, 99% intentionally dropped at head.                                          |
+| **Error logs**         | Direct POST (`/v1/logs`)      | none (100%, then rate-limited)   | In-Worker buffer         | (a) Token-bucket rate limiter trips on a log storm — default `100/min` steady, `20` burst — surplus is **counted-and-dropped** via `onError`. (b) Buffer overflow (default `200` records) before the next flush — same `onError` signal. (c) Worker isolate is forcibly evicted before `ctx.waitUntil` completes — should be rare; the flush is throttled to `≥250ms` between attempts and triggered on every request edge. |
+| **Metrics**            | Direct POST (`/v1/metrics`)   | none (100%)                      | In-Worker buffer         | Counters and gauges are last-write-wins per datapoint — a forced eviction drops at most one flush window's worth of partial sums. Histograms with un-flushed bucket counts are lost on eviction. Buffer overflow (default `5000` datapoints) drops the oldest datapoint via `onError`. |
+| **AE metrics**         | Workers Analytics Engine      | none (sampled per-AE-policy)     | Cloudflare-managed       | AE applies its own sampling once an account crosses the 5B-events/day cap. Below the cap, AE writes are durable on the platform side.           |
+
+What this means operationally:
+
+- **For traces and info/warn logs**, the dominant loss factor is sampling, not transport. If you need 100% of a specific class (errors, security events, an A/B variant under investigation), route them through the direct-POST channels — never lift `head_sampling_rate` to compensate.
+- **For errors and metrics**, the dominant loss factor is the in-Worker buffer and the rate limiter. The `onError` callback wired by `instrumentWorker` surfaces these as a logged event — keep an alert on the count.
+- **AE is a separate pipe** with its own loss profile; treat AE-only metrics as a hot-path-only view, not a long-horizon source of truth.
+
 ## Out of scope
 
-- **In-Worker OTLP exporter.** Removed in 5.0.0. CF Destinations handles transport; the framework only emits.
-- **Tail-on-error sampling.** Lives in `deco-otel-ingest` or a CF Tail Worker if/when needed.
-- **Commerce-specific spans.** Per-app (VTEX, Shopify) HTTP spans live in `@decocms/apps` via `createInstrumentedFetch`.
-- **PII redaction.** Handled at the ingest Worker; no per-site code required.
+- **In-Worker OTLP exporter for spans / info-logs.** Removed in 5.0.0; CF Destinations is the spans + info/warn-logs path. (Direct-POST does still exist for **metrics** and **error logs**, by deliberate choice — both are signals CF Destinations cannot or should not carry.)
+- **Tail-on-error sampling.** Designed away — CF Destinations doesn't support tail sampling, and a DO-backed buffer would add ~$8K/mo at fleet scale (see [Cost model](#cost-model-fleet-of-100-sites-25b-reqmonth)). 100% capture of errors is achieved instead via the direct-POST error channel.
+- **Commerce-specific spans.** Per-app (VTEX, Shopify) HTTP spans live in `@decocms/apps` via `createInstrumentedFetch`. PR #3 in the apps-start repo migrates the per-app fetch sites onto that helper.
+- **PII redaction at the framework layer.** URLs are redacted by `redactUrl()` on outbound `fetch` spans; the rest (cookie, authorization, x-vtex-* headers) is redacted in the ingest Worker. No per-site code required for either side.
