@@ -31,23 +31,6 @@
  * the transport layer was stripped.
  */
 
-// Tracer / meter / request log primitives (re-exported from the middleware)
-export {
-  configureMeter,
-  configureTracer,
-  getActiveSpan,
-  getMeter,
-  getTracer,
-  logRequest,
-  type MeterAdapter,
-  MetricNames,
-  recordCacheMetric,
-  recordRequestMetric,
-  type Span,
-  setSpanAttribute,
-  type TracerAdapter,
-  withTracing,
-} from "../middleware/observability";
 // Composite helpers (for advanced multi-backend wiring — e.g. AE + future
 // ClickHouse-collector meter, or default-console + future-collector logger)
 export { createCompositeLogger, createCompositeMeter } from "./composite";
@@ -66,6 +49,27 @@ export {
   setLoggerAttributeFloor,
   setLogLevel,
 } from "./logger";
+// Tracer / meter / request log primitives (re-exported from the middleware)
+export {
+  type CacheDecision,
+  configureMeter,
+  configureTracer,
+  getActiveSpan,
+  getMeter,
+  getTracer,
+  injectTraceContext,
+  logRequest,
+  type MeterAdapter,
+  MetricNames,
+  recordCacheMetric,
+  recordRequestMetric,
+  type RequestStore,
+  type Span,
+  setObservabilitySpanStore,
+  setSpanAttribute,
+  type TracerAdapter,
+  withTracing,
+} from "../middleware/observability";
 // Worker-entry wrapper + adapter wiring
 export { instrumentWorker, type OtelOptions } from "./otel";
 // AE meter adapter + runtime env helpers (for tests / custom wiring)

@@ -43,6 +43,7 @@ import {
 } from "../cms/resolve";
 import { getSiteSeo } from "../cms/loader";
 import { runSectionLoaders, runSingleSectionLoader } from "../cms/sectionLoaders";
+import { withTracing } from "../middleware/observability";
 import {
   type CacheProfileName,
   cacheHeaders,
@@ -235,7 +236,15 @@ export const loadDeferredSection = createServerFn({ method: "POST" })
       return null;
     }
 
-    const section = await resolveDeferredSection(component, rawProps, pagePath, matcherCtx);
+    const section = await withTracing(
+      "deco.section.deferred.load",
+      () => resolveDeferredSection(component, rawProps, pagePath, matcherCtx),
+      {
+        "section.name": component,
+        "page.path": pagePath,
+        ...(typeof index === "number" ? { "section.index": index } : {}),
+      },
+    );
     if (!section) return null;
 
     // Preserve original index for correct ordering in SPA navigation merge

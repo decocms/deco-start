@@ -9,9 +9,9 @@
  * inside the TanStack Start server function.
  */
 
-import { withTracing } from "../middleware/observability";
 import { getCacheProfile } from "../sdk/cacheHeaders";
 import { djb2 } from "../sdk/djb2";
+import { withTracing } from "../sdk/observability";
 import type { ResolvedSection } from "./resolve";
 
 export type SectionLoaderFn = (
@@ -267,7 +267,11 @@ export async function runSectionLoaders(
       }
     }
   }
-  return Promise.all(sections.map((section) => runSingleSectionLoader(section, request)));
+  return withTracing(
+    "deco.section.loaders.batch",
+    () => Promise.all(sections.map((section) => runSingleSectionLoader(section, request))),
+    { "section.count": sections.length },
+  );
 }
 
 /**

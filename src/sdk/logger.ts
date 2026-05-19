@@ -24,6 +24,8 @@
  * ```
  */
 
+import { getActiveSpan } from "./observability";
+
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 const LEVEL_RANK: Record<LogLevel, number> = {
@@ -85,52 +87,71 @@ export const defaultLoggerAdapter: LoggerAdapter = {
 // Configurable global state
 // ---------------------------------------------------------------------------
 
-let activeAdapter: LoggerAdapter = defaultLoggerAdapter;
-let minLevel: LogLevel = "info";
+// ---------------------------------------------------------------------------
+// Shared module state — pinned to globalThis via Symbol.for so multiple
+// inlined copies of this module (one per bundled entry file in dist/) all
+// converge on the SAME state. See the matching comment in
+// `observability.ts` for the rationale — `configureLogger()` from one
+// entry file's copy of this module would otherwise write to an
+// `activeAdapter` that `logger.error()` in another entry's copy never
+// reads, and direct-POST error-log capture silently no-ops.
+// ---------------------------------------------------------------------------
 
-/**
- * Per-record attribute floor — merged into every log line BEFORE the
- * caller's `attrs` (caller wins). Used to stamp `deco.runtime.version`,
- * `deco.apps.version`, `deployment.environment` on every log so HyperDX
- * panels filtering on these dimensions keep working under
- * Cloudflare-managed log export (which otherwise strips our resource
- * attributes — only the JSON record body survives).
- *
- * Set via `setLoggerAttributeFloor(...)` at boot from
- * `instrumentWorker()`. Default empty so the logger is a no-op for sites
- * that don't wire `instrumentWorker`.
- */
-let attributeFloor: Record<string, unknown> = {};
+interface LoggerState {
+  activeAdapter: LoggerAdapter;
+  minLevel: LogLevel;
+  attributeFloor: Record<string, unknown>;
+}
+
+const STATE_KEY = Symbol.for("@decocms/start/logger/state.v1");
+
+function getState(): LoggerState {
+  const g = globalThis as Record<symbol, unknown>;
+  if (!g[STATE_KEY]) {
+    g[STATE_KEY] = {
+      activeAdapter: defaultLoggerAdapter,
+      minLevel: "info" as LogLevel,
+      attributeFloor: {},
+    } satisfies LoggerState;
+  }
+  return g[STATE_KEY] as LoggerState;
+}
 
 /**
  * Replace the active logger adapter.
  * Call once at worker boot from `instrumentWorker()`.
  */
 export function configureLogger(adapter: LoggerAdapter): void {
-  activeAdapter = adapter;
+  getState().activeAdapter = adapter;
 }
 
 /**
  * Replace the per-record attribute floor — keys here will be added to
  * every log line UNLESS the caller passes the same key in their `attrs`
  * (caller wins). Set once at worker boot from `instrumentWorker()`.
+ *
+ * Used to stamp `deco.runtime.version`, `deco.apps.version`,
+ * `deployment.environment` on every log so HyperDX panels filtering on
+ * these dimensions keep working under Cloudflare-managed log export
+ * (which otherwise strips our resource attributes — only the JSON record
+ * body survives).
  */
 export function setLoggerAttributeFloor(attrs: Record<string, unknown>): void {
-  attributeFloor = { ...attrs };
+  getState().attributeFloor = { ...attrs };
 }
 
 /**
  * Test-only: read the current attribute floor. Do not call from app code.
  */
 export function _getLoggerAttributeFloorForTests(): Record<string, unknown> {
-  return { ...attributeFloor };
+  return { ...getState().attributeFloor };
 }
 
 /**
  * Get the current active logger adapter (for tests / advanced wiring).
  */
 export function getLoggerAdapter(): LoggerAdapter {
-  return activeAdapter;
+  return getState().activeAdapter;
 }
 
 /**
@@ -141,15 +162,15 @@ export function getLoggerAdapter(): LoggerAdapter {
  * or by reading an env var at boot.
  */
 export function setLogLevel(level: LogLevel): void {
-  minLevel = level;
+  getState().minLevel = level;
 }
 
 export function getLogLevel(): LogLevel {
-  return minLevel;
+  return getState().minLevel;
 }
 
 function shouldLog(level: LogLevel): boolean {
-  return LEVEL_RANK[level] >= LEVEL_RANK[minLevel];
+  return LEVEL_RANK[level] >= LEVEL_RANK[getState().minLevel];
 }
 
 // ---------------------------------------------------------------------------
@@ -227,19 +248,32 @@ export function serializeError(err: unknown): SerializedError {
 
 function emit(level: LogLevel, msg: string, attrs?: Record<string, unknown>): void {
   if (!shouldLog(level)) return;
-  // Merge floor → caller attrs so caller can override any floor key.
-  // Skipped entirely when the floor is empty so the no-op path stays cheap.
-  const merged: Record<string, unknown> | undefined =
-    Object.keys(attributeFloor).length === 0
-      ? attrs
-      : attrs
-        ? { ...attributeFloor, ...attrs }
-        : { ...attributeFloor };
+  // Pull trace context from the active span so every log line correlates
+  // to its trace in ClickStack/HyperDX. No active span → no-op; caller
+  // attrs always win so explicit `trace_id` overrides keep working.
+  const ctx = getActiveSpan()?.spanContext?.();
+  const traceAttrs: Record<string, unknown> | undefined = ctx
+    ? { trace_id: ctx.traceId, span_id: ctx.spanId }
+    : undefined;
+  // Merge order: floor → trace context → caller attrs. Caller wins; trace
+  // context only overrides floor (which never sets trace_id anyway).
+  const s = getState();
+  const hasFloor = Object.keys(s.attributeFloor).length > 0;
+  let merged: Record<string, unknown> | undefined;
+  if (!hasFloor && !traceAttrs && !attrs) {
+    merged = undefined;
+  } else {
+    merged = {
+      ...(hasFloor ? s.attributeFloor : {}),
+      ...(traceAttrs ?? {}),
+      ...(attrs ?? {}),
+    };
+  }
   try {
-    activeAdapter.log(level, msg, merged);
+    s.activeAdapter.log(level, msg, merged);
   } catch {
     // Adapter blew up. Fall back to default so we don't lose the line.
-    if (activeAdapter !== defaultLoggerAdapter) {
+    if (s.activeAdapter !== defaultLoggerAdapter) {
       try {
         defaultLoggerAdapter.log(level, msg, merged);
       } catch {
