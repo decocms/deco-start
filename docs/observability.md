@@ -254,14 +254,39 @@ await vtexFetch("https://account.vtexcommercestable.com.br/api/io/_v/intelligent
 
 Resolution precedence is `init.operation` → `defaultOperation` → `resolveOperation(url, method)` → the literal `"fetch"`. The resolved value lands on the span as `fetch.operation` (so dashboards can `GROUP BY SpanAttributes['fetch.operation']` independent of span name) and is included in the `onComplete` callback payload (so per-app duration histograms can label by operation). `operation` is stripped from `init` before reaching the underlying `fetch` — it never surfaces to the network.
 
+## Error capture — three-channel model
+
+100% capture of errors is achieved across three complementary channels, each owning a different slice of "what failed":
+
+| Error source                              | Channel               | Coverage           | Why it's needed                                                                                                                                                                                  |
+| ---                                       | ---                   | ---                | ---                                                                                                                                                                                              |
+| Framework `logger.error(...)`             | Direct POST           | 100% (rate-limited)| Framework owns the call site, can attach structured context (traceId, route, attrs), and can fire before the request finishes. Latency-sensitive.                                                  |
+| Framework span errors (`setError`)        | CF Destinations + tail| 1% sampled + 100% tail | Spans ride the CF Destinations pipe; tail worker picks them up again if the request finished `outcome != "ok"`. Together they give per-span detail at scale + 100% capture on regressions.       |
+| **Uncaught throws** escaping the handler  | **Tail Worker**       | **100%**           | Direct-POST can't fire — by the time the throw bubbles past `instrumentWorker`, the worker isolate is unwinding. The tail worker runs AFTER the worker terminates and receives the captured exception. |
+| **`exceededCpu` / `exceededMemory`**      | **Tail Worker**       | **100%**           | The producer is killed before any in-Worker code can run. Only the CF runtime can surface these outcomes, and it does so through the tail handler.                                                |
+| **Raw `console.error(...)`** outside framework | **Tail Worker** | **100%**           | Third-party SDKs (analytics, payment, observability libs that aren't ours) call `console.error` directly, bypassing the framework logger. CF captures every `console.*` line into the TraceItem. |
+| Info / warn logs                          | CF Destinations       | 1% sampled         | Bulk volume. Sampled to keep CF Destinations cost in check at fleet scale.                                                                                                                       |
+| OTel spans                                | CF Destinations       | 1% sampled         | Same as above — spans are 95% of the event volume.                                                                                                                                                |
+| OTel metrics                              | Direct POST           | 100% (buffered)    | CF Destinations doesn't support OTLP metrics. Direct-POST is the only path.                                                                                                                       |
+
+The tail-worker channel is implemented by [`deco-otel-tail`](https://github.com/decocms/stats-lake/tree/main/ingestion/otel-tail) (in the stats-lake repo). The producer wrangler opts in with:
+
+```jsonc
+"tail_consumers": [
+  { "service": "deco-otel-tail" }
+]
+```
+
+Rows from the tail worker land in `otel_logs` with `Attributes['_source'] = 'tail-worker'`, so dashboards can split out tail-captured errors from direct-POST and CF-Destinations errors as needed.
+
 ## Sampling
 
-`head_sampling_rate` on `observability.traces` and `observability.logs` decides at the very start of a trace/log whether Cloudflare Destinations forwards it to the deco-otel-ingest endpoint. CF Destinations does NOT support tail sampling (status-aware filtering after the trace completes), so the framework leans on head sampling for cost control plus a separate direct-POST channel for error logs and metrics (100% of errors and metrics are captured regardless of the head sampling rate).
+`head_sampling_rate` on `observability.traces` and `observability.logs` decides at the very start of a trace/log whether Cloudflare Destinations forwards it to the deco-otel-ingest endpoint. CF Destinations does NOT support tail sampling — the framework instead uses the three-channel error-capture model documented above to achieve 100% error capture independent of `head_sampling_rate`.
 
 **Recommended defaults:**
 
 - `traces.head_sampling_rate: 0.01` — 1% of traces forward via CF Destinations.
-- `logs.head_sampling_rate: 1.0` — 100% of info/warn logs forward via CF Destinations. **Errors are not subject to this rate** — when `DECO_OTEL_LOGS_ENDPOINT` is set, the `instrumentWorker` direct-POST error channel captures 100% of `logger.error(...)` records regardless of CF head sampling. It's safe to drop `logs.head_sampling_rate` to `0.01` for the noisier info/warn tier once you've confirmed the direct-POST channel is healthy in the CF dashboard (look for the boot log `otel: enabled service=… otlpErrorLogs=true`).
+- `logs.head_sampling_rate: 0.01` — 1% of info/warn logs forward via CF Destinations. **Errors are not subject to this rate** — they are fully covered by (a) the direct-POST channel for framework `logger.error(...)` (100%, rate-limited), and (b) the tail worker for everything else (uncaught throws, exhaustion outcomes, raw `console.error`). The earlier `logs.head_sampling_rate: 1.0` default was retired when the tail worker landed.
 
 **Per-site override tier (heavy traffic only):**
 
@@ -332,8 +357,9 @@ Different signals have different durability guarantees. Knowing where data can b
 | Signal                 | Path                          | Sampling                         | Buffer location          | Loss conditions                                                                                                                                |
 | ---------------------- | ----------------------------- | -------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Traces (spans)**     | CF Destinations               | head 1% (`0.01`)                 | Cloudflare-managed       | 99% intentionally dropped at head. Of the 1% that survives, only loss is a CF Destinations outage or an ingestor 5xx (no retries from CF).      |
-| **Info / warn logs**   | CF Destinations               | head 1.0 (currently 100%)        | Cloudflare-managed       | Same as traces — only platform-side outage. Once dropped to `0.01`, 99% intentionally dropped at head.                                          |
-| **Error logs**         | Direct POST (`/v1/logs`)      | none (100%, then rate-limited)   | In-Worker buffer         | (a) Token-bucket rate limiter trips on a log storm — default `100/min` steady, `20` burst — surplus is **counted-and-dropped** via `onError`. (b) Buffer overflow (default `500` records) before the next flush — same `onError` signal. (c) A failed POST to the ingestor (non-2xx or network error) does **not** drop records — the in-flight snapshot is restored to the front of the buffer. When `snapshot + buffer > cap`, restoration drops the **newest** records first (newest tail of the live buffer, then if still over cap, newest tail of the snapshot) — the oldest, most-likely-causal records are preserved. All drops surface via `onError("overflow", …)` with counts. (d) Worker isolate forcibly evicted before `ctx.waitUntil` completes — should be rare; the flush is triggered on every request edge. |
+| **Info / warn logs**   | CF Destinations               | head 1% (`0.01`)                 | Cloudflare-managed       | 99% intentionally dropped at head. Of the 1% that survives, only loss is a CF Destinations outage.                                              |
+| **Framework error logs** | Direct POST (`/v1/logs`)    | none (100%, then rate-limited)   | In-Worker buffer         | (a) Token-bucket rate limiter trips on a log storm — default `100/min` steady, `20` burst — surplus is **counted-and-dropped** via `onError`. (b) Buffer overflow (default `500` records) before the next flush — same `onError` signal. (c) A failed POST to the ingestor (non-2xx or network error) does **not** drop records — the in-flight snapshot is restored to the front of the buffer. When `snapshot + buffer > cap`, restoration drops the **newest** records first (newest tail of the live buffer, then if still over cap, newest tail of the snapshot) — the oldest, most-likely-causal records are preserved. All drops surface via `onError("overflow", …)` with counts. (d) Worker isolate forcibly evicted before `ctx.waitUntil` completes — covered by the tail worker (next row). |
+| **Uncaught throws, `exceededCpu`, raw `console.error`** | Tail Worker (`deco-otel-tail` → `/v1/logs`) | none (100%) | Out-of-process (separate worker) | (a) Tail worker invocation failure on the CF runtime side (extremely rare; CF retries internally). (b) `deco-otel-ingest` 5xx — the tail worker logs the failure but does NOT retry the OTLP forward, so the affected batch is lost. (c) The producer dies so abruptly that CF can't materialize a TraceItem — undocumented edge case, treat as bounded by CF's own SLA. |
 | **Metrics**            | Direct POST (`/v1/metrics`)   | none (100%)                      | In-Worker buffer         | Counters and gauges are last-write-wins per datapoint — a forced eviction drops at most one flush window's worth of partial sums. Histograms with un-flushed bucket counts are lost on eviction. Buffer overflow (default `5000` datapoints) drops the oldest datapoint via `onError`. |
 | **AE metrics**         | Workers Analytics Engine      | none (sampled per-AE-policy)     | Cloudflare-managed       | AE applies its own sampling once an account crosses the 5B-events/day cap. Below the cap, AE writes are durable on the platform side.           |
 
@@ -346,6 +372,17 @@ What this means operationally:
 ## Out of scope
 
 - **In-Worker OTLP exporter for spans / info-logs.** Removed in 5.0.0; CF Destinations is the spans + info/warn-logs path. (Direct-POST does still exist for **metrics** and **error logs**, by deliberate choice — both are signals CF Destinations cannot or should not carry.)
-- **Tail-on-error sampling.** Designed away — CF Destinations doesn't support tail sampling, and a DO-backed buffer would add ~$8K/mo at fleet scale (see [Cost model](#cost-model-fleet-of-100-sites-25b-reqmonth)). 100% capture of errors is achieved instead via the direct-POST error channel.
+- **Tail-on-error sampling via a Durable Object buffer.** The DO-backed
+  approach was rejected on cost grounds (~$8K/mo at fleet scale, see
+  [Cost model](#cost-model-fleet-of-100-sites-25b-reqmonth)). The functional
+  goal — 100% capture of errors regardless of head sampling — is met via
+  two complementary mechanisms: (a) the in-Worker direct-POST channel for
+  framework `logger.error(...)` calls, and (b) the **Cloudflare Tail Worker
+  (`deco-otel-tail`, Strategy B)** which CF invokes on every invocation of
+  a producer worker that lists it under `tail_consumers`. The tail worker
+  filters TraceItems down to the "interesting" subset (outcome != ok,
+  exceptions, or `level: error` logs) and forwards them as OTLP/JSON logs
+  to `deco-otel-ingest` via an intra-account service binding. See
+  [decocms/stats-lake/ingestion/otel-tail/](https://github.com/decocms/stats-lake/tree/main/ingestion/otel-tail) and D-8.
 - **Commerce-specific spans.** Per-app (VTEX, Shopify) HTTP spans live in `@decocms/apps`, which calls `createInstrumentedFetch` (with `defaultOperation` / `resolveOperation` configured per provider) and authors `init.operation` at hot call sites. PR #3 in the apps-start repo migrates the per-app fetch sites onto that pattern. The framework owns the span shape (`${name}.${operation}`); the apps repo owns the operation strings + provider-labelled duration histogram.
 - **PII redaction at the framework layer.** URLs are redacted by `redactUrl()` on outbound `fetch` spans; the rest (cookie, authorization, x-vtex-* headers) is redacted in the ingest Worker. No per-site code required for either side.
