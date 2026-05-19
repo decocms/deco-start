@@ -68,9 +68,12 @@ jobs:
       - name: Advance moveable major tag
         run: |
           git fetch --tags --force
-          LATEST=$(git tag -l 'v*.*.*' --sort=-v:refname | head -n 1)
+          # Filter out prerelease tags (-rc.N, -next.N, -beta.N, -alpha.N) — the
+          # `v*.*.*` glob matches both `v5.3.0` and `v5.3.0-rc.2`, and we never
+          # want the moveable major to land on a prerelease.
+          LATEST=$(git tag -l 'v*.*.*' --sort=-v:refname | grep -vE '\-(rc|next|beta|alpha)\.' | head -n 1)
           if [ -z "$LATEST" ]; then
-            echo "::notice::no v*.*.* tags yet; nothing to advance"
+            echo "::notice::no stable v*.*.* tags yet; nothing to advance"
             exit 0
           fi
           MAJOR=$(echo "$LATEST" | sed -E 's/^(v[0-9]+).*/\1/')
