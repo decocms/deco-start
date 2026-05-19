@@ -32,7 +32,8 @@
  * ```
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import path from "node:path";
 
 /**
  * Resolve a per-build identifier for cache-key versioning.
@@ -208,6 +209,114 @@ export function decoVitePlugin() {
           }
         }
       });
+
+      // Watch `.deco/blocks/**/*.json` and regenerate `blocks.gen.json` when
+      // CMS content changes (manual edit, sync-decofile, daemon PATCH). The
+      // existing change listener above then invalidates the SSR module so
+      // the next request renders fresh data — no manual `generate:blocks`
+      // and no dev-server restart required.
+      //
+      // Generator is loaded lazily via tsImport (same pattern as the daemon
+      // below) so we don't depend on the consumer's TS loader.
+      const cwd = process.cwd();
+      const blocksDir = path.resolve(cwd, ".deco/blocks");
+      const outFile = path.resolve(cwd, "src/server/cms/blocks.gen.ts");
+      const jsonFile = outFile.replace(/\.ts$/, ".json");
+
+      let generateBlocksFn;
+      const loadGenerator = () => {
+        if (generateBlocksFn) return Promise.resolve(generateBlocksFn);
+        // Same tsImport pattern as the daemon loader below — keeps `tsx`
+        // scoped to this single import instead of registering a global hook.
+        return import("tsx/esm/api")
+          .then(({ tsImport }) =>
+            tsImport("../../scripts/generate-blocks.ts", import.meta.url),
+          )
+          .then((mod) => {
+            generateBlocksFn = mod.generateBlocks;
+            return generateBlocksFn;
+          });
+      };
+
+      let regenTimer = null;
+      let regenInFlight = false;
+      let regenQueued = false;
+      const runRegen = async () => {
+        if (regenInFlight) {
+          regenQueued = true;
+          return;
+        }
+        regenInFlight = true;
+        try {
+          const fn = await loadGenerator();
+          const start = Date.now();
+          const result = await fn({ blocksDir, outFile, silent: true });
+          const ms = Date.now() - start;
+          if (result.empty) {
+            console.warn(`[deco] .deco/blocks not found — emitted empty blocks.gen.json`);
+          } else {
+            console.log(`[deco] regenerated ${result.count} blocks in ${ms}ms`);
+          }
+        } catch (err) {
+          console.warn("[deco] failed to regenerate blocks:", err?.message ?? err);
+        } finally {
+          regenInFlight = false;
+          if (regenQueued) {
+            regenQueued = false;
+            scheduleRegen();
+          }
+        }
+      };
+      const scheduleRegen = () => {
+        if (regenTimer) clearTimeout(regenTimer);
+        regenTimer = setTimeout(() => {
+          regenTimer = null;
+          runRegen();
+        }, 150);
+      };
+
+      // chokidar (Vite's watcher) needs the directory added explicitly because
+      // `.deco/` lives outside the module graph it walks by default.
+      if (existsSync(blocksDir)) {
+        server.watcher.add(blocksDir);
+      }
+      const handleBlocksDirEvent = (file) => {
+        if (!file.endsWith(".json")) return;
+        if (!file.startsWith(blocksDir + path.sep) && file !== blocksDir) return;
+        scheduleRegen();
+      };
+      server.watcher.on("add", handleBlocksDirEvent);
+      server.watcher.on("change", handleBlocksDirEvent);
+      server.watcher.on("unlink", handleBlocksDirEvent);
+
+      // Cold-start bootstrap: regenerate once if the artifact is missing or
+      // older than the newest source file. Skips work on a clean build where
+      // `npm run build` already produced a current artifact.
+      try {
+        const needsBootstrap = (() => {
+          if (!existsSync(jsonFile)) return existsSync(blocksDir);
+          if (!existsSync(blocksDir)) return false;
+          const artifactMtime = statSync(jsonFile).mtimeMs;
+          for (const entry of readdirSync(blocksDir)) {
+            if (!entry.endsWith(".json")) continue;
+            try {
+              if (statSync(path.join(blocksDir, entry)).mtimeMs > artifactMtime) {
+                return true;
+              }
+            } catch {
+              // skip unreadable entries
+            }
+          }
+          return false;
+        })();
+        if (needsBootstrap) {
+          // Fire and forget — the next request that touches blocks.gen.ts
+          // will see the fresh artifact thanks to the change listener above.
+          runRegen();
+        }
+      } catch (err) {
+        console.warn("[deco] blocks bootstrap check failed:", err?.message ?? err);
+      }
 
       // Tunnel + daemon: connect local dev to admin.deco.cx
       // Activated only when both DECO_SITE_NAME and DECO_ENV_NAME are set.
