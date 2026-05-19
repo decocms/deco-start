@@ -35,45 +35,15 @@ function resolveAppsDir(): string {
   const explicit = arg("apps-dir", "");
   if (explicit) return path.resolve(cwd, explicit);
 
-  // Walk up from CWD collecting every node_modules/@decocms/apps along the way
-  // (handles npm/bun hoisting in monorepos), plus a couple of dev fallbacks.
-  const candidates: string[] = [];
-  let dir = cwd;
-  while (true) {
-    candidates.push(path.join(dir, "node_modules/@decocms/apps"));
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  candidates.push(path.resolve(cwd, "../apps-start"));
-  candidates.push(path.resolve(cwd, "../decocms-apps"));
-
-  // First pass: a candidate that has vtex/invoke.ts is fully usable.
+  // Try common locations
+  const candidates = [
+    path.resolve(cwd, "node_modules/@decocms/apps"),
+    path.resolve(cwd, "../apps-start"),
+  ];
   for (const c of candidates) {
     if (fs.existsSync(path.join(c, "vtex/invoke.ts"))) return c;
   }
-
-  // Second pass: a candidate exists as @decocms/apps but the source file we
-  // need to parse is missing. The published @decocms/apps tarball does not
-  // include vtex/invoke.ts — it is a dev-time source-of-truth file. Surface a
-  // distinct, actionable error so consumers don't chase a non-existent
-  // "package not installed" bug.
-  for (const c of candidates) {
-    if (fs.existsSync(path.join(c, "package.json"))) {
-      throw new Error(
-        `Found @decocms/apps at ${c} but it is missing vtex/invoke.ts.\n` +
-          `generate-invoke parses the TS source-of-truth, which is not shipped\n` +
-          `in the published npm tarball. Point --apps-dir at a local checkout of\n` +
-          `the decocms/apps-start repo (e.g. --apps-dir ../apps-start), or skip\n` +
-          `regeneration and use the existing src/server/invoke.gen.ts.`,
-      );
-    }
-  }
-
-  throw new Error(
-    "Could not find @decocms/apps in node_modules (walked up from " +
-      `${cwd}). Install it, or pass --apps-dir <path-to-apps-start-checkout>.`,
-  );
+  throw new Error("Could not find @decocms/apps. Use --apps-dir to specify its location.");
 }
 
 const appsDir = resolveAppsDir();

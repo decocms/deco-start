@@ -4,7 +4,7 @@
  *   1. blocks.gen.json  — compact JSON data (the source of truth)
  *   2. blocks.gen.ts    — thin TypeScript re-export for editor tooling
  *
- * At runtime the Vite plugin (src/tanstack/vite/plugin.js) intercepts `blocks.gen.ts`
+ * At runtime the Vite plugin (src/vite/plugin.js) intercepts `blocks.gen.ts`
  * imports and replaces them with `JSON.parse(...)` of the .json file. This
  * avoids Vite's SSR module runner hanging on large (13MB+) JS object literals
  * and lets V8 use its fast JSON parser instead of the full JS parser.

@@ -702,7 +702,7 @@ function generateMeta(): MetaResponse {
   }
 
   // Pages, loaders, matchers, etc. are injected at runtime by composeMeta()
-  // in src/core/admin/schema.ts -- the generator only handles site sections.
+  // in src/admin/schema.ts -- the generator only handles site sections.
   const emptyAnyOf = { anyOf: [] as any[] };
   return {
     major: 1,

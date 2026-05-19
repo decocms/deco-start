@@ -8,47 +8,6 @@ merges to `main`; this file is the human-curated breaking-change ledger.
 For per-release auto-generated notes (every commit, every fix), see
 [GitHub Releases](https://github.com/decocms/deco-start/releases).
 
-## 5.1.1 — Restore generate-sections/generate-loaders, drop broken ESM scripts
-
-Patch release fixing build-time-script regressions from `5.1.0`.
-
-### Fixed
-
-- **`generate-sections` and `generate-loaders` are back.** Both scripts still
-  existed in source but were accidentally dropped from the `tsup` build
-  entries in `5.1.0` (PR #164 oversight). Combined with `files: ["dist"]`,
-  this hid them from consumers. Re-added as `dist/scripts/generate-sections.cjs`
-  and `dist/scripts/generate-loaders.cjs`, with `./scripts/generate-sections`
-  and `./scripts/generate-loaders` entries restored in `package.json` exports.
-- **`dist/scripts/*.js` (ESM) no longer ships.** The ESM bundles were broken
-  by design: `tsup` was configured with `platform: "neutral"`, which in ESM
-  mode wraps externalized `require()` calls in a `__require` shim that
-  throws `Dynamic require of "fs" is not supported` as soon as `ts-morph`
-  loads. CLI scripts are now CJS-only (`format: ["cjs"]`, `platform: "node"`)
-  — invoke via `node node_modules/@decocms/start/dist/scripts/<name>.cjs`.
-- **`generate-invoke` resolution + error message.** `resolveAppsDir()` now
-  walks up `node_modules` from CWD (handles npm/bun hoisting in monorepos)
-  and distinguishes "`@decocms/apps` not installed" from "installed but
-  `vtex/invoke.ts` missing" — the latter is the common case because the
-  published `@decocms/apps` tarball does not ship the dev-time source file
-  the script parses. The error now tells consumers to point `--apps-dir` at
-  a local checkout of `decocms/apps-start`, or to skip regeneration and
-  keep using the committed `src/server/invoke.gen.ts`.
-
-### Notes
-
-- `5.1.0` was published as a minor but contained these regressions, which
-  acted as a hard breaking change for any site that ran the build-time
-  generators as part of its build pipeline. `5.1.1` is the recommended
-  upgrade path; consumers should update their `package.json` script paths
-  to invoke the compiled `.cjs` files (e.g.
-  `node node_modules/@decocms/start/dist/scripts/generate-schema.cjs`).
-- The published `@decocms/apps` tarball does not ship `vtex/invoke.ts`,
-  so `generate-invoke` only works against a local checkout of
-  `decocms/apps-start`. Existing sites that already have a committed
-  `invoke.gen.ts` can skip regeneration entirely — runtime imports the
-  pre-generated file, not the script.
-
 ## 5.0.0 — Drop in-Worker OTLP, converge on Cloudflare-native observability
 
 ### Breaking — Observability transport rewritten

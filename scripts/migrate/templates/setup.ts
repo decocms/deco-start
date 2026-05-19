@@ -98,7 +98,7 @@ import { createSiteSetup } from "@decocms/start/setup";
 import { setInvokeLoaders } from "@decocms/start/admin";${isVtex ? `
 import { createInstrumentedFetch } from "@decocms/start/sdk/instrumentedFetch";
 import { initVtexFromBlocks, setVtexFetch } from "@decocms/apps/vtex";` : ""}${hasLocationMatcher ? `
-import { registerLocationMatcher } from "./core/matchers/location";` : ""}
+import { registerLocationMatcher } from "./matchers/location";` : ""}
 import { blocks as generatedBlocks } from "./server/cms/blocks.gen";
 import { sectionMeta, syncComponents, loadingFallbacks } from "./server/cms/sections.gen";
 import { PreviewProviders } from "@decocms/start/hooks";

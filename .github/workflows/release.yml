@@ -15,14 +15,14 @@ name: Release
 # semantic-release skip token") instead of pasting the literal.
 #
 # Recover with a no-op commit whose entire message — title and body
-# — does NOT contain the literal token. Past occurrences: #171, #175.
+# — does NOT contain the literal token.
 #
 # References:
 #  - https://docs.github.com/en/actions/managing-workflow-runs/skipping-workflow-runs
 
 on:
   push:
-    branches: [main, next]
+    branches: [main]
 
 permissions:
   contents: write
@@ -68,11 +68,9 @@ jobs:
       - name: Advance moveable major tag
         run: |
           git fetch --tags --force
-          # Prereleases carry a hyphen (e.g. v5.2.0-next.3) — exclude them so
-          # the moveable @vN tag only ever points at a stable release.
-          LATEST=$(git tag -l 'v*.*.*' --sort=-v:refname | grep -v -- '-' | head -n 1)
+          LATEST=$(git tag -l 'v*.*.*' --sort=-v:refname | head -n 1)
           if [ -z "$LATEST" ]; then
-            echo "::notice::no stable v*.*.* tags yet; nothing to advance"
+            echo "::notice::no v*.*.* tags yet; nothing to advance"
             exit 0
           fi
           MAJOR=$(echo "$LATEST" | sed -E 's/^(v[0-9]+).*/\1/')

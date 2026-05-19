@@ -34,54 +34,18 @@ No dev server — this is a library. Consumers run their own `vite dev`.
 
 ```
 src/
-├── core/             # framework-agnostic. NO @tanstack/* / next/* / node:async_hooks.
-│   ├── cms/          # Block loading, page resolution, registry, loadCmsPagePure
-│   ├── sdk/          # Plain utilities (clx, signal, http, cookie, …)
-│   ├── admin/        # Admin protocol handlers (Web API only)
-│   ├── matchers/     # PostHog, built-in feature flag matchers
-│   ├── types/        # FnContext, Section, MatcherContext, widgets
-│   └── runtime/      # RequestStore interface (noop default)
-├── tanstack/         # TanStack Start adapter (today's behavior)
-│   ├── routes/       # createServerFn-wrapped loaders
-│   ├── hooks/        # DecoPageRenderer, LiveControls, LazySection, …
-│   ├── middleware/   # observability (ALS), decoState, hydrationContext
-│   ├── sdk/          # workerEntry, router, requestContext (TanStack-coupled)
-│   ├── apps/         # commerce app autoconfig
-│   ├── daemon/       # dev tooling (tunnel, watch)
-│   ├── vite/         # Vite plugin
-│   ├── runtime/      # AlsRequestStore implementation
-│   └── setup.ts      # installTanStackRuntime + legacy setup exports
-├── next/             # Next.js App Router adapter
-│   ├── loadCmsPage.ts
-│   ├── ctx.ts
-│   ├── adminRoute.ts
-│   ├── DecoPage.tsx
-│   └── client.ts
-└── index.ts          # top-level barrel; re-exports core only
+├── admin/           # Admin protocol: meta, decofile, invoke, render, schema, CORS, setup
+├── cms/             # Block loading, page resolution, section registry
+├── hooks/           # DecoPageRenderer, LiveControls, LazySection, SectionErrorFallback
+├── middleware/       # Observability, deco state, liveness probe
+├── sdk/             # Worker entry, caching, useScript, signal, clx, analytics, redirects, sitemap
+├── matchers/        # PostHog, built-in feature flag matchers
+├── types/           # FnContext, App, Section, SectionProps, widgets
+└── index.ts         # Barrel export
+scripts/
+├── generate-blocks.ts   # Scans site src/ for sections/loaders -> blocks.gen.ts
+└── generate-schema.ts   # Extracts TypeScript props -> JSON Schema (meta.gen.json)
 ```
-
-## Import Tiers (constitutional)
-
-The package has three tiers, each enforced by a per-directory `biome.json` `noRestrictedImports` config and the post-build `scripts/check-tier-boundaries.ts`:
-
-1. **`/core`**: No imports from `@tanstack/*`, `next`, `next/*`, top-level `node:async_hooks`. Pure functions; explicit-pass context.
-2. **`/tanstack`**: Today's behavior. May use `@tanstack/*`, `node:async_hooks`. May import from `core/`. May NOT import from `next/`.
-3. **`/next`**: Next.js (App Router) adapter. May use `next`. May import from `core/`. May NOT import from `tanstack/` or `@tanstack/*`.
-
-When adding new files, place them in the lowest-coupling tier that satisfies their dependencies. If you reach for `@tanstack/react-start/server` inside `core/`, stop — accept the value as a function argument or use the `RequestStore` interface in `core/runtime/`.
-
-## Build pipeline
-
-Source `.ts` is compiled via `tsup` (JS) + `tsc` (declarations) to `dist/`. `package.json` exports point at `./dist/<path>.{js,cjs,d.ts}`. Source `.ts` files do NOT ship to npm. Run `bun run build` locally to produce `dist/`.
-
-## Release pipeline
-
-Two channels via semantic-release. The decision tree for which one to target lives in [`.agents/skills/decocms-start-release-workflow/SKILL.md`](./.agents/skills/decocms-start-release-workflow/SKILL.md) — read it before opening a PR.
-
-- **`main` → `@decocms/start@latest`** (e.g. `5.2.0`). Default for all consumers via `^` ranges. Routine fixes go here.
-- **`next` → `@decocms/start@next`** (e.g. `5.2.0-next.3`). Opt-in via `bun add @decocms/start@next`. Use for risky / behavior-changing / breaking work that benefits from a customer validating first. Promote to stable by opening a PR `next` → `main`.
-
-Hard rules: never push directly to `main` or `next`; never run `npm publish` locally; never include the canonical GitHub-Actions CI-skip token (the one documented at `.github/workflows/release.yml:3-21`) in a PR title or body targeting either branch — it silently suppresses the release workflow.
 
 ### Package Exports (from package.json)
 

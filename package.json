@@ -1,380 +1,84 @@
 {
   "name": "@decocms/start",
-  "version": "5.1.1",
+  "version": "5.0.0",
   "type": "module",
   "description": "Deco framework for TanStack Start - CMS bridge, admin protocol, hooks, schema generation",
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "sideEffects": false,
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE"
-  ],
+  "main": "./src/index.ts",
   "bin": {
-    "deco-migrate": "./dist/scripts/migrate.cjs",
-    "deco-post-cleanup": "./dist/scripts/migrate-post-cleanup.cjs",
-    "deco-htmx-analyze": "./dist/scripts/htmx-analyze.cjs",
-    "deco-cf-observability": "./dist/scripts/migrate-to-cf-observability.cjs"
+    "deco-migrate": "./scripts/migrate.ts",
+    "deco-post-cleanup": "./scripts/migrate-post-cleanup.ts",
+    "deco-htmx-analyze": "./scripts/htmx-analyze.ts",
+    "deco-cf-observability": "./scripts/migrate-to-cf-observability.ts"
   },
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
-    },
-    "./core": {
-      "types": "./dist/core/index.d.ts",
-      "import": "./dist/core/index.js",
-      "require": "./dist/core/index.cjs"
-    },
-    "./tanstack": {
-      "types": "./dist/tanstack/index.d.ts",
-      "import": "./dist/tanstack/index.js",
-      "require": "./dist/tanstack/index.cjs"
-    },
-    "./next": {
-      "types": "./dist/next/index.d.ts",
-      "import": "./dist/next/index.js",
-      "require": "./dist/next/index.cjs"
-    },
-    "./next/client": {
-      "types": "./dist/next/client.d.ts",
-      "import": "./dist/next/client.js",
-      "require": "./dist/next/client.cjs"
-    },
-    "./node": {
-      "types": "./dist/node/index.d.ts",
-      "import": "./dist/node/index.js",
-      "require": "./dist/node/index.cjs"
-    },
-    "./cms": {
-      "types": "./dist/core/cms/index.d.ts",
-      "import": "./dist/core/cms/index.js",
-      "require": "./dist/core/cms/index.cjs"
-    },
-    "./admin": {
-      "types": "./dist/core/admin/index.d.ts",
-      "import": "./dist/core/admin/index.js",
-      "require": "./dist/core/admin/index.cjs"
-    },
-    "./hooks": {
-      "types": "./dist/tanstack/hooks/index.d.ts",
-      "import": "./dist/tanstack/hooks/index.js",
-      "require": "./dist/tanstack/hooks/index.cjs"
-    },
-    "./types": {
-      "types": "./dist/core/types/index.d.ts",
-      "import": "./dist/core/types/index.js",
-      "require": "./dist/core/types/index.cjs"
-    },
-    "./types/widgets": {
-      "types": "./dist/core/types/widgets.d.ts",
-      "import": "./dist/core/types/widgets.js",
-      "require": "./dist/core/types/widgets.cjs"
-    },
-    "./sdk": {
-      "types": "./dist/core/sdk/index.d.ts",
-      "import": "./dist/core/sdk/index.js",
-      "require": "./dist/core/sdk/index.cjs"
-    },
-    "./sdk/useScript": {
-      "types": "./dist/core/sdk/useScript.d.ts",
-      "import": "./dist/core/sdk/useScript.js",
-      "require": "./dist/core/sdk/useScript.cjs"
-    },
-    "./sdk/signal": {
-      "types": "./dist/core/sdk/signal.d.ts",
-      "import": "./dist/core/sdk/signal.js",
-      "require": "./dist/core/sdk/signal.cjs"
-    },
-    "./sdk/clx": {
-      "types": "./dist/core/sdk/clx.d.ts",
-      "import": "./dist/core/sdk/clx.js",
-      "require": "./dist/core/sdk/clx.cjs"
-    },
-    "./sdk/cn": {
-      "types": "./dist/core/sdk/cn.d.ts",
-      "import": "./dist/core/sdk/cn.js",
-      "require": "./dist/core/sdk/cn.cjs"
-    },
-    "./sdk/encoding": {
-      "types": "./dist/core/sdk/encoding.d.ts",
-      "import": "./dist/core/sdk/encoding.js",
-      "require": "./dist/core/sdk/encoding.cjs"
-    },
-    "./sdk/http": {
-      "types": "./dist/core/sdk/http.d.ts",
-      "import": "./dist/core/sdk/http.js",
-      "require": "./dist/core/sdk/http.cjs"
-    },
-    "./sdk/useSuggestions": {
-      "types": "./dist/core/sdk/useSuggestions.d.ts",
-      "import": "./dist/core/sdk/useSuggestions.js",
-      "require": "./dist/core/sdk/useSuggestions.cjs"
-    },
-    "./sdk/retry": {
-      "types": "./dist/core/sdk/retry.d.ts",
-      "import": "./dist/core/sdk/retry.js",
-      "require": "./dist/core/sdk/retry.cjs"
-    },
-    "./sdk/useId": {
-      "types": "./dist/core/sdk/useId.d.ts",
-      "import": "./dist/core/sdk/useId.js",
-      "require": "./dist/core/sdk/useId.cjs"
-    },
-    "./sdk/cookie": {
-      "types": "./dist/core/sdk/cookie.d.ts",
-      "import": "./dist/core/sdk/cookie.js",
-      "require": "./dist/core/sdk/cookie.cjs"
-    },
-    "./sdk/cookiePassthrough": {
-      "types": "./dist/tanstack/sdk/cookiePassthrough.d.ts",
-      "import": "./dist/tanstack/sdk/cookiePassthrough.js",
-      "require": "./dist/tanstack/sdk/cookiePassthrough.cjs"
-    },
-    "./sdk/analytics": {
-      "types": "./dist/core/sdk/analytics.d.ts",
-      "import": "./dist/core/sdk/analytics.js",
-      "require": "./dist/core/sdk/analytics.cjs"
-    },
-    "./sdk/cachedLoader": {
-      "types": "./dist/tanstack/sdk/cachedLoader.d.ts",
-      "import": "./dist/tanstack/sdk/cachedLoader.js",
-      "require": "./dist/tanstack/sdk/cachedLoader.cjs"
-    },
-    "./sdk/serverTimings": {
-      "types": "./dist/core/sdk/serverTimings.d.ts",
-      "import": "./dist/core/sdk/serverTimings.js",
-      "require": "./dist/core/sdk/serverTimings.cjs"
-    },
-    "./sdk/cacheHeaders": {
-      "types": "./dist/core/sdk/cacheHeaders.d.ts",
-      "import": "./dist/core/sdk/cacheHeaders.js",
-      "require": "./dist/core/sdk/cacheHeaders.cjs"
-    },
-    "./sdk/crypto": {
-      "types": "./dist/core/sdk/crypto.d.ts",
-      "import": "./dist/core/sdk/crypto.js",
-      "require": "./dist/core/sdk/crypto.cjs"
-    },
-    "./sdk/invoke": {
-      "types": "./dist/core/sdk/invoke.d.ts",
-      "import": "./dist/core/sdk/invoke.js",
-      "require": "./dist/core/sdk/invoke.cjs"
-    },
-    "./sdk/instrumentedFetch": {
-      "types": "./dist/core/sdk/instrumentedFetch.d.ts",
-      "import": "./dist/core/sdk/instrumentedFetch.js",
-      "require": "./dist/core/sdk/instrumentedFetch.cjs"
-    },
-    "./sdk/otel": {
-      "types": "./dist/core/sdk/otel.d.ts",
-      "import": "./dist/core/sdk/otel.js",
-      "require": "./dist/core/sdk/otel.cjs"
-    },
-    "./sdk/logger": {
-      "types": "./dist/core/sdk/logger.d.ts",
-      "import": "./dist/core/sdk/logger.js",
-      "require": "./dist/core/sdk/logger.cjs"
-    },
-    "./sdk/composite": {
-      "types": "./dist/core/sdk/composite.d.ts",
-      "import": "./dist/core/sdk/composite.js",
-      "require": "./dist/core/sdk/composite.cjs"
-    },
-    "./sdk/otelAdapters": {
-      "types": "./dist/core/sdk/otelAdapters.d.ts",
-      "import": "./dist/core/sdk/otelAdapters.js",
-      "require": "./dist/core/sdk/otelAdapters.cjs"
-    },
-    "./sdk/otelAdapters/clickhouseCollector": {
-      "types": "./dist/core/sdk/otelAdapters/clickhouseCollector.d.ts",
-      "import": "./dist/core/sdk/otelAdapters/clickhouseCollector.js",
-      "require": "./dist/core/sdk/otelAdapters/clickhouseCollector.cjs"
-    },
-    "./sdk/observability": {
-      "types": "./dist/tanstack/sdk/observability.d.ts",
-      "import": "./dist/tanstack/sdk/observability.js",
-      "require": "./dist/tanstack/sdk/observability.cjs"
-    },
-    "./sdk/workerEntry": {
-      "types": "./dist/tanstack/sdk/workerEntry.d.ts",
-      "import": "./dist/tanstack/sdk/workerEntry.js",
-      "require": "./dist/tanstack/sdk/workerEntry.cjs"
-    },
-    "./sdk/abTesting": {
-      "types": "./dist/core/sdk/abTesting.d.ts",
-      "import": "./dist/core/sdk/abTesting.js",
-      "require": "./dist/core/sdk/abTesting.cjs"
-    },
-    "./sdk/redirects": {
-      "types": "./dist/core/sdk/redirects.d.ts",
-      "import": "./dist/core/sdk/redirects.js",
-      "require": "./dist/core/sdk/redirects.cjs"
-    },
-    "./sdk/sitemap": {
-      "types": "./dist/core/sdk/sitemap.d.ts",
-      "import": "./dist/core/sdk/sitemap.js",
-      "require": "./dist/core/sdk/sitemap.cjs"
-    },
-    "./sdk/useDevice": {
-      "types": "./dist/core/sdk/useDevice.d.ts",
-      "import": "./dist/core/sdk/useDevice.js",
-      "require": "./dist/core/sdk/useDevice.cjs"
-    },
-    "./sdk/useHydrated": {
-      "types": "./dist/tanstack/sdk/useHydrated.d.ts",
-      "import": "./dist/tanstack/sdk/useHydrated.js",
-      "require": "./dist/tanstack/sdk/useHydrated.cjs"
-    },
-    "./sdk/wrapCaughtErrors": {
-      "types": "./dist/core/sdk/wrapCaughtErrors.d.ts",
-      "import": "./dist/core/sdk/wrapCaughtErrors.js",
-      "require": "./dist/core/sdk/wrapCaughtErrors.cjs"
-    },
-    "./sdk/csp": {
-      "types": "./dist/core/sdk/csp.d.ts",
-      "import": "./dist/core/sdk/csp.js",
-      "require": "./dist/core/sdk/csp.cjs"
-    },
-    "./sdk/urlUtils": {
-      "types": "./dist/core/sdk/urlUtils.d.ts",
-      "import": "./dist/core/sdk/urlUtils.js",
-      "require": "./dist/core/sdk/urlUtils.cjs"
-    },
-    "./sdk/normalizeUrls": {
-      "types": "./dist/core/sdk/normalizeUrls.d.ts",
-      "import": "./dist/core/sdk/normalizeUrls.js",
-      "require": "./dist/core/sdk/normalizeUrls.cjs"
-    },
-    "./sdk/mergeCacheControl": {
-      "types": "./dist/core/sdk/mergeCacheControl.d.ts",
-      "import": "./dist/core/sdk/mergeCacheControl.js",
-      "require": "./dist/core/sdk/mergeCacheControl.cjs"
-    },
-    "./sdk/requestContext": {
-      "types": "./dist/core/sdk/requestContext.d.ts",
-      "import": "./dist/core/sdk/requestContext.js",
-      "require": "./dist/core/sdk/requestContext.cjs"
-    },
-    "./sdk/createInvoke": {
-      "types": "./dist/tanstack/sdk/createInvoke.d.ts",
-      "import": "./dist/tanstack/sdk/createInvoke.js",
-      "require": "./dist/tanstack/sdk/createInvoke.cjs"
-    },
-    "./sdk/router": {
-      "types": "./dist/tanstack/sdk/router.d.ts",
-      "import": "./dist/tanstack/sdk/router.js",
-      "require": "./dist/tanstack/sdk/router.cjs"
-    },
-    "./sdk/setupApps": {
-      "types": "./dist/tanstack/sdk/setupApps.d.ts",
-      "import": "./dist/tanstack/sdk/setupApps.js",
-      "require": "./dist/tanstack/sdk/setupApps.cjs"
-    },
-    "./middleware": {
-      "types": "./dist/tanstack/middleware/index.d.ts",
-      "import": "./dist/tanstack/middleware/index.js",
-      "require": "./dist/tanstack/middleware/index.cjs"
-    },
-    "./middleware/healthMetrics": {
-      "types": "./dist/tanstack/middleware/healthMetrics.d.ts",
-      "import": "./dist/tanstack/middleware/healthMetrics.js",
-      "require": "./dist/tanstack/middleware/healthMetrics.cjs"
-    },
-    "./middleware/hydrationContext": {
-      "types": "./dist/tanstack/middleware/hydrationContext.d.ts",
-      "import": "./dist/tanstack/middleware/hydrationContext.js",
-      "require": "./dist/tanstack/middleware/hydrationContext.cjs"
-    },
-    "./middleware/validateSection": {
-      "types": "./dist/tanstack/middleware/validateSection.d.ts",
-      "import": "./dist/tanstack/middleware/validateSection.js",
-      "require": "./dist/tanstack/middleware/validateSection.cjs"
-    },
-    "./matchers/posthog": {
-      "types": "./dist/core/matchers/posthog.d.ts",
-      "import": "./dist/core/matchers/posthog.js",
-      "require": "./dist/core/matchers/posthog.cjs"
-    },
-    "./matchers/builtins": {
-      "types": "./dist/core/matchers/builtins.d.ts",
-      "import": "./dist/core/matchers/builtins.js",
-      "require": "./dist/core/matchers/builtins.cjs"
-    },
-    "./apps": {
-      "types": "./dist/tanstack/apps/index.d.ts",
-      "import": "./dist/tanstack/apps/index.js",
-      "require": "./dist/tanstack/apps/index.cjs"
-    },
-    "./apps/autoconfig": {
-      "types": "./dist/tanstack/apps/autoconfig.d.ts",
-      "import": "./dist/tanstack/apps/autoconfig.js",
-      "require": "./dist/tanstack/apps/autoconfig.cjs"
-    },
-    "./setup": {
-      "types": "./dist/tanstack/setup.d.ts",
-      "import": "./dist/tanstack/setup.js",
-      "require": "./dist/tanstack/setup.cjs"
-    },
-    "./routes": {
-      "types": "./dist/tanstack/routes/index.d.ts",
-      "import": "./dist/tanstack/routes/index.js",
-      "require": "./dist/tanstack/routes/index.cjs"
-    },
-    "./scripts/generate-blocks": {
-      "types": "./dist/scripts/generate-blocks.d.ts",
-      "default": "./dist/scripts/generate-blocks.cjs"
-    },
-    "./scripts/generate-schema": {
-      "types": "./dist/scripts/generate-schema.d.ts",
-      "default": "./dist/scripts/generate-schema.cjs"
-    },
-    "./scripts/generate-invoke": {
-      "types": "./dist/scripts/generate-invoke.d.ts",
-      "default": "./dist/scripts/generate-invoke.cjs"
-    },
-    "./scripts/generate-sections": {
-      "types": "./dist/scripts/generate-sections.d.ts",
-      "default": "./dist/scripts/generate-sections.cjs"
-    },
-    "./scripts/generate-loaders": {
-      "types": "./dist/scripts/generate-loaders.d.ts",
-      "default": "./dist/scripts/generate-loaders.cjs"
-    },
-    "./scripts/migrate": {
-      "types": "./dist/scripts/migrate.d.ts",
-      "default": "./dist/scripts/migrate.cjs"
-    },
-    "./scripts/migrate-post-cleanup": {
-      "types": "./dist/scripts/migrate-post-cleanup.d.ts",
-      "default": "./dist/scripts/migrate-post-cleanup.cjs"
-    },
-    "./scripts/migrate-to-cf-observability": {
-      "types": "./dist/scripts/migrate-to-cf-observability.d.ts",
-      "default": "./dist/scripts/migrate-to-cf-observability.cjs"
-    },
-    "./scripts/tailwind-lint": {
-      "types": "./dist/scripts/tailwind-lint.d.ts",
-      "default": "./dist/scripts/tailwind-lint.cjs"
-    },
-    "./vite": {
-      "import": "./dist/tanstack/vite/plugin.js",
-      "require": "./dist/tanstack/vite/plugin.cjs"
-    },
-    "./daemon": {
-      "types": "./dist/tanstack/daemon/index.d.ts",
-      "import": "./dist/tanstack/daemon/index.js",
-      "require": "./dist/tanstack/daemon/index.cjs"
-    }
+    ".": "./src/index.ts",
+    "./cms": "./src/cms/index.ts",
+    "./admin": "./src/admin/index.ts",
+    "./hooks": "./src/hooks/index.ts",
+    "./types": "./src/types/index.ts",
+    "./sdk": "./src/sdk/index.ts",
+    "./sdk/useScript": "./src/sdk/useScript.ts",
+    "./sdk/signal": "./src/sdk/signal.ts",
+    "./sdk/clx": "./src/sdk/clx.ts",
+    "./sdk/cn": "./src/sdk/cn.ts",
+    "./sdk/encoding": "./src/sdk/encoding.ts",
+    "./sdk/http": "./src/sdk/http.ts",
+    "./sdk/useSuggestions": "./src/sdk/useSuggestions.ts",
+    "./sdk/retry": "./src/sdk/retry.ts",
+    "./sdk/useId": "./src/sdk/useId.ts",
+    "./sdk/cookie": "./src/sdk/cookie.ts",
+    "./sdk/cookiePassthrough": "./src/sdk/cookiePassthrough.ts",
+    "./sdk/analytics": "./src/sdk/analytics.ts",
+    "./sdk/cachedLoader": "./src/sdk/cachedLoader.ts",
+    "./sdk/serverTimings": "./src/sdk/serverTimings.ts",
+    "./sdk/cacheHeaders": "./src/sdk/cacheHeaders.ts",
+    "./sdk/crypto": "./src/sdk/crypto.ts",
+    "./sdk/invoke": "./src/sdk/invoke.ts",
+    "./sdk/instrumentedFetch": "./src/sdk/instrumentedFetch.ts",
+    "./sdk/otel": "./src/sdk/otel.ts",
+    "./sdk/logger": "./src/sdk/logger.ts",
+    "./sdk/composite": "./src/sdk/composite.ts",
+    "./sdk/otelAdapters": "./src/sdk/otelAdapters.ts",
+    "./sdk/otelAdapters/clickhouseCollector": "./src/sdk/otelAdapters/clickhouseCollector.ts",
+    "./sdk/observability": "./src/sdk/observability.ts",
+    "./sdk/workerEntry": "./src/sdk/workerEntry.ts",
+    "./sdk/abTesting": "./src/sdk/abTesting.ts",
+    "./sdk/redirects": "./src/sdk/redirects.ts",
+    "./sdk/sitemap": "./src/sdk/sitemap.ts",
+    "./sdk/useDevice": "./src/sdk/useDevice.ts",
+    "./sdk/useHydrated": "./src/sdk/useHydrated.ts",
+    "./middleware": "./src/middleware/index.ts",
+    "./middleware/healthMetrics": "./src/middleware/healthMetrics.ts",
+    "./middleware/hydrationContext": "./src/middleware/hydrationContext.ts",
+    "./middleware/validateSection": "./src/middleware/validateSection.ts",
+    "./sdk/wrapCaughtErrors": "./src/sdk/wrapCaughtErrors.ts",
+    "./sdk/csp": "./src/sdk/csp.ts",
+    "./sdk/urlUtils": "./src/sdk/urlUtils.ts",
+    "./sdk/normalizeUrls": "./src/sdk/normalizeUrls.ts",
+    "./sdk/mergeCacheControl": "./src/sdk/mergeCacheControl.ts",
+    "./sdk/requestContext": "./src/sdk/requestContext.ts",
+    "./sdk/createInvoke": "./src/sdk/createInvoke.ts",
+    "./sdk/router": "./src/sdk/router.ts",
+    "./matchers/posthog": "./src/matchers/posthog.ts",
+    "./apps": "./src/apps/index.ts",
+    "./apps/autoconfig": "./src/apps/autoconfig.ts",
+    "./sdk/setupApps": "./src/sdk/setupApps.ts",
+    "./matchers/builtins": "./src/matchers/builtins.ts",
+    "./types/widgets": "./src/types/widgets.ts",
+    "./setup": "./src/setup.ts",
+    "./routes": "./src/routes/index.ts",
+    "./scripts/generate-blocks": "./scripts/generate-blocks.ts",
+    "./scripts/generate-schema": "./scripts/generate-schema.ts",
+    "./scripts/generate-invoke": "./scripts/generate-invoke.ts",
+    "./scripts/migrate": "./scripts/migrate.ts",
+    "./scripts/migrate-post-cleanup": "./scripts/migrate-post-cleanup.ts",
+    "./scripts/migrate-to-cf-observability": "./scripts/migrate-to-cf-observability.ts",
+    "./scripts/tailwind-lint": "./scripts/tailwind-lint.ts",
+    "./vite": "./src/vite/plugin.js",
+    "./daemon": "./src/daemon/index.ts"
   },
   "scripts": {
-    "build:js": "tsup",
-    "build:types": "tsc -p tsconfig.build.json",
-    "build": "bun run build:js && bun run build:types",
-    "prepublishOnly": "bun run build",
+    "build": "tsc",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/ scripts/",
@@ -382,7 +86,7 @@
     "lint:unused": "knip",
     "format": "biome format src/ scripts/",
     "format:fix": "biome format --write src/ scripts/",
-    "check": "bun run typecheck && bun run lint && bun run lint:unused && bun run build && bunx tsx scripts/check-tier-boundaries.ts",
+    "check": "bun run typecheck && bun run lint && bun run lint:unused",
     "clean": "rm -rf node_modules .cache dist .wrangler/state node_modules/.vite && bun install"
   },
   "keywords": [
@@ -415,15 +119,9 @@
     "@tanstack/react-query": ">=5.0.0",
     "@tanstack/react-start": ">=1.0.0",
     "@tanstack/store": ">=0.7.0",
-    "next": ">=15.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "vite": ">=6.0.0 || >=7.0.0 || >=8.0.0"
-  },
-  "peerDependenciesMeta": {
-    "next": {
-      "optional": true
-    }
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.6",
@@ -436,9 +134,7 @@
     "@types/ws": "^8.18.0",
     "jsdom": "^29.0.0",
     "knip": "^5.86.0",
-    "next": "^15.0.0",
     "ts-morph": "^27.0.0",
-    "tsup": "^8.3.0",
     "typescript": "^5.9.0",
     "vite": ">=6.0.0",
     "vitest": "^4.1.0"
