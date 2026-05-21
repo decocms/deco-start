@@ -375,23 +375,39 @@ for (const action of actions) {
   const varName = `$${action.name}`;
 
   if (action.importedFn) {
-    // All @decocms/apps action functions take a single props object.
-    // Pass the validated `data` object directly — never destructure into
-    // positional arguments, which breaks when function signatures change.
+    // Emit the wrapper body verbatim. The arrow function in
+    // @decocms/apps/vtex/invoke.ts is the contract that maps the external
+    // invoke shape (what storefront callers send) to the internal action
+    // shape (what vtex/actions/* expects). Most wrappers are direct
+    // pass-throughs (`actionFn(data)`) but some adapt the payload
+    // (e.g. `createSession({ data })` wraps a flat session payload into
+    // CreateSessionProps). Hard-coding `${importedFn}(data)` silently
+    // dropped the wrap, producing typecheck errors at the call site of
+    // every adapting wrapper.
+    //
+    // Invariant: when action.importedFn is set, action.callBody was
+    // non-empty and contained `${importedFn}(` (that's how importedFn was
+    // discovered in the first place — see the importMap scan above).
+    // Block bodies clear callBody to "", which forces importedFn to ""
+    // and routes to the stub branch below.
+    //
+    // The arrow's parameter is `data` by convention across every wrapper
+    // in vtex/invoke.ts, and the generated handler destructures `{ data }`
+    // from the validator output, so callBody's `data` references resolve
+    // to the handler's local `data` without any rename.
     //
     // forwardResponseCookies() runs AFTER the action awaits, so any
     // Set-Cookie that vtexFetchWithCookies captured onto
     // RequestContext.responseHeaders gets promoted to the actual HTTP
-    // response. Safe no-op when the action didn't touch
-    // responseHeaders (e.g. masterData reads), so it's applied
-    // unconditionally — the alternative (a static allow-list of
-    // cookie-bearing actions) silently misses any new actions that
-    // start propagating cookies.
+    // response. Safe no-op when the action didn't touch responseHeaders
+    // (e.g. masterData reads), so it's applied unconditionally — the
+    // alternative (a static allow-list of cookie-bearing actions)
+    // silently misses any new actions that start propagating cookies.
     if (action.unwrap) {
       out += `\nconst ${varName} = createServerFn({ method: "POST" })
   .inputValidator((data: ${action.inputType}) => data)
   .handler(async ({ data }): Promise<any> => {
-    const result = await ${action.importedFn}(data);
+    const result = await ${action.callBody};
     forwardResponseCookies();
     return unwrapResult(result);
   });\n`;
@@ -399,7 +415,7 @@ for (const action of actions) {
       out += `\nconst ${varName} = createServerFn({ method: "POST" })
   .inputValidator((data: ${action.inputType}) => data)
   .handler(async ({ data }): Promise<any> => {
-    const result = await ${action.importedFn}(data);
+    const result = await ${action.callBody};
     forwardResponseCookies();
     return result;
   });\n`;
