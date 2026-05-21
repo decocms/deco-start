@@ -106,6 +106,25 @@ function fnv1a(str: string): number {
 }
 
 // ---------------------------------------------------------------------------
+// Header constants
+// ---------------------------------------------------------------------------
+
+/**
+ * Hop-by-hop headers per RFC 7230 §6.1 — must not be forwarded through
+ * proxies. Plus `host`, which we always rewrite to the target origin.
+ */
+const HOP_BY_HOP_HEADERS = new Set([
+	"connection",
+	"keep-alive",
+	"transfer-encoding",
+	"te",
+	"trailer",
+	"upgrade",
+	"proxy-authorization",
+	"proxy-authenticate",
+]);
+
+// ---------------------------------------------------------------------------
 // Cookie helpers
 // ---------------------------------------------------------------------------
 
@@ -216,6 +235,14 @@ export function tagBucket(
  * 2. Set-Cookie Domain → real hostname
  * 3. Body text: fallback hostname → real hostname (for Fresh partial URLs)
  * 4. Location header → real hostname
+ *
+ * **`redirect: "manual"` is critical.** The request body is forwarded as a
+ * stream (`duplex: "half"`) and is consumed by this first fetch. If the
+ * upstream returns a 301/302 and we let CF auto-follow, the runtime would
+ * try to replay the request and throw `Cannot reconstruct a Request with
+ * a used body.` Instead we forward the 3xx response to the client so the
+ * client (browser/curl) follows it on its own. The Location header is
+ * rewritten below so the next hop targets the real hostname.
  */
 export async function proxyToFallback(
 	request: Request,
@@ -225,13 +252,22 @@ export async function proxyToFallback(
 	const target = new URL(url.toString());
 	target.hostname = fallbackOrigin;
 
-	const headers = new Headers(request.headers);
-	headers.delete("host");
+	// Strip hop-by-hop headers + Host before forwarding. Without this the
+	// upstream may close the connection (Connection: close) or get confused
+	// by Transfer-Encoding/Upgrade meant for the original CF↔client hop.
+	const headers = new Headers();
+	for (const [key, value] of request.headers.entries()) {
+		const lk = key.toLowerCase();
+		if (lk === "host") continue;
+		if (HOP_BY_HOP_HEADERS.has(lk)) continue;
+		headers.set(key, value);
+	}
 	headers.set("x-forwarded-host", url.hostname);
 
 	const init: RequestInit = {
 		method: request.method,
 		headers,
+		redirect: "manual",
 	};
 	if (request.method !== "GET" && request.method !== "HEAD") {
 		init.body = request.body;
@@ -244,8 +280,17 @@ export async function proxyToFallback(
 	const isText =
 		ct.includes("text/") || ct.includes("json") || ct.includes("javascript");
 
+	// Only rewrite text bodies on 2xx successful responses. Reading
+	// `response.text()` on a 3xx (forwarded redirect) or binary response
+	// would consume the stream needlessly and could throw on non-text
+	// content. The Location header is rewritten separately further down.
 	let body: BodyInit | null = response.body;
-	if (isText && response.body) {
+	if (
+		isText &&
+		response.body &&
+		response.status >= 200 &&
+		response.status < 300
+	) {
 		const text = await response.text();
 		body = text.replaceAll(fallbackOrigin, url.hostname);
 	}
@@ -338,10 +383,16 @@ export function withABTesting(
 			const ratio = siteConfig.abTest?.ratio ?? 0;
 			const bucket = getStableBucket(request, ratio, url, cookieName);
 
+			// Tee the request so the outer `catch` below can still pass the
+			// original (with body intact) to `handler.fetch` if proxyToFallback
+			// somehow throws after consuming the body. `Request.clone()` is
+			// safe in CF Workers — it tees the underlying stream.
+			const fallbackRequest = request.clone();
+
 			try {
 				if (bucket === "fallback") {
 					const response = await proxyToFallback(
-						request,
+						fallbackRequest,
 						url,
 						siteConfig.fallbackOrigin,
 					);
@@ -372,8 +423,10 @@ export function withABTesting(
 						"[A/B] Worker error, circuit breaker → fallback:",
 						err,
 					);
+					// Use the teed clone — handler.fetch above may have already
+					// consumed the original request body before throwing.
 					const response = await proxyToFallback(
-						request,
+						fallbackRequest,
 						url,
 						siteConfig.fallbackOrigin,
 					);
