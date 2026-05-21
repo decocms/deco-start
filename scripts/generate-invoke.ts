@@ -317,12 +317,53 @@ for (const [source, types] of typeImports) {
   }
 }
 
+// Imports required by the forwardResponseCookies bridge. They live next
+// to the framework's RequestContext (where vtexFetchWithCookies stashes
+// inbound Set-Cookie headers) and TanStack Start's response-header API
+// (where we copy them onto the actual HTTP response).
+out += `import {
+  getResponseHeaders,
+  setResponseHeader,
+} from "@tanstack/react-start/server";
+import { RequestContext } from "@decocms/start/sdk/requestContext";
+`;
+
 out += `
 function unwrapResult<T>(result: unknown): T {
   if (result && typeof result === "object" && "data" in result) {
     return (result as { data: T }).data;
   }
   return result as T;
+}
+
+/**
+ * Forward Set-Cookie headers captured in RequestContext.responseHeaders
+ * (by vtexFetchWithCookies) into TanStack Start's HTTP response.
+ *
+ * Without this bridge, HttpOnly cookies like \`checkout.vtex.com\` and
+ * \`CheckoutOrderFormOwnership\` that VTEX returns on cart-action responses
+ * stay trapped inside the AsyncLocalStorage-backed RequestContext and
+ * never reach the browser. The storefront's mini-cart drifts away from
+ * VTEX's server-side orderForm, and the user lands on /checkout with an
+ * empty cart.
+ *
+ * Cheap no-op when no Set-Cookie was captured (e.g. read-only actions),
+ * so every handler can call it unconditionally without branching on
+ * whether the underlying action uses vtexFetchWithCookies.
+ */
+function forwardResponseCookies(): void {
+  const ctx = RequestContext.current;
+  if (!ctx) return;
+  const captured =
+    typeof ctx.responseHeaders.getSetCookie === "function"
+      ? ctx.responseHeaders.getSetCookie()
+      : [];
+  if (captured.length === 0) return;
+  const existing =
+    typeof getResponseHeaders().getSetCookie === "function"
+      ? getResponseHeaders().getSetCookie()
+      : [];
+  setResponseHeader("set-cookie", [...existing, ...captured]);
 }
 
 // ---------------------------------------------------------------------------
@@ -337,18 +378,30 @@ for (const action of actions) {
     // All @decocms/apps action functions take a single props object.
     // Pass the validated `data` object directly — never destructure into
     // positional arguments, which breaks when function signatures change.
+    //
+    // forwardResponseCookies() runs AFTER the action awaits, so any
+    // Set-Cookie that vtexFetchWithCookies captured onto
+    // RequestContext.responseHeaders gets promoted to the actual HTTP
+    // response. Safe no-op when the action didn't touch
+    // responseHeaders (e.g. masterData reads), so it's applied
+    // unconditionally — the alternative (a static allow-list of
+    // cookie-bearing actions) silently misses any new actions that
+    // start propagating cookies.
     if (action.unwrap) {
       out += `\nconst ${varName} = createServerFn({ method: "POST" })
   .inputValidator((data: ${action.inputType}) => data)
   .handler(async ({ data }): Promise<any> => {
     const result = await ${action.importedFn}(data);
+    forwardResponseCookies();
     return unwrapResult(result);
   });\n`;
     } else {
       out += `\nconst ${varName} = createServerFn({ method: "POST" })
   .inputValidator((data: ${action.inputType}) => data)
   .handler(async ({ data }): Promise<any> => {
-    return ${action.importedFn}(data);
+    const result = await ${action.importedFn}(data);
+    forwardResponseCookies();
+    return result;
   });\n`;
     }
   } else {
