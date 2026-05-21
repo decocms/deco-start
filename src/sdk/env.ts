@@ -25,7 +25,7 @@ export function isDevMode(): boolean {
   // In Miniflare/Workers, process.env is unavailable, so this is the reliable signal.
   const vitaDev = !!(import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV;
 
-  _isDev = vitaDev || env?.NODE_ENV === "development";
+  _isDev = vitaDev || env?.NODE_ENV === "development" || env?.DECO_PREVIEW === "true";
 
   return _isDev;
 }
