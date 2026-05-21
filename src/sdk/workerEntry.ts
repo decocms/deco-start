@@ -1202,7 +1202,6 @@ export function createDecoWorkerEntry(
       request.method === "POST" &&
       (url.pathname.startsWith("/_serverFn/") || url.pathname.startsWith("/_server/"))
     ) {
-      console.log("isDevMode", isDevMode());
       const serverFnCache = isDevMode()
         ? null
         : typeof caches !== "undefined"
