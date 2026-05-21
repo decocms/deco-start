@@ -198,23 +198,12 @@ export function decoVitePlugin() {
     },
 
     configureServer(server) {
-      // When blocks.gen.json changes on disk, invalidate the .ts module
-      // so Vite re-runs our load() hook with the fresh data.
-      server.watcher.on("change", (file) => {
-        if (file.endsWith("blocks.gen.json")) {
-          const tsId = file.replace(/\.json$/, ".ts");
-          const mod = server.environments?.ssr?.moduleGraph?.getModuleById(tsId);
-          if (mod) {
-            server.environments.ssr.moduleGraph.invalidateModule(mod);
-          }
-        }
-      });
-
       // Watch `.deco/blocks/**/*.json` and regenerate `blocks.gen.json` when
-      // CMS content changes (manual edit, sync-decofile, daemon PATCH). The
-      // existing change listener above then invalidates the SSR module so
-      // the next request renders fresh data — no manual `generate:blocks`
-      // and no dev-server restart required.
+      // CMS content changes (manual edit, sync-decofile, daemon PATCH).
+      // After regen, we POST the new blocks to the dev server's own
+      // /.decofile endpoint — this calls setBlocks() inside the workerd SSR
+      // runtime without any module invalidation (which breaks TanStack
+      // Start/Router state).
       //
       // Generator is loaded lazily via tsImport (same pattern as the daemon
       // below) so we don't depend on the consumer's TS loader.
@@ -256,6 +245,27 @@ export function decoVitePlugin() {
             console.warn(`[deco] .deco/blocks not found — emitted empty blocks.gen.json`);
           } else {
             console.log(`[deco] regenerated ${result.count} blocks in ${ms}ms`);
+            // POST blocks to the dev server's /.decofile endpoint so
+            // setBlocks() runs inside the workerd SSR runtime. No module
+            // invalidation — that would cascade through the route tree and
+            // break TanStack Start server functions.
+            try {
+              const addr = server.httpServer?.address();
+              const port = typeof addr === "object" && addr ? addr.port : 5173;
+              const blocksJson = readFileSync(jsonFile, "utf-8");
+              const res = await fetch(`http://localhost:${port}/.decofile`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: blocksJson,
+              });
+              if (res.ok) {
+                server.hot?.send({ type: "full-reload", path: "*" });
+              } else {
+                console.warn(`[deco] blocks reload failed: ${res.status}`);
+              }
+            } catch (reloadErr) {
+              console.warn("[deco] blocks reload request failed:", reloadErr?.message);
+            }
           }
         } catch (err) {
           console.warn("[deco] failed to regenerate blocks:", err?.message ?? err);

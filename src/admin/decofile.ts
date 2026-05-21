@@ -20,15 +20,21 @@ export async function handleDecofileReload(
   request: Request,
   env?: Record<string, unknown>,
 ): Promise<Response> {
-  const authHeader = request.headers.get("Authorization") || "";
-  const expectedToken =
-    (env?.DECO_RELEASE_RELOAD_TOKEN as string | undefined) ??
-    (typeof globalThis.process !== "undefined"
-      ? globalThis.process.env?.DECO_RELEASE_RELOAD_TOKEN
-      : undefined);
+  // In dev mode, the Vite plugin uses this endpoint to hot-reload blocks
+  // without module invalidation (which breaks TanStack Start/Router state).
+  // Skip auth so the plugin can POST from localhost.
+  const isDev = !!(import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV;
+  if (!isDev) {
+    const authHeader = request.headers.get("Authorization") || "";
+    const expectedToken =
+      (env?.DECO_RELEASE_RELOAD_TOKEN as string | undefined) ??
+      (typeof globalThis.process !== "undefined"
+        ? globalThis.process.env?.DECO_RELEASE_RELOAD_TOKEN
+        : undefined);
 
-  if (!expectedToken || authHeader !== expectedToken) {
-    return new Response("Unauthorized", { status: 401 });
+    if (!expectedToken || authHeader !== expectedToken) {
+      return new Response("Unauthorized", { status: 401 });
+    }
   }
 
   let newBlocks: Record<string, unknown>;

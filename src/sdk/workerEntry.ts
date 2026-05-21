@@ -49,6 +49,7 @@ import { RequestContext } from "./requestContext";
 import { cleanPathForCacheKey } from "./urlUtils";
 import { type Device, isMobileUA } from "./useDevice";
 import { getAppMiddleware } from "./setupApps";
+import { isDevMode } from "./env";
 
 /**
  * Build-time identifier injected by `decoVitePlugin()` (see
@@ -802,8 +803,9 @@ export function createDecoWorkerEntry(
 
     const geoVariants = body.countries ?? [];
 
-    const cache =
-      typeof caches !== "undefined"
+    const cache = isDevMode()
+      ? null
+      : typeof caches !== "undefined"
         ? ((caches as unknown as { default?: Cache }).default ?? null)
         : null;
 
@@ -1200,8 +1202,10 @@ export function createDecoWorkerEntry(
       request.method === "POST" &&
       (url.pathname.startsWith("/_serverFn/") || url.pathname.startsWith("/_server/"))
     ) {
-      const serverFnCache =
-        typeof caches !== "undefined"
+      console.log("isDevMode", isDevMode());
+      const serverFnCache = isDevMode()
+        ? null
+        : typeof caches !== "undefined"
           ? ((caches as unknown as { default?: Cache }).default ?? null)
           : null;
 
@@ -1422,9 +1426,10 @@ export function createDecoWorkerEntry(
       return resp;
     }
 
-    // Check Cache API (may not be available in local dev / miniflare)
-    const cache =
-      typeof caches !== "undefined"
+    // Check Cache API — disabled in local dev to avoid stale responses
+    const cache = isDevMode()
+      ? null
+      : typeof caches !== "undefined"
         ? ((caches as unknown as { default?: Cache }).default ?? null)
         : null;
 

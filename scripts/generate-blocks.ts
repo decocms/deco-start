@@ -133,8 +133,15 @@ export async function generateBlocks(
   const jsonStr = JSON.stringify(blocks);
   fs.writeFileSync(jsonFile, jsonStr);
 
-  // 2. Thin TS wrapper — just for TypeScript tooling and as a Vite load target
-  fs.writeFileSync(outFile, TS_STUB);
+  // 2. Thin TS wrapper — just for TypeScript tooling and as a Vite load target.
+  // Only write if content differs to avoid triggering Vite's file watcher,
+  // which would cascade module invalidation to the route tree and crash
+  // TanStack Router during dev hot-reload.
+  let existingTs: string | undefined;
+  try { existingTs = fs.readFileSync(outFile, "utf-8"); } catch {}
+  if (existingTs !== TS_STUB) {
+    fs.writeFileSync(outFile, TS_STUB);
+  }
 
   if (!silent) {
     const jsonSizeMB = (Buffer.byteLength(jsonStr) / 1_048_576).toFixed(1);

@@ -21,7 +21,11 @@ export function isDevMode(): boolean {
 
   const env = typeof globalThis.process !== "undefined" ? globalThis.process.env : undefined;
 
-  _isDev = env?.DECO_CACHE_DISABLE === "true" || env?.NODE_ENV === "development";
+  // Vite statically replaces import.meta.env.DEV at build time (true in dev, false in prod).
+  // In Miniflare/Workers, process.env is unavailable, so this is the reliable signal.
+  const vitaDev = !!(import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV;
+
+  _isDev = vitaDev || env?.DECO_CACHE_DISABLE === "true" || env?.NODE_ENV === "development";
 
   return _isDev;
 }
