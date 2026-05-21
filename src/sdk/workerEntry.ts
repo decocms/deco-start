@@ -443,7 +443,27 @@ export function injectGeoCookies(request: Request): Request {
 
   const existing = request.headers.get("cookie") ?? "";
   const combined = existing ? `${existing}; ${parts.join("; ")}` : parts.join("; ");
-  const headers = new Headers(request.headers);
+
+  // Strip CF geo headers that carry non-ASCII values (cf-region: "São Paulo",
+  // cf-ipcity: "Brasília", etc.) before building the new Request. The geo
+  // data is preserved in the __cf_geo_* cookies we just built, so callers
+  // downstream lose no information.
+  //
+  // Without this strip, the Workers runtime emits a warning on every
+  // request because the new Request inherits these UTF-8 headers from the
+  // inbound request:
+  //
+  //   "A header value for "cf-region" contains non-ASCII characters: "..."
+  //
+  // and the warning is logged once per non-ASCII header — for a Brazilian
+  // storefront with cities/states full of accents that means ~2 warns per
+  // request × every request that hits the worker.
+  const headers = new Headers();
+  for (const [key, value] of request.headers.entries()) {
+    const lk = key.toLowerCase();
+    if (lk === "cf-region" || lk === "cf-ipcity") continue;
+    headers.set(key, value);
+  }
   headers.set("cookie", combined);
 
   return new Request(request, { headers });
