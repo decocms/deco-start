@@ -239,25 +239,121 @@ export const MetricNames = {
   CACHE_MISS: "cache_miss_total",
   RESOLVE_DURATION_MS: "resolve_duration_ms",
   FETCH_DURATION_MS: "fetch_duration_ms",
+  /**
+   * Per-provider outbound commerce fetch duration. Owned by
+   * `@decocms/start` (not `@decocms/apps`) so every site emits this
+   * histogram unconditionally as soon as it bumps the framework,
+   * regardless of apps-start version. Apps register operation strings
+   * (`vtex.intelligent-search.product_search`,
+   * `shopify.graphql.cart_create`, ...) via `recordCommerceMetric`
+   * below; the framework owns the cardinality contract.
+   *
+   * Canonical labels: `provider`, `operation`, `status_class`, `cached`.
+   * See `recordCommerceMetric` for the full label set and Phase 2 in
+   * `MIGRATION_TOOLING_PLAN.md` for the rationale.
+   */
+  COMMERCE_REQUEST_DURATION_MS: "commerce_request_duration_ms",
 } as const;
 
 /**
+ * Map an HTTP status code to its canonical class label (`2xx` / ... /
+ * `5xx`). Out-of-range numbers (e.g. -1 from a thrown fetch) fall back
+ * to `"unknown"` so dashboards don't break on edge cases.
+ *
+ * Exported because callers occasionally need the same mapping for
+ * non-metric purposes (logging, tail enrichment).
+ */
+export function statusClassFor(status: number): string {
+  if (typeof status !== "number" || !Number.isFinite(status)) return "unknown";
+  if (status < 100 || status >= 600) return "unknown";
+  return `${Math.floor(status / 100)}xx`;
+}
+
+/**
+ * Optional dimensions stamped on `http_requests_total` /
+ * `http_request_duration_ms` / `http_request_errors_total`. All fields
+ * are optional — callers pass what they have, the framework fills in
+ * the rest from defaults.
+ *
+ * Cardinality discipline: every field here is bounded. `route_pattern`
+ * comes from the TanStack router (a closed set), `outcome` is the CF
+ * Workers Observability enum, `cache_decision` / `cache_layer` are
+ * union types declared in this module, `region` is a small set of CF
+ * colo codes. Status is unbounded by spec but bounded in practice; the
+ * `status_class` label bounds the cardinality further for dashboards
+ * that don't need the raw value.
+ */
+export interface RequestMetricLabels {
+  /** TanStack route pattern (`/_products/$slug/p`) — closed set. */
+  route_pattern?: string;
+  /** Cloudflare Workers Observability `outcome` (`ok`, `exception`, ...). */
+  outcome?: string;
+  /** Cache layer + decision when known. */
+  cache_decision?: CacheDecision;
+  cache_layer?: CacheLayer;
+  /** Cloudflare colo (`GRU`, `IAD`, ...). */
+  region?: string;
+  /**
+   * Arbitrary extra labels — callers should avoid this and add fields
+   * to the typed surface above instead. Kept as an escape hatch so
+   * non-canonical experiments don't require a framework release.
+   */
+  extra?: Record<string, string | number | boolean>;
+}
+
+/**
  * Record an HTTP request metric.
- * Call in middleware after the response is produced.
+ *
+ * Call in middleware after the response is produced. Two-call surface
+ * for backward compat:
+ *
+ *   recordRequestMetric(method, path, status, durationMs)
+ *   recordRequestMetric(method, path, status, durationMs, labels)
+ *
+ * The labels argument is optional — sites that haven't bumped to the
+ * Phase 2 metric shape still emit the original three labels
+ * (`method`, `route_pattern`, `status`). Adding labels never changes
+ * existing labels' values; only adds new ones.
  */
 export function recordRequestMetric(
   method: string,
   path: string,
   status: number,
   durationMs: number,
+  labels?: RequestMetricLabels,
 ) {
   const m = getState().meter;
   if (!m) return;
-  const labels: Labels = { method, path: normalizePath(path), status };
-  m.counterInc(MetricNames.HTTP_REQUESTS_TOTAL, 1, labels);
-  m.histogramRecord?.(MetricNames.HTTP_REQUEST_DURATION_MS, durationMs, labels);
+  // Cardinality discipline:
+  //   - `method`: small (GET, POST, ...).
+  //   - `route_pattern`: closed set (caller-supplied) OR normalized path
+  //     (fallback). Either way bounded.
+  //   - `status`: full HTTP code (bounded ~50 values in practice).
+  //   - `status_class`: 5-element enum (2xx / 3xx / 4xx / 5xx / unknown).
+  //   - `outcome`: CF outcome enum (~7 values).
+  //   - `cache_decision`: 5-element enum.
+  //   - `cache_layer`: 3-element enum (edge / cachedLoader / vtex-swr).
+  //   - `region`: ~250 CF colo codes worldwide.
+  // Total combinations are bounded — safe for unbounded series on
+  // ClickHouse but operators should still avoid grouping by `region`
+  // unless explicitly needed.
+  const merged: Labels = {
+    method,
+    route_pattern: labels?.route_pattern ?? normalizePath(path),
+    status,
+    status_class: statusClassFor(status),
+  };
+  if (labels?.outcome) merged.outcome = labels.outcome;
+  if (labels?.cache_decision) merged.cache_decision = labels.cache_decision;
+  if (labels?.cache_layer) merged.cache_layer = labels.cache_layer;
+  if (labels?.region) merged.region = labels.region;
+  if (labels?.extra) {
+    for (const [k, v] of Object.entries(labels.extra)) merged[k] = v;
+  }
+  m.counterInc(MetricNames.HTTP_REQUESTS_TOTAL, 1, merged);
+  m.histogramRecord?.(MetricNames.HTTP_REQUEST_DURATION_MS, durationMs, merged);
   if (status >= 500) {
-    m.counterInc(MetricNames.HTTP_REQUEST_ERRORS, 1, labels);
+    m.counterInc(MetricNames.HTTP_REQUEST_ERRORS, 1, merged);
   }
 }
 
@@ -273,21 +369,44 @@ export function recordRequestMetric(
 export type CacheDecision = "HIT" | "STALE-HIT" | "STALE-ERROR" | "MISS" | "BYPASS";
 
 /**
+ * Where the cache lives. Phase 2 label expansion (D-11).
+ *  - `edge`         — Cloudflare Cache API (HTML pages, server-fn responses)
+ *  - `cachedLoader` — In-memory per-isolate via `sdk/cachedLoader.ts`
+ *                     (loader-level SWR, dedup, in-flight)
+ *  - `vtex-swr`     — Apps-side in-memory cache shared by VTEX clients
+ *                     (intelligent-search, cross-selling, etc.)
+ */
+export type CacheLayer = "edge" | "cachedLoader" | "vtex-swr";
+
+/**
  * Record a cache hit/miss metric. Also stamps the decision on the active
  * trace span (when one exists) as `deco.cache.decision` / `deco.cache.profile`
  * so operators can filter ClickStack traces by cache decision directly,
  * without joining to metrics.
  *
- * `decision` is optional — when omitted, the metric still records HIT vs MISS
- * but dashboards can't distinguish SWR/SIE paths. Pass it whenever known.
+ * Backward-compatible signature:
+ *   recordCacheMetric(hit, profile?, decision?)
+ *   recordCacheMetric(hit, profile?, decision?, layer?)
+ *
+ * `decision` is optional — when omitted, the metric still records HIT
+ * vs MISS but dashboards can't distinguish SWR/SIE paths. Pass it
+ * whenever known. `layer` defaults to `edge` when called from
+ * workerEntry; cachedLoader / vtex-swr call sites should pass their
+ * value explicitly.
  */
-export function recordCacheMetric(hit: boolean, profile?: string, decision?: CacheDecision) {
+export function recordCacheMetric(
+  hit: boolean,
+  profile?: string,
+  decision?: CacheDecision,
+  layer?: CacheLayer,
+) {
   // Stamp on the active span FIRST so the attribute survives even if the
   // meter is a no-op (e.g. on tests, or in dev without DECO_METRICS).
   const active = getActiveSpan();
   if (active) {
     if (decision) active.setAttribute?.("deco.cache.decision", decision);
     if (profile) active.setAttribute?.("deco.cache.profile", profile);
+    if (layer) active.setAttribute?.("deco.cache.layer", layer);
   }
 
   const m = getState().meter;
@@ -295,7 +414,45 @@ export function recordCacheMetric(hit: boolean, profile?: string, decision?: Cac
   const labels: Labels = {};
   if (profile) labels.profile = profile;
   if (decision) labels.decision = decision;
+  if (layer) labels.layer = layer;
   m.counterInc(hit ? MetricNames.CACHE_HIT : MetricNames.CACHE_MISS, 1, labels);
+}
+
+/**
+ * Labels for `commerce_request_duration_ms`. Owned by the framework so
+ * apps-start (and any future provider package) can register operation
+ * strings without owning the histogram declaration. Phase 2 (D-11).
+ */
+export interface CommerceMetricLabels {
+  /** `vtex`, `shopify`, `wake`, ... — small closed set. */
+  provider: string;
+  /** Per-provider operation, e.g. `intelligent-search.product_search`. */
+  operation: string;
+  /** Set when known (e.g. from the HTTP response). Bounded enum. */
+  status_class?: string;
+  /** Whether the underlying fetch was served from a cache. */
+  cached?: boolean;
+}
+
+/**
+ * Record a commerce / outbound-fetch duration sample. No-op when no
+ * meter is configured. The metric name is constant
+ * (`commerce_request_duration_ms`) — providers vary by the `provider`
+ * label, not by name, so dashboards aggregate cleanly across the fleet.
+ */
+export function recordCommerceMetric(
+  durationMs: number,
+  labels: CommerceMetricLabels,
+) {
+  const m = getState().meter;
+  if (!m) return;
+  const merged: Labels = {
+    provider: labels.provider,
+    operation: labels.operation,
+  };
+  if (labels.status_class) merged.status_class = labels.status_class;
+  if (typeof labels.cached === "boolean") merged.cached = labels.cached;
+  m.histogramRecord?.(MetricNames.COMMERCE_REQUEST_DURATION_MS, durationMs, merged);
 }
 
 function normalizePath(path: string): string {

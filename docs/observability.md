@@ -71,16 +71,23 @@ This makes it possible to filter traces by cache decision directly in ClickStack
 
 ## What's measured
 
-| Metric                         | Type      | Source                              | Labels                          |
-| ------------------------------ | --------- | ----------------------------------- | ------------------------------- |
-| `http_requests_total`          | counter   | `workerEntry`                       | `method`, `path`, `status`      |
-| `http_request_duration_ms`     | histogram | `workerEntry`                       | `method`, `path`, `status`      |
-| `http_request_errors_total`    | counter   | `workerEntry` (status >= 500)       | `method`, `path`, `status`      |
-| `cache_hit_total`              | counter   | edge cache decision                 | `profile`, `decision`           |
-| `cache_miss_total`             | counter   | edge cache decision                 | `profile`, `decision`           |
-| `resolve_duration_ms`          | histogram | `resolveDecoPage`                   | —                               |
+| Metric                          | Type      | Source                              | Labels (canonical, Phase 2 / D-11)                                                              |
+| ------------------------------- | --------- | ----------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `http_requests_total`           | counter   | `workerEntry`                       | `method`, `route_pattern`, `status`, `status_class`, `outcome?`, `cache_decision?`, `cache_layer?`, `region?` |
+| `http_request_duration_ms`      | histogram | `workerEntry`                       | same as `http_requests_total`                                                                  |
+| `http_request_errors_total`     | counter   | `workerEntry` (status >= 500)       | same as `http_requests_total`                                                                  |
+| `cache_hit_total`               | counter   | edge cache decision                 | `profile`, `decision`, `layer` (`edge` \| `cachedLoader` \| `vtex-swr`)                         |
+| `cache_miss_total`              | counter   | edge cache decision                 | `profile`, `decision`, `layer`                                                                  |
+| `commerce_request_duration_ms`  | histogram | commerce clients (vtex/shopify/…)   | `provider`, `operation`, `status_class?`, `cached?`                                             |
+| `resolve_duration_ms`           | histogram | `resolveDecoPage`                   | —                                                                                              |
 
 `decision` values mirror the `X-Cache` response header: `HIT`, `STALE-HIT`, `STALE-ERROR`, `MISS`, `BYPASS`.
+
+`route_pattern` is the TanStack route pattern (e.g. `/_products/$slug/p`) rather than the raw URL path — bounded cardinality, joinable to the route table. Callers that don't supply one get a normalized path with dynamic segments collapsed (`/products/:slug/p`).
+
+`status_class` is the canonical `2xx`/.../`5xx`/`unknown` bucket. Dashboards aggregate by `status_class` for SLO panels and by `status` for incident drill-down.
+
+`commerce_request_duration_ms` owned by the framework (Phase 2 / D-11) so every site emits it as soon as `@decocms/start` is bumped, regardless of `@decocms/apps` version. Apps register operation strings via `recordCommerceMetric`; the framework owns the cardinality contract.
 
 ### Metrics: AE vs OTLP (the two-meter split)
 
@@ -181,8 +188,9 @@ The direct-POST channels are wired automatically when the relevant env vars reso
 | ---------------------------------- | -------------------- | ---------------------- | ---------------------------------------------------- |
 | `DECO_OTEL_METRICS_ENDPOINT`       | OTLP metrics POST    | `""` (unset)           | OTLP meter is not created; AE-only metrics           |
 | `DECO_OTEL_LOGS_ENDPOINT`          | OTLP error-log POST  | `""` (unset)           | Error logs ride CF Destinations only (head-sampled)  |
+| `DECO_OTEL_TRACES_ENDPOINT`        | OTLP traces POST     | `""` (unset)           | Framework `deco.*` spans drop unless CF Traces is on |
 
-Both are opt-out via `OtelOptions.otlpMetricsEnabled: false` / `otlpErrorLogsEnabled: false` if you need to disable them at boot for a specific environment without changing the env vars.
+All three are opt-out via `OtelOptions.otlpMetricsEnabled: false` / `otlpErrorLogsEnabled: false` / `otlpTracesEnabled: false` if you need to disable them at boot for a specific environment without changing the env vars. Traces honor `OtelOptions.otlpTracesSamplingRate` (default `0.01` to match CF Destinations) — sampling decisions are consistent per trace (`FNV-1a` hash of `trace_id`), so child spans are kept iff their root is kept. Remote parents that arrive sampled (`traceparent` flags `01`) override the rate and are always exported.
 
 ## Log shape (and how to query it)
 
@@ -213,7 +221,9 @@ In the ClickStack UI you can also filter logs panel by `trace_id` directly — p
 
 ## Outbound trace propagation
 
-For any outbound `fetch` issued during a request (VTEX, Shopify, internal APIs), inject a W3C `traceparent` header so upstream services that participate in OTel can join your trace:
+For commerce clients (VTEX, Shopify), `createInstrumentedFetch` injects the W3C `traceparent` header by default. To opt out for a specific endpoint that rejects unknown headers, pass `injectTraceparent: false`.
+
+For any other outbound `fetch` issued during a request, inject a `traceparent` header manually so upstream services that participate in OTel can join your trace:
 
 ```ts
 import { injectTraceContext } from "@decocms/start/sdk/observability";

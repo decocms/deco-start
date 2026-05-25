@@ -266,6 +266,105 @@ describe("serializeError", () => {
   });
 });
 
+describe("request.id stamping (Phase 1, D-9)", () => {
+  afterEach(() => {
+    configureLogger(defaultLoggerAdapter);
+    setLogLevel("info");
+  });
+
+  it("stamps request.id from RequestContext on every log line emitted inside a request scope", async () => {
+    const { RequestContext } = await import("./requestContext");
+
+    const seen: Array<Record<string, unknown> | undefined> = [];
+    configureLogger({
+      log(_l, _m, attrs) {
+        seen.push(attrs);
+      },
+    });
+
+    const reqWithId = new Request("https://example.com/", {
+      headers: { "x-request-id": "client-supplied-uuid" },
+    });
+    await RequestContext.run(reqWithId, async () => {
+      logger.info("inside-scope", { custom: "yes" });
+    });
+    // Outside the scope, no request.id is stamped — the fast path stays
+    // fast (no allocation, no key) when RequestContext.requestId is null.
+    logger.info("outside-scope", { custom: "no" });
+
+    expect(seen[0]).toMatchObject({
+      "request.id": "client-supplied-uuid",
+      custom: "yes",
+    });
+    expect(seen[1]).toEqual({ custom: "no" });
+    expect(seen[1]).not.toHaveProperty("request.id");
+  });
+
+  it("prefers caller-supplied request.id over the auto-generated one", async () => {
+    const { RequestContext } = await import("./requestContext");
+
+    const seen: Array<Record<string, unknown> | undefined> = [];
+    configureLogger({
+      log(_l, _m, attrs) {
+        seen.push(attrs);
+      },
+    });
+
+    const req = new Request("https://example.com/", {
+      headers: { "x-request-id": "from-headers" },
+    });
+
+    await RequestContext.run(req, async () => {
+      // Caller can still override by passing the key directly in attrs.
+      logger.info("override", { "request.id": "explicit-from-caller" });
+    });
+
+    expect(seen[0]?.["request.id"]).toBe("explicit-from-caller");
+  });
+
+  it("falls back to cf-ray when x-request-id is absent", async () => {
+    const { RequestContext } = await import("./requestContext");
+
+    const seen: Array<Record<string, unknown> | undefined> = [];
+    configureLogger({
+      log(_l, _m, attrs) {
+        seen.push(attrs);
+      },
+    });
+
+    const req = new Request("https://example.com/", {
+      headers: { "cf-ray": "8a1b2c3d4e5f6a7b" },
+    });
+
+    await RequestContext.run(req, async () => {
+      logger.info("cf-ray-stamped");
+    });
+
+    expect(seen[0]?.["request.id"]).toBe("8a1b2c3d4e5f6a7b");
+  });
+
+  it("generates a fresh UUID when neither header is set", async () => {
+    const { RequestContext } = await import("./requestContext");
+
+    const seen: Array<Record<string, unknown> | undefined> = [];
+    configureLogger({
+      log(_l, _m, attrs) {
+        seen.push(attrs);
+      },
+    });
+
+    const req = new Request("https://example.com/");
+
+    await RequestContext.run(req, async () => {
+      logger.info("uuid-stamped");
+    });
+
+    const stamped = seen[0]?.["request.id"];
+    expect(typeof stamped).toBe("string");
+    expect((stamped as string).length).toBeGreaterThan(8);
+  });
+});
+
 describe("trace correlation", () => {
   afterEach(() => {
     configureLogger(defaultLoggerAdapter);

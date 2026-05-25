@@ -61,10 +61,16 @@
 import { SpanStatusCode, trace } from "@opentelemetry/api";
 import { createCompositeLogger, createCompositeMeter } from "./composite";
 import { configureLogger, defaultLoggerAdapter, setLoggerAttributeFloor } from "./logger";
-import { configureMeter, configureTracer } from "./observability";
+import { configureMeter, configureTracer, getActiveSpan } from "./observability";
 import { createAnalyticsEngineMeterAdapter } from "./otelAdapters";
 import { createOtlpHttpErrorLogAdapter, type OtlpHttpErrorLog } from "./otelHttpErrorLog";
 import { createOtlpHttpMeterAdapter, type OtlpHttpMeter } from "./otelHttpMeter";
+import {
+  createOtlpHttpTracerAdapter,
+  type OtlpHttpTracer,
+  type TraceContext,
+} from "./otelHttpTracer";
+import { RequestContext } from "./requestContext";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -98,6 +104,36 @@ export interface OtelOptions {
   otlpErrorLogsEndpointEnvVar?: string;
   /** Set to `false` to disable the OTLP/HTTP error-log exporter explicitly. */
   otlpErrorLogsEnabled?: boolean;
+  /**
+   * Env var name holding the OTLP/HTTP traces endpoint used by the
+   * direct-POST span exporter. Defaults to `"DECO_OTEL_TRACES_ENDPOINT"`.
+   * When set (and `otlpTracesEnabled !== false`), framework `deco.*`
+   * spans created via `withTracing` are captured, sampled, and POSTed
+   * directly to this endpoint. Flushed alongside metrics via
+   * `ctx.waitUntil`.
+   *
+   * Without this endpoint configured, `withTracing` falls back to the
+   * `@opentelemetry/api` global tracer (the legacy CF auto-instrumentation
+   * path). The framework registers BOTH adapters when a traces endpoint
+   * is set so CF auto-spans stay intact AND framework spans get
+   * direct-POSTed to ClickHouse. See Phase 3 in
+   * `MIGRATION_TOOLING_PLAN.md`.
+   */
+  otlpTracesEndpointEnvVar?: string;
+  /** Set to `false` to disable the OTLP/HTTP traces exporter explicitly. */
+  otlpTracesEnabled?: boolean;
+  /**
+   * Head sampling rate for framework spans direct-POSTed via the OTLP
+   * traces endpoint. Default `0.01` matches the CF Destinations
+   * `traces.head_sampling_rate` recommendation. Decisions are consistent
+   * per trace (hash of `trace_id`), so child spans (`deco.cache.lookup`,
+   * `deco.cms.resolvePage`, ...) are kept iff their root
+   * `deco.http.request` span is kept. Set to `1` to capture every trace
+   * (preview / debug only — production cost grows linearly).
+   */
+  otlpTracesSamplingRate?: number;
+  /** Test seam — replace the global `fetch` used by the traces exporter. */
+  otlpTracesFetchImpl?: typeof fetch;
   /**
    * Version of `@decocms/start` to advertise as `deco.runtime.version`
    * on every span and every log line. Falls back to a build-time constant;
@@ -151,6 +187,37 @@ let otlpMeter: OtlpHttpMeter | null = null;
 let otlpErrorLog: OtlpHttpErrorLog | null = null;
 
 /**
+ * Module-level handle to the OTLP/HTTP trace exporter — installed by
+ * `bootObservability` when `DECO_OTEL_TRACES_ENDPOINT` is set on `env`.
+ * Flushed alongside the metrics + error-log exporters via
+ * `ctx.waitUntil(...)` at the end of every request.
+ */
+let otlpTracer: OtlpHttpTracer | null = null;
+
+/**
+ * Per-request inbound W3C trace context, parsed from the `traceparent`
+ * header at request entry. Read by the OTLP trace exporter when it
+ * creates a root span so we honor remote parents and the `sampled`
+ * flag. Stored on a request-scoped slot (via `RequestContext.bag`) so
+ * concurrent requests in the same isolate don't trample each other.
+ */
+const TRACE_CTX_BAG_KEY = "deco.observability.traceContext.v1";
+
+function getRequestTraceContext(): TraceContext | null {
+  return RequestContext.getBag<TraceContext>(TRACE_CTX_BAG_KEY) ?? null;
+}
+
+/**
+ * Public entry point used by `workerEntry.ts` to stash the parsed
+ * traceparent for the OTLP tracer to consume. Exported (not just
+ * module-local) because the parser lives in `otelHttpTracer.ts` and
+ * the call site is `workerEntry.ts`.
+ */
+export function _setRequestTraceContext(ctx: TraceContext | null): void {
+  if (ctx) RequestContext.setBag(TRACE_CTX_BAG_KEY, ctx);
+}
+
+/**
  * Per-span attribute floor — stamped on every span we create via
  * `configureTracer().startSpan(...)`. CF's trace export emits its own
  * resource attribute set (service.name=Worker name, faas.name,
@@ -183,16 +250,63 @@ export function instrumentWorker(
   handler: WorkerHandler,
   options: OtelOptions | ((env: Record<string, unknown>) => OtelOptions) = {},
 ): WorkerHandler {
-  // Bridge our pluggable TracerAdapter onto @opentelemetry/api. Framework
-  // code calls `withTracing("name", fn, { attr: val })`; that delegates here
-  // and lands on `trace.getTracer("@decocms/start").startSpan(...)`.
-  //
-  // CF Workers Tracing (when `observability.traces.enabled = true` in
-  // wrangler) installs its own TracerProvider into the @opentelemetry/api
-  // global, so these spans flow through to the CF dashboard. Without CF
-  // tracing the global tracer is a no-op proxy and the spans simply drop
-  // — same outcome as before, no error.
-  configureTracer({
+  // Default tracer bridge — delegates to `@opentelemetry/api` global. When
+  // `bootObservability` discovers `DECO_OTEL_TRACES_ENDPOINT`, it composes
+  // this bridge with the direct-POST OTLP tracer so framework spans flow to
+  // BOTH the CF dashboard AND ClickHouse (the bridge stays a no-op when CF
+  // tracing isn't configured, which is the common case today). See
+  // `configureTracerStack` below.
+  configureTracer(buildOtelApiTracer());
+
+  return {
+    async fetch(request, env, ctx) {
+      const opts =
+        typeof options === "function" ? options(env as Record<string, unknown>) : options;
+      bootObservability(opts, env as Record<string, unknown>);
+      // RequestContext.run + setRuntimeEnv(env) is handled inside
+      // workerEntry.ts on the inner handler — instrumentWorker does
+      // NOT re-wrap so we don't double-enter AsyncLocalStorage.
+      try {
+        return await handler.fetch(request, env, ctx);
+      } finally {
+        // Drain the OTLP metrics + error-log + traces buffers via
+        // ctx.waitUntil so no POST blocks the response. Each exporter
+        // throttles itself per isolate — calling on every request is
+        // cheap; the network only fires when the cooldown elapses or
+        // the buffer fills.
+        if (otlpMeter) {
+          try {
+            ctx.waitUntil(otlpMeter.flush());
+          } catch {
+            /* ctx.waitUntil throwing is benign — never block the response */
+          }
+        }
+        if (otlpErrorLog) {
+          try {
+            ctx.waitUntil(otlpErrorLog.flush());
+          } catch {
+            /* swallow */
+          }
+        }
+        if (otlpTracer) {
+          try {
+            ctx.waitUntil(otlpTracer.flush());
+          } catch {
+            /* swallow */
+          }
+        }
+      }
+    },
+  };
+}
+
+/**
+ * Build the legacy `@opentelemetry/api` global-tracer bridge. Stays a
+ * no-op when no global TracerProvider is registered — same outcome as
+ * the historical configuration.
+ */
+function buildOtelApiTracer(): import("../middleware/observability").TracerAdapter {
+  return {
     startSpan: (name, attrs) => {
       const merged = { ...spanAttributeFloor, ...(attrs ?? {}) };
       const span = trace.getTracer("@decocms/start").startSpan(name, { attributes: merged });
@@ -214,41 +328,80 @@ export function instrumentWorker(
         },
       };
     },
-  });
+  };
+}
 
-  return {
-    async fetch(request, env, ctx) {
-      const opts =
-        typeof options === "function" ? options(env as Record<string, unknown>) : options;
-      bootObservability(opts, env as Record<string, unknown>);
-      // RequestContext.run + setRuntimeEnv(env) is handled inside
-      // workerEntry.ts on the inner handler — instrumentWorker does
-      // NOT re-wrap so we don't double-enter AsyncLocalStorage.
-      try {
-        return await handler.fetch(request, env, ctx);
-      } finally {
-        // Drain the OTLP metrics + error-log buffers via ctx.waitUntil
-        // so neither POST blocks the response. Both exporters throttle
-        // themselves per isolate — calling on every request is cheap;
-        // the network only fires when the cooldown elapses or the
-        // buffer fills.
-        if (otlpMeter) {
+/**
+ * Wire the framework tracer. When the OTLP traces endpoint is configured,
+ * compose the direct-POST tracer ALONGSIDE the `@opentelemetry/api` bridge
+ * via a fanout adapter so:
+ *   1. `withTracing` calls feed BOTH adapters.
+ *   2. A child span's `spanContext()` reports the direct-POST span's IDs
+ *      (the bridge is best-effort — if CF tracing isn't installed those
+ *      IDs are zeros anyway).
+ *
+ * When no traces endpoint is configured, fall back to the bridge alone —
+ * preserves the legacy behavior for sites that haven't bumped wrangler.
+ */
+function configureTracerStack(otlpAdapter: OtlpHttpTracer | null): void {
+  const bridge = buildOtelApiTracer();
+  if (!otlpAdapter) {
+    configureTracer(bridge);
+    return;
+  }
+  // Compose. The OTLP adapter is the "primary" (its IDs win for
+  // `spanContext()` because callers downstream use them for trace
+  // propagation). The bridge is best-effort — fed the same name/attrs
+  // so CF Workers Observability still sees the spans if that channel
+  // is enabled in wrangler.jsonc.
+  configureTracer({
+    startSpan(name, attrs) {
+      const merged = { ...spanAttributeFloor, ...(attrs ?? {}) };
+      const primary = otlpAdapter.startSpan(name, merged);
+      const secondary = bridge.startSpan(name, merged);
+      return {
+        end(): void {
           try {
-            ctx.waitUntil(otlpMeter.flush());
-          } catch {
-            /* ctx.waitUntil throwing is benign — never block the response */
+            primary.end();
+          } finally {
+            try {
+              secondary.end();
+            } catch {
+              /* swallow */
+            }
           }
-        }
-        if (otlpErrorLog) {
+        },
+        setError(error: unknown): void {
           try {
-            ctx.waitUntil(otlpErrorLog.flush());
+            primary.setError?.(error);
+          } finally {
+            try {
+              secondary.setError?.(error);
+            } catch {
+              /* swallow */
+            }
+          }
+        },
+        setAttribute(key: string, value: string | number | boolean): void {
+          primary.setAttribute?.(key, value);
+          try {
+            secondary.setAttribute?.(key, value);
           } catch {
             /* swallow */
           }
-        }
-      }
+        },
+        spanContext() {
+          // The OTLP adapter owns the canonical IDs — those are the IDs
+          // we propagate downstream via `traceparent` headers.
+          return primary.spanContext?.() ?? secondary.spanContext?.() ?? {
+            traceId: "",
+            spanId: "",
+            traceFlags: 0,
+          };
+        },
+      };
     },
-  };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +544,41 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
   // composite becomes a 0-element no-op via createCompositeMeter's filter.
   configureMeter(composedMeter);
 
+  // Traces — direct-POST exporter for framework `deco.*` spans. Without
+  // this, `withTracing` delegates to the no-op `@opentelemetry/api`
+  // global tracer and every framework span silently disappears (the
+  // Phase 3 gap documented in `MIGRATION_TOOLING_PLAN.md`). Same
+  // transport pattern as metrics/error-logs — buffered, sampled by
+  // trace-id hash, flushed via `ctx.waitUntil`.
+  const otlpTracesEnvVar = opts.otlpTracesEndpointEnvVar ?? "DECO_OTEL_TRACES_ENDPOINT";
+  const otlpTracesEndpoint = (env[otlpTracesEnvVar] as string | undefined) ?? "";
+  const otlpTracesEnabled =
+    opts.otlpTracesEnabled !== false && otlpTracesEndpoint.length > 0;
+  if (otlpTracesEnabled) {
+    otlpTracer = createOtlpHttpTracerAdapter({
+      endpoint: otlpTracesEndpoint,
+      resourceAttributes: floor,
+      scopeVersion: decoRuntimeVersion,
+      headSamplingRate: opts.otlpTracesSamplingRate ?? 0.01,
+      fetchImpl: opts.otlpTracesFetchImpl,
+      getActiveSpanForParent: () => getActiveSpan(),
+      getRequestTraceContext,
+      onError: (kind, err) => {
+        defaultLoggerAdapter.log("warn", "otlp traces exporter", {
+          kind,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      },
+    });
+  } else {
+    otlpTracer = null;
+  }
+
+  // Wire the tracer stack — composes the OTLP direct-POST adapter (when
+  // configured) with the @opentelemetry/api bridge. See
+  // `configureTracerStack` for the fanout semantics.
+  configureTracerStack(otlpTracer);
+
   booted = true;
 
   // Single boot-time breadcrumb so operators can confirm the wiring at a
@@ -400,6 +588,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
     analyticsEngine: aeEnabled,
     otlpMetrics: otlpEnabled,
     otlpErrorLogs: otlpErrorLogsEnabled,
+    otlpTraces: otlpTracesEnabled,
     runtimeVersion: decoRuntimeVersion,
     deploymentEnvironment,
     ...(serviceVersion ? { serviceVersion } : {}),
@@ -415,6 +604,7 @@ export function _resetBootStateForTests(): void {
   spanAttributeFloor = {};
   otlpMeter = null;
   otlpErrorLog = null;
+  otlpTracer = null;
   setLoggerAttributeFloor({});
 }
 
