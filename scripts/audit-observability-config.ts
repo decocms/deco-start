@@ -15,27 +15,45 @@
  *
  * Rules (id — severity — what it catches):
  *
- *   observability_missing            error   No `observability` key at all. CF captures nothing.
- *   observability_disabled           error   `observability.enabled: false`. Master switch off.
- *   traces_disabled                  warn    `observability.traces.enabled: false`. No traces in dashboard.
- *   logs_disabled                    warn    `observability.logs.enabled: false`. No logs in dashboard.
- *   head_sampling_rate_elevated      error   `traces.head_sampling_rate > 0.01`. Fleet-scale cost risk; see docs/observability.md.
- *   logs_head_sampling_rate_low      warn    `logs.head_sampling_rate < 1`. Sampling info/warn logs loses signal cheaply; errors go via the direct-POST channel.
- *   persist_disabled_no_destination  error   `persist: false` with no destination configured. Data captured then discarded.
+ *   observability_missing                error   No `observability` key at all. CF captures nothing.
+ *   observability_disabled               error   `observability.enabled: false`. Master switch off.
+ *   traces_disabled                      warn    `observability.traces.enabled: false`. No traces in dashboard.
+ *   logs_disabled                        warn    `observability.logs.enabled: false`. No logs in dashboard.
+ *   head_sampling_rate_elevated          error   `traces.head_sampling_rate > 0.01`. Fleet-scale cost risk; see docs/observability.md.
+ *   logs_head_sampling_rate_low          warn    `logs.head_sampling_rate < 1`. Sampling info/warn logs loses signal cheaply; errors go via the direct-POST channel.
+ *   persist_disabled_no_destination      error   `persist: false` with no destination configured. Data captured then discarded.
+ *
+ * Phase 6 / D-14 — fleet-config drift rules (live outside the
+ * `observability` block but still owned by this audit):
+ *
+ *   version_metadata_binding_missing     error   Missing `version_metadata` binding. `service.version` won't be stamped — regressions can't be attributed to a deploy.
+ *   analytics_engine_binding_missing     warn    No `DECO_METRICS` AE binding. AE meter is off; OTLP meter still works but CF dashboard panels go dark.
+ *   tail_consumer_missing                error   No `tail_consumers` entry pointing at `deco-otel-tail`. 100% error-capture is broken.
+ *   otel_metrics_endpoint_missing        warn    `DECO_OTEL_METRICS_ENDPOINT` not set on `vars`. OTLP meter is off; only AE works.
+ *   otel_traces_endpoint_missing         warn    `DECO_OTEL_TRACES_ENDPOINT` not set on `vars`. Framework `deco.*` spans drop unless CF Traces is on.
+ *   otel_logs_endpoint_missing           warn    `DECO_OTEL_LOGS_ENDPOINT` not set on `vars`. Error logs ride CF Destinations only (head-sampled).
  *
  * Usage (from a site directory):
- *   npx -p @decocms/start deco-audit-observability                # audit cwd
- *   npx -p @decocms/start deco-audit-observability --source ./   # explicit
+ *   npx -p @decocms/start deco-audit-observability                # audit cwd (warn mode — exit 0)
+ *   npx -p @decocms/start deco-audit-observability --source ./   # explicit source dir
  *   npx -p @decocms/start deco-audit-observability --json         # machine-readable
+ *   npx -p @decocms/start deco-audit-observability --mode block   # error findings exit 1 (CI gate)
+ *   npx -p @decocms/start deco-audit-observability --github       # GitHub Actions annotations
  *
  * Options:
  *   --source <dir>   Site directory (default: .)
- *   --json           Emit findings as JSON to stdout (still exits non-zero on findings)
+ *   --json           Emit findings as JSON to stdout
+ *   --mode <m>       Gate hardness: "warn" (default — always exit 0 on findings,
+ *                    just print them) or "block" (exit 1 on any `error` finding).
+ *                    See D-16 in MIGRATION_TOOLING_PLAN.md for the rationale on
+ *                    why warn is the v1 default.
+ *   --github         Emit `::warning::` / `::error::` lines for GitHub Actions
+ *                    annotations in addition to the normal text output.
  *   --help, -h       Show this message
  *
  * Exit codes:
- *   0 — no findings (or only `info`-level findings; none defined yet)
- *   1 — at least one finding (warn or error)
+ *   0 — no findings, or `--mode warn` (the default) regardless of findings
+ *   1 — `--mode block` and at least one `error`-severity finding
  *   2 — file invalid / can't parse
  */
 
@@ -53,14 +71,24 @@ export interface Finding {
   fix?: string;
 }
 
+export type GateMode = "warn" | "block";
+
 interface CliOpts {
   source: string;
   json: boolean;
   help: boolean;
+  mode: GateMode;
+  github: boolean;
 }
 
 function parseArgs(argv: string[]): CliOpts {
-  const opts: CliOpts = { source: ".", json: false, help: false };
+  const opts: CliOpts = {
+    source: ".",
+    json: false,
+    help: false,
+    mode: "warn",
+    github: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     switch (flag) {
@@ -69,6 +97,20 @@ function parseArgs(argv: string[]): CliOpts {
         break;
       case "--json":
         opts.json = true;
+        break;
+      case "--mode": {
+        const value = argv[++i];
+        if (value !== "warn" && value !== "block") {
+          console.error(
+            `audit: --mode must be "warn" or "block" (got "${value ?? ""}")`,
+          );
+          process.exit(2);
+        }
+        opts.mode = value;
+        break;
+      }
+      case "--github":
+        opts.github = true;
         break;
       case "--help":
       case "-h":
@@ -91,14 +133,18 @@ function showHelp(): void {
     npx -p @decocms/start deco-audit-observability [options]
 
   Options:
-    --source <dir>   Site directory (default: .)
-    --json           Emit findings as JSON
-    --help, -h       This message
+    --source <dir>     Site directory (default: .)
+    --json             Emit findings as JSON
+    --mode <m>         "warn" (default, exit 0) | "block" (exit 1 on errors)
+    --github           Emit ::warning::/::error:: lines for GitHub Actions
+    --help, -h         This message
 
   Exit codes:
-    0   no findings
-    1   one or more findings (warn or error)
+    0   no findings, OR --mode warn (default — annotate and move on)
+    1   --mode block AND at least one error-severity finding
     2   wrangler.jsonc missing or unparseable
+
+  See D-16 in MIGRATION_TOOLING_PLAN.md for the v1 "warn-only" policy.
 `);
 }
 
@@ -236,6 +282,138 @@ export function auditObservabilityBlock(
   return findings;
 }
 
+/**
+ * Fleet-config drift rules — owned by the same audit because the
+ * cumulative effect of "observability block correct, bindings missing"
+ * is identical to "observability block missing" (no data lands in
+ * ClickHouse).
+ *
+ * The CLI composes `auditObservabilityBlock` + `auditFleetBindings`.
+ * Both return Finding[]; callers concatenate.
+ */
+export interface WranglerLike {
+  observability?: ObservabilityBlock;
+  version_metadata?: { binding?: string } | unknown;
+  analytics_engine_datasets?: Array<{ binding?: string; dataset?: string }> | unknown;
+  tail_consumers?: Array<{ service?: string; environment?: string }> | unknown;
+  vars?: Record<string, unknown> | unknown;
+}
+
+export function auditFleetBindings(wrangler: WranglerLike): Finding[] {
+  const findings: Finding[] = [];
+
+  // version_metadata — required so `service.version` is stamped on every
+  // span and log line. Without it, regressions can't be tied to a
+  // specific deployment.
+  const vmBinding =
+    typeof wrangler.version_metadata === "object" &&
+    wrangler.version_metadata !== null &&
+    "binding" in wrangler.version_metadata
+      ? (wrangler.version_metadata as { binding?: string }).binding
+      : undefined;
+  if (!vmBinding) {
+    findings.push({
+      id: "version_metadata_binding_missing",
+      severity: "error",
+      message:
+        "wrangler.jsonc is missing a `version_metadata.binding` entry. " +
+        "`service.version` won't appear on spans/logs and the deploy-correlation " +
+        "panel will be empty. Recommended value: `CF_VERSION_METADATA`.",
+      fix: "npx -p @decocms/start deco-cf-observability --write",
+    });
+  }
+
+  // DECO_METRICS — Analytics Engine binding. The AE meter is the hot-
+  // path CF dashboard view; OTLP works without it but we lose the
+  // operator-grade short-window panels.
+  const aeDatasets = Array.isArray(wrangler.analytics_engine_datasets)
+    ? (wrangler.analytics_engine_datasets as Array<{ binding?: string }>)
+    : [];
+  const hasMetricsBinding = aeDatasets.some((d) => d?.binding === "DECO_METRICS");
+  if (!hasMetricsBinding) {
+    findings.push({
+      id: "analytics_engine_binding_missing",
+      severity: "warn",
+      message:
+        "wrangler.jsonc has no `analytics_engine_datasets[].binding == 'DECO_METRICS'`. " +
+        "The AE meter is off; the hot-path operator dashboards in CF will be empty. " +
+        "OTLP metrics keep flowing if `DECO_OTEL_METRICS_ENDPOINT` is set.",
+      fix: "npx -p @decocms/start deco-cf-observability --write",
+    });
+  }
+
+  // tail_consumers — must list deco-otel-tail. Phase 1 enrichment is
+  // useless without the tail consumer firing.
+  const tail = Array.isArray(wrangler.tail_consumers)
+    ? (wrangler.tail_consumers as Array<{ service?: string }>)
+    : [];
+  const hasTailConsumer = tail.some((t) => t?.service === "deco-otel-tail");
+  if (!hasTailConsumer) {
+    findings.push({
+      id: "tail_consumer_missing",
+      severity: "error",
+      message:
+        "wrangler.jsonc has no `tail_consumers[].service == 'deco-otel-tail'` entry. " +
+        "100% error-capture is broken — only the head-sampled CF Destinations path " +
+        "will report errors, and isolate crashes will be invisible.",
+      fix: "npx -p @decocms/start deco-cf-observability --write",
+    });
+  }
+
+  // DECO_OTEL_*_ENDPOINT env vars. Audit each separately so the message
+  // explains which channel is silently no-op.
+  const vars =
+    typeof wrangler.vars === "object" && wrangler.vars !== null
+      ? (wrangler.vars as Record<string, unknown>)
+      : {};
+  const checkVar = (id: string, name: string, severity: Severity, channel: string) => {
+    const v = vars[name];
+    if (typeof v !== "string" || v.length === 0) {
+      findings.push({
+        id,
+        severity,
+        message:
+          `wrangler.jsonc \`vars.${name}\` is not set. ${channel} is a no-op; ` +
+          `data captured in this channel never lands in ClickHouse. ` +
+          `See docs/observability.md for the canonical endpoints.`,
+        fix: "npx -p @decocms/start deco-cf-observability --write",
+      });
+    }
+  };
+  checkVar(
+    "otel_metrics_endpoint_missing",
+    "DECO_OTEL_METRICS_ENDPOINT",
+    "warn",
+    "OTLP metrics direct-POST",
+  );
+  checkVar(
+    "otel_traces_endpoint_missing",
+    "DECO_OTEL_TRACES_ENDPOINT",
+    "warn",
+    "OTLP traces direct-POST",
+  );
+  checkVar(
+    "otel_logs_endpoint_missing",
+    "DECO_OTEL_LOGS_ENDPOINT",
+    "warn",
+    "OTLP error-log direct-POST",
+  );
+
+  return findings;
+}
+
+/**
+ * One-stop call for the full wrangler audit — composes the
+ * observability-block rules with the fleet-binding rules. Both keep
+ * working standalone for fine-grained tests.
+ */
+export function auditWranglerConfig(wrangler: WranglerLike): Finding[] {
+  return [
+    ...auditObservabilityBlock(wrangler.observability),
+    ...auditFleetBindings(wrangler),
+  ];
+}
+
 function findingsToText(file: string, findings: Finding[]): string {
   if (findings.length === 0) {
     return `OK   ${file} — observability config looks canonical`;
@@ -263,26 +441,49 @@ function main(): void {
     process.exit(2);
   }
 
-  let parsed: { observability?: ObservabilityBlock };
+  let parsed: WranglerLike;
   try {
-    parsed = parseJsonc(fs.readFileSync(file, "utf8"));
+    parsed = parseJsonc(fs.readFileSync(file, "utf8")) as WranglerLike;
   } catch (err) {
     console.error(`audit: ${file} could not be parsed: ${(err as Error).message}`);
     process.exit(2);
   }
 
-  const findings = auditObservabilityBlock(parsed.observability);
+  const findings = auditWranglerConfig(parsed);
 
   if (opts.json) {
-    process.stdout.write(JSON.stringify({ file, findings }, null, 2) + "\n");
+    process.stdout.write(
+      JSON.stringify({ file, mode: opts.mode, findings }, null, 2) + "\n",
+    );
   } else {
     process.stdout.write(findingsToText(file, findings) + "\n");
   }
 
-  // Any finding (warn or error) is a non-zero exit. info-severity would not
-  // flip the exit, but no info-severity rules are defined yet.
-  const blocking = findings.some((f) => f.severity !== "info");
-  process.exit(blocking ? 1 : 0);
+  if (opts.github) {
+    for (const f of findings) {
+      // GitHub Actions workflow command. `error` and `warning` annotate the
+      // diff; `notice` is informational. We never emit `error` in warn mode
+      // even for error-severity rules — the v1 policy is annotate-don't-fail.
+      const level = opts.mode === "block" && f.severity === "error"
+        ? "error"
+        : f.severity === "info" ? "notice" : "warning";
+      const msg = `${f.message}${f.fix ? ` (fix: ${f.fix})` : ""}`;
+      const escaped = msg.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(
+        /\n/g,
+        "%0A",
+      );
+      process.stdout.write(`::${level} title=${f.id}::${escaped}\n`);
+    }
+  }
+
+  // Exit policy: D-16 / Phase 6 decision.
+  //   warn   — annotate only; always exit 0 (CI sees the findings but ships)
+  //   block  — exit 1 on any `error`-severity finding
+  // The default is `warn` because storefronts are upgraded over weeks; a
+  // day-one block would fail PRs that have nothing to do with observability.
+  const shouldFail = opts.mode === "block" &&
+    findings.some((f) => f.severity === "error");
+  process.exit(shouldFail ? 1 : 0);
 }
 
 // Only run when invoked directly, not when imported by tests.
