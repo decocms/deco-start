@@ -39,12 +39,16 @@ import {
 } from "./cacheHeaders";
 import { buildHtmlShell } from "./htmlShell";
 import {
+  getActiveSpan,
   logRequest,
   recordCacheMetric,
   recordRequestMetric,
+  setSpanAttribute,
   withTracing,
 } from "./observability";
+import { _setRequestTraceContext } from "./otel";
 import { setRuntimeEnv } from "./otelAdapters";
+import { parseTraceparent } from "./otelHttpTracer";
 import { RequestContext } from "./requestContext";
 import { cleanPathForCacheKey } from "./urlUtils";
 import { type Device, isMobileUA } from "./useDevice";
@@ -61,6 +65,25 @@ import { isDevMode } from "./env";
  * `getBuildHash()` below.
  */
 declare const __DECO_BUILD_HASH__: string | undefined;
+
+/**
+ * The five canonical cache-decision strings stamped on the `X-Cache`
+ * response header (and on the `decision` label of `cache_*_total`
+ * metrics). Used by the request-metric label enrichment to keep label
+ * cardinality bounded — anything else (e.g. an upstream proxy that sets
+ * its own `X-Cache: random-text`) is dropped from the label.
+ */
+type CacheDecisionString = "HIT" | "STALE-HIT" | "STALE-ERROR" | "MISS" | "BYPASS";
+
+function isCacheDecision(value: string | null): value is CacheDecisionString {
+  return (
+    value === "HIT" ||
+    value === "STALE-HIT" ||
+    value === "STALE-ERROR" ||
+    value === "MISS" ||
+    value === "BYPASS"
+  );
+}
 
 /**
  * Append Link preload headers for CSS and fonts so the browser starts
@@ -1002,6 +1025,14 @@ export function createDecoWorkerEntry(
         request = injectGeoCookies(request);
       }
 
+      // Captured inside the withTracing scope so the outer post-response
+      // path (response headers, metric labels, log attrs) can stamp the
+      // trace ID without re-entering AsyncLocalStorage. The closure
+      // captures whatever the framework span saw; if the bridge tracer
+      // is a no-op, both stay empty strings and the header writes below
+      // become no-ops.
+      const identity = { requestId: "", traceId: "" };
+
       // Wrap the entire request in a RequestContext so that all code
       // in the call stack (loaders, invoke handlers, vtexFetchWithCookies)
       // can access the request and write response headers.
@@ -1011,16 +1042,43 @@ export function createDecoWorkerEntry(
         // via getRuntimeEnv() in sdk/otelAdapters.ts.
         setRuntimeEnv(env);
 
+        // RequestContext.run already resolved request.id from the
+        // inbound headers (precedence: x-request-id → cf-ray → UUID).
+        // Lift it into the closure so the response-write path below has
+        // access without going back through ALS.
+        identity.requestId = RequestContext.requestId ?? "";
+
+        // W3C tracecontext propagation — parse the inbound `traceparent`
+        // header so the OTLP trace exporter creates root spans under
+        // the caller's trace ID. No-op when the header is absent or
+        // malformed; the exporter falls back to a fresh trace ID.
+        const incomingTraceparent = request.headers.get("traceparent");
+        const remoteTrace = parseTraceparent(incomingTraceparent);
+        if (remoteTrace) _setRequestTraceContext(remoteTrace);
+
         // Wrap inner handler in a single root span carrying our normalized
-        // path/method attributes. With Cloudflare-managed trace export
-        // (`observability.traces.destinations` in wrangler.jsonc), this
-        // span — and any `withTracing` spans nested below it — flow to
-        // HyperDX via CF's platform-managed OTLP push, since the bridge
-        // in `instrumentWorker` configures the `@opentelemetry/api`
-        // global tracer for us.
+        // path/method attributes. The framework span flows BOTH ways:
+        //  - via the OTLP direct-POST tracer (when DECO_OTEL_TRACES_ENDPOINT
+        //    is set) → ClickHouse `otel_traces`,
+        //  - via the @opentelemetry/api bridge → CF Workers Observability
+        //    when `observability.traces.enabled = true` in wrangler.jsonc.
+        // See `configureTracerStack` in `otel.ts` for the composition.
         return withTracing(
           "deco.http.request",
           async () => {
+            // Stamp identity on the root span so every child span +
+            // every log emitted under the same active span carries
+            // them. Done inside the span scope so getActiveSpan()
+            // returns the right span. Cheap no-op for any of these
+            // when no tracer is configured.
+            if (identity.requestId) {
+              setSpanAttribute("request.id", identity.requestId);
+            }
+            const spanCtx = getActiveSpan()?.spanContext?.();
+            if (spanCtx?.traceId) {
+              identity.traceId = spanCtx.traceId;
+            }
+
             // Run app middleware (injects app state into RequestContext.bag,
             // runs registered middleware like VTEX cookie forwarding).
             const appMw = getAppMiddleware();
@@ -1040,19 +1098,82 @@ export function createDecoWorkerEntry(
       // invoke handlers, etc.) may independently append the same cookie.
       deduplicateSetCookies(response);
 
-      const finalResponse = applySecurityHeaders(response);
+      let finalResponse = applySecurityHeaders(response);
+
+      // Echo request.id + trace.id back to the client / tail worker.
+      // The CF tail worker reads these headers off the response to
+      // stamp `request.id` / `trace.id` on tail rows — they're the
+      // join key against direct-POST logs/metrics (which carry the
+      // same values via the logger + span attributes).
+      //
+      // Headers are written defensively: if a downstream component
+      // already set them (e.g. a proxy upstream), the existing value
+      // wins. That's intentional — a load-balancer-supplied request.id
+      // is more useful for cross-system correlation than ours.
+      if (identity.requestId || identity.traceId) {
+        // applySecurityHeaders may return either the original Response
+        // (HTML path, fresh Headers) or the same Response (non-HTML
+        // path). Either way Response.headers is mutable on Workers, so
+        // we can set on it directly.
+        if (identity.requestId && !finalResponse.headers.has("x-request-id")) {
+          try {
+            finalResponse.headers.set("x-request-id", identity.requestId);
+          } catch {
+            // Some intermediaries seal response headers (e.g. cached
+            // responses replayed from the Cache API). Fall back to
+            // building a new Response.
+            const headers = new Headers(finalResponse.headers);
+            if (identity.requestId) headers.set("x-request-id", identity.requestId);
+            if (identity.traceId) headers.set("x-trace-id", identity.traceId);
+            finalResponse = new Response(finalResponse.body, {
+              status: finalResponse.status,
+              statusText: finalResponse.statusText,
+              headers,
+            });
+          }
+        }
+        if (identity.traceId && !finalResponse.headers.has("x-trace-id")) {
+          try {
+            finalResponse.headers.set("x-trace-id", identity.traceId);
+          } catch {
+            /* see above — sealed header case already handled */
+          }
+        }
+      }
 
       // Metrics + structured request log. Done after security headers so
       // the recorded status reflects what the client actually receives.
       // Both calls are no-ops when no meter / logger is configured.
       const durationMs = performance.now() - startedAt;
       try {
-        recordRequestMetric(method, reqUrl.pathname, finalResponse.status, durationMs);
+        // Phase 2 / D-11 canonical labels — lift the cache decision +
+        // profile + region off the response we just built so dashboards
+        // can answer "cache hit rate per route" from `http_requests_total`
+        // alone, no join to `cache_*_total` required.
+        const xCacheRaw = finalResponse.headers.get("X-Cache");
+        const cacheDecision = isCacheDecision(xCacheRaw) ? xCacheRaw : undefined;
+        const colo = (request as unknown as { cf?: { colo?: string } }).cf?.colo;
+        recordRequestMetric(method, reqUrl.pathname, finalResponse.status, durationMs, {
+          ...(cacheDecision ? { cache_decision: cacheDecision } : {}),
+          ...(cacheDecision ? { cache_layer: "edge" as const } : {}),
+          ...(typeof colo === "string" && colo.length > 0 ? { region: colo } : {}),
+          ...(identity.requestId || identity.traceId
+            ? {
+                extra: {
+                  ...(identity.requestId ? { "request.id": identity.requestId } : {}),
+                  ...(identity.traceId ? { "trace.id": identity.traceId } : {}),
+                },
+              }
+            : {}),
+        });
       } catch {
         /* swallow — observability must never fail the request */
       }
       try {
-        logRequest(request, finalResponse.status, durationMs);
+        logRequest(request, finalResponse.status, durationMs, {
+          ...(identity.requestId ? { "request.id": identity.requestId } : {}),
+          ...(identity.traceId ? { "trace.id": identity.traceId } : {}),
+        });
       } catch {
         /* swallow */
       }
@@ -1295,7 +1416,7 @@ export function createDecoWorkerEntry(
         const ageSec = storedAt > 0 ? (Date.now() - storedAt) / 1000 : Infinity;
 
         if (ageSec < sfnEdge.fresh) {
-          recordCacheMetric(true, sfnProfile, "HIT");
+          recordCacheMetric(true, sfnProfile, "HIT", "edge");
           const out = new Response(sfnCached.body, sfnCached);
           const hdrs = cacheHeaders(sfnProfile);
           for (const [k, v] of Object.entries(hdrs)) out.headers.set(k, v);
@@ -1305,7 +1426,7 @@ export function createDecoWorkerEntry(
         }
 
         if (ageSec < sfnEdge.fresh + sfnEdge.swr) {
-          recordCacheMetric(true, sfnProfile, "STALE-HIT");
+          recordCacheMetric(true, sfnProfile, "STALE-HIT", "edge");
           // Stale-while-revalidate: serve stale, refresh in background
           ctx.waitUntil(
             (async () => {
@@ -1342,7 +1463,7 @@ export function createDecoWorkerEntry(
       }
 
       // Cache MISS — fetch origin with the body we already read
-      recordCacheMetric(false, sfnProfile, "MISS");
+      recordCacheMetric(false, sfnProfile, "MISS", "edge");
       const origin = await serverEntry.fetch(originClone, env, ctx);
 
       // Only cache responses explicitly marked as cacheable by the handler
@@ -1554,13 +1675,13 @@ export function createDecoWorkerEntry(
 
       if (ageSec < edgeConfig.fresh) {
         // FRESH HIT — serve immediately
-        recordCacheMetric(true, profile, "HIT");
+        recordCacheMetric(true, profile, "HIT", "edge");
         return dressResponse(cached, "HIT");
       }
 
       if (ageSec < edgeConfig.fresh + edgeConfig.swr) {
         // STALE-HIT within SWR window — serve stale, revalidate in background
-        recordCacheMetric(true, profile, "STALE-HIT");
+        recordCacheMetric(true, profile, "STALE-HIT", "edge");
         revalidateInBackground();
         return dressResponse(cached, "STALE-HIT", { "X-Cache-Age": String(Math.round(ageSec)) });
       }
@@ -1570,7 +1691,7 @@ export function createDecoWorkerEntry(
     }
 
     // Cache MISS or past SWR window — fetch from origin
-    recordCacheMetric(false, profile, "MISS");
+    recordCacheMetric(false, profile, "MISS", "edge");
     let origin: Response;
     try {
       origin = await serverEntry.fetch(request, env, ctx);
@@ -1584,7 +1705,7 @@ export function createDecoWorkerEntry(
           console.warn(
             `[edge-cache] Origin threw, serving stale (age=${Math.round(ageSec)}s, sie=${edgeConfig.sie}s)`,
           );
-          recordCacheMetric(true, profile, "STALE-ERROR");
+          recordCacheMetric(true, profile, "STALE-ERROR", "edge");
           return dressResponse(cached, "STALE-ERROR", {
             "X-Cache-Age": String(Math.round(ageSec)),
           });
@@ -1604,7 +1725,7 @@ export function createDecoWorkerEntry(
             console.warn(
               `[edge-cache] Origin ${origin.status}, serving stale (age=${Math.round(ageSec)}s)`,
             );
-            recordCacheMetric(true, profile, "STALE-ERROR");
+            recordCacheMetric(true, profile, "STALE-ERROR", "edge");
             return dressResponse(cached, "STALE-ERROR", {
               "X-Cache-Age": String(Math.round(ageSec)),
               "X-Cache-Origin-Status": String(origin.status),

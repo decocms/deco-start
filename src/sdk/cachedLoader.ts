@@ -99,13 +99,13 @@ export function createCachedLoader<TProps, TResult>(
     const inflight = inflightRequests.get(cacheKey);
     if (inflight) {
       // Treat in-flight dedup as a cache hit — avoided the origin call.
-      recordCacheMetric(true, name);
+      recordCacheMetric(true, name, undefined, "cachedLoader");
       return inflight as Promise<TResult>;
     }
 
     if (isDev) {
       // Dev mode: no caching, but still useful to count attempts.
-      recordCacheMetric(false, name);
+      recordCacheMetric(false, name, undefined, "cachedLoader");
       const promise = withTracing(
         "deco.cachedLoader",
         () => loaderFn(props).finally(() => inflightRequests.delete(cacheKey)),
@@ -121,20 +121,20 @@ export function createCachedLoader<TProps, TResult>(
 
     if (policy === "no-cache") {
       if (entry && !isStale) {
-        recordCacheMetric(true, name);
+        recordCacheMetric(true, name, "HIT", "cachedLoader");
         return entry.value;
       }
     }
 
     if (policy === "stale-while-revalidate") {
       if (entry && !isStale) {
-        recordCacheMetric(true, name);
+        recordCacheMetric(true, name, "HIT", "cachedLoader");
         return entry.value;
       }
 
       if (entry && isStale && !entry.refreshing) {
         // Stale-while-revalidate hit: serve stale, refresh in background.
-        recordCacheMetric(true, name);
+        recordCacheMetric(true, name, "STALE-HIT", "cachedLoader");
         entry.refreshing = true;
         loaderFn(props)
           .then((result) => {
@@ -156,14 +156,17 @@ export function createCachedLoader<TProps, TResult>(
       }
 
       if (entry) {
-        recordCacheMetric(true, name);
+        // Past SIE window — still serve the stale value once but mark
+        // the decision as STALE-ERROR so dashboards can distinguish
+        // this from healthy SWR.
+        recordCacheMetric(true, name, "STALE-ERROR", "cachedLoader");
         return entry.value;
       }
     }
 
     // Cache miss — emit metric, then run loader inside a span so individual
     // slow loaders are visible in traces.
-    recordCacheMetric(false, name);
+    recordCacheMetric(false, name, "MISS", "cachedLoader");
     const promise = withTracing("deco.cachedLoader", () => loaderFn(props), {
       "deco.loader": name,
       "deco.cache.policy": policy,

@@ -25,6 +25,7 @@
  */
 
 import { getActiveSpan } from "./observability";
+import { RequestContext } from "./requestContext";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -252,20 +253,30 @@ function emit(level: LogLevel, msg: string, attrs?: Record<string, unknown>): vo
   // to its trace in ClickStack/HyperDX. No active span → no-op; caller
   // attrs always win so explicit `trace_id` overrides keep working.
   const ctx = getActiveSpan()?.spanContext?.();
-  const traceAttrs: Record<string, unknown> | undefined = ctx
-    ? { trace_id: ctx.traceId, span_id: ctx.spanId }
-    : undefined;
-  // Merge order: floor → trace context → caller attrs. Caller wins; trace
-  // context only overrides floor (which never sets trace_id anyway).
+  // Pull request.id from the AsyncLocalStorage-backed RequestContext so
+  // every log line in the request also carries the join key used by
+  // direct-POST metrics + tail-worker rows. Single read, no allocation
+  // when outside a request scope.
+  const requestId = RequestContext.requestId;
+  const requestAttrs: Record<string, unknown> | undefined =
+    ctx || requestId
+      ? {
+          ...(ctx ? { trace_id: ctx.traceId, span_id: ctx.spanId } : {}),
+          ...(requestId ? { "request.id": requestId } : {}),
+        }
+      : undefined;
+  // Merge order: floor → trace / request context → caller attrs. Caller
+  // wins; the request-scoped context only overrides floor keys (which
+  // never set `trace_id` / `request.id` anyway).
   const s = getState();
   const hasFloor = Object.keys(s.attributeFloor).length > 0;
   let merged: Record<string, unknown> | undefined;
-  if (!hasFloor && !traceAttrs && !attrs) {
+  if (!hasFloor && !requestAttrs && !attrs) {
     merged = undefined;
   } else {
     merged = {
       ...(hasFloor ? s.attributeFloor : {}),
-      ...(traceAttrs ?? {}),
+      ...(requestAttrs ?? {}),
       ...(attrs ?? {}),
     };
   }

@@ -52,6 +52,8 @@ export {
 // Tracer / meter / request log primitives (re-exported from the middleware)
 export {
   type CacheDecision,
+  type CacheLayer,
+  type CommerceMetricLabels,
   configureMeter,
   configureTracer,
   getActiveSpan,
@@ -62,16 +64,32 @@ export {
   type MeterAdapter,
   MetricNames,
   recordCacheMetric,
+  recordCommerceMetric,
   recordRequestMetric,
+  type RequestMetricLabels,
   type RequestStore,
   type Span,
   setObservabilitySpanStore,
   setSpanAttribute,
+  statusClassFor,
   type TracerAdapter,
   withTracing,
 } from "../middleware/observability";
 // Worker-entry wrapper + adapter wiring
 export { instrumentWorker, type OtelOptions } from "./otel";
+// Direct-POST OTLP trace exporter (Phase 3 / D-12). Exported for sites
+// that need to wire a custom traces endpoint outside `instrumentWorker`,
+// and for the audit tooling that asserts framework spans are flowing.
+export {
+  createOtlpHttpTracerAdapter,
+  newSpanId,
+  newTraceId,
+  type OtlpHttpTracer,
+  type OtlpHttpTracerOptions,
+  parseTraceparent,
+  shouldSampleTrace,
+  type TraceContext,
+} from "./otelHttpTracer";
 // AE meter adapter + runtime env helpers (for tests / custom wiring)
 export {
   type AnalyticsEngineDataset,
