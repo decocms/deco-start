@@ -293,9 +293,10 @@ Generates `MIGRATION_REPORT.md` with:
 ### Phase 7: Bootstrap
 
 Runs automatically after all phases (skipped in `--dry-run`):
-1. `npm install` (or `bun install`)
-2. `npx tsx node_modules/@decocms/start/scripts/generate-blocks.ts`
-3. `npx tsr generate`
+1. `bun install`
+2. `bunx tsx node_modules/@decocms/start/scripts/generate-blocks.ts`
+3. `bunx tsx node_modules/@decocms/start/scripts/generate-invoke.ts` — emits `src/server/invoke.gen.ts` (top-level `createServerFn` declarations for every VTEX action, plus the `forwardResponseCookies()` Set-Cookie bridge). Without this step the site falls back to the `/deco/invoke/...` proxy and the cart breaks at `/checkout` after addItemToCart. See `.cursor/skills/deco-server-functions-invoke/troubleshooting.md` ("Cart 'forgets' items between requests") for the failure mode.
+4. `bunx tsr generate`
 
 ### Phase 8: Compile
 

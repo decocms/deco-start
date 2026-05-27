@@ -628,6 +628,85 @@ describe("rule: framework-todos", () => {
   });
 });
 
+describe("rule: vtex-proxy-handler-missing", () => {
+  // Canonical wiring matching scripts/migrate/templates/server-entry.ts (generateVtexWorkerEntry):
+  // imports from @decocms/apps/vtex/utils/proxy and passes proxyHandler to createDecoWorkerEntry.
+  const okWorkerEntry = `
+import { createDecoWorkerEntry } from "@decocms/start/sdk/workerEntry";
+import { shouldProxyToVtex, createVtexCheckoutProxy } from "@decocms/apps/vtex/utils/proxy";
+const proxy = createVtexCheckoutProxy({ account: "x", checkoutOrigin: "x.vtexcommercestable.com.br" });
+export default createDecoWorkerEntry(serverEntry, {
+  proxyHandler: async (req, url) => {
+    if (!shouldProxyToVtex(url.pathname)) return null;
+    return proxy(req, url);
+  },
+});
+`;
+
+  it("does not flag non-VTEX sites", () => {
+    const fs = makeFs({
+      "/site/src/index.ts": "export const x = 1;",
+      // Worker entry intentionally without the proxy import — non-VTEX
+      // sites don't need it and shouldn't be flagged.
+      "/site/src/worker-entry.ts": "export default {};",
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "vtex-proxy-handler-missing")!;
+    expect(r.findings).toEqual([]);
+  });
+
+  it("does not flag VTEX site whose worker-entry has the proxyHandler wired", () => {
+    const fs = makeFs({
+      "/site/src/commerceLoaders.ts": "import {} from \"@decocms/apps/vtex/mod\";",
+      "/site/src/worker-entry.ts": okWorkerEntry,
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "vtex-proxy-handler-missing")!;
+    expect(r.findings).toEqual([]);
+  });
+
+  it("flags VTEX site missing src/worker-entry.ts entirely", () => {
+    const fs = makeFs({
+      "/site/src/commerceLoaders.ts": "import {} from \"@decocms/apps/vtex/mod\";",
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "vtex-proxy-handler-missing")!;
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].severity).toBe("info");
+    expect(r.findings[0].message).toContain("no src/worker-entry.ts");
+  });
+
+  it("flags VTEX site whose worker-entry omits the proxy import", () => {
+    const fs = makeFs({
+      "/site/src/commerceLoaders.ts": "import {} from \"@decocms/apps/vtex/mod\";",
+      "/site/src/worker-entry.ts": `
+import { createDecoWorkerEntry } from "@decocms/start/sdk/workerEntry";
+export default createDecoWorkerEntry(serverEntry, { admin: {} });
+`,
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "vtex-proxy-handler-missing")!;
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].message).toContain("no `@decocms/apps/vtex/utils/proxy` import");
+  });
+
+  it("flags VTEX site that imports proxy helpers but never wires proxyHandler", () => {
+    const fs = makeFs({
+      "/site/src/commerceLoaders.ts": "import {} from \"@decocms/apps/vtex/mod\";",
+      "/site/src/worker-entry.ts": `
+import { createDecoWorkerEntry } from "@decocms/start/sdk/workerEntry";
+import { shouldProxyToVtex } from "@decocms/apps/vtex/utils/proxy";
+// note: shouldProxyToVtex imported but not used in a proxyHandler.
+export default createDecoWorkerEntry(serverEntry, { admin: {} });
+`,
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "vtex-proxy-handler-missing")!;
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].message).toContain("no `proxyHandler:` is wired");
+  });
+});
+
 describe("internals", () => {
   it("extractExports parses common forms (top-level, unindented)", () => {
     const code = [

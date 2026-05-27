@@ -31,6 +31,19 @@ export async function vtexFetchWithCookies<T>(
 
 Use in: `checkout.ts`, `auth.ts`, `session.ts` (create/edit).
 
+### Pitfall: never copy with `Headers.entries()` or `forEach`
+
+When a caller pushes the captured cookies onto the request scope's response headers (e.g. `RequestContext.responseHeaders.append("set-cookie", c)`), the eventual HTTP-response bridge must read them back with `Headers.getSetCookie()`. **Do not** iterate `headers.entries()` (or `forEach`) and re-append, because both collapse multiple `Set-Cookie` values into a single comma-joined string, which browsers silently discard. The result: the cart appears empty after addItemToCart even though the action returned an OrderForm with items.
+
+Two bridges where this rule applies in a TanStack Start site:
+
+- `src/server/invoke.gen.ts` — the auto-generated `forwardResponseCookies()` already uses `getSetCookie()`. Re-run `bunx tsx node_modules/@decocms/start/scripts/generate-invoke.ts` if the file is missing or stale.
+- `@decocms/start/src/admin/invoke.ts` — `forwardCtxHeadersTo()` does the same for the `/deco/invoke/...` HTTP path. Versions ≥ 5.0.0 ship the fix.
+
+### Client-side `setOrderFormIdCookie` is defense-in-depth, not the fix
+
+Some migrated `useCart` hooks (e.g. miess-01-tanstack) manually call `document.cookie = "checkout.vtex.com__orderFormId=..."` after each cart action. That only patches one cookie — `segment`, `sc`, `vtex_session` etc. are still dropped. Keep the workaround if you like (cheap, idempotent), but the real fix is the two server-side bridges above. Once both are in place, the manual cookie write can be removed without regressing the cart.
+
 ## buildAuthCookieHeader
 
 VTEX IO GraphQL at `{account}.myvtex.com` requires both cookie names:

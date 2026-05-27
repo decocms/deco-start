@@ -1578,12 +1578,96 @@ const rulePackageManagerMissing: Rule = {
   },
 };
 
+/* ------------------------------------------------------------------ */
+/* Rule N — `vtex-proxy-handler-missing` — worker-entry without proxy */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Every VTEX storefront on @decocms/start needs a reverse proxy for
+ * `/checkout/*`, `/account/*`, `/api/*`, `/files/*`, etc. — those paths
+ * must hit the VTEX origin (not TanStack Start) so the user lands on
+ * the real checkout UI carrying their VTEX session cookies.
+ *
+ * The canonical wiring lives in `src/worker-entry.ts` via
+ * `createDecoWorkerEntry(..., { proxyHandler })`, where the handler
+ * calls `shouldProxyToVtex(url.pathname)` + a `createVtexCheckoutProxy`
+ * instance. The migration scaffold (`scripts/migrate/templates/server-entry.ts`)
+ * emits this by default for VTEX sites, but two regressions sneak it out:
+ *
+ *  1. A site migrated by a pre-scaffold version of the script (e.g.
+ *     before the VTEX worker-entry template existed).
+ *  2. Someone refactors `worker-entry.ts` and drops the proxy block.
+ *
+ * Without the proxy, add-to-cart still "succeeds" (the action runs
+ * server-side via TanStack RPC), but clicking "Finalizar" navigates
+ * to `/checkout` on the storefront — which returns the SPA shell —
+ * and the user never reaches VTEX checkout. The VTEX-side orderForm
+ * lives at vtexcommercestable.com.br with no way to see it.
+ *
+ * Detection is cheap: VTEX sites should import `shouldProxyToVtex`
+ * (or wire a `proxyHandler:` to `createDecoWorkerEntry`). We flag
+ * absence as `info` (not warning) because old in-prod sites we
+ * deliberately don't touch would otherwise stay noisy.
+ */
+const ruleVtexProxyHandlerMissing: Rule = {
+  id: "vtex-proxy-handler-missing",
+  title: "VTEX worker-entry missing the checkout/API proxy handler",
+  run({ siteDir, fs }: RuleContext): Finding[] {
+    // Only run when the site is actually VTEX. The cheapest signal is
+    // any import from `@decocms/apps/vtex/...` in src/ — every VTEX
+    // site has at least one (commerceLoaders, hooks, types, etc.).
+    const srcFiles = fs.glob(siteDir, "src/**/*.{ts,tsx}", SRC_GLOB_EXCLUDES);
+    const isVtex = srcFiles.some((abs) =>
+      fs.readText(abs).includes("@decocms/apps/vtex"),
+    );
+    if (!isVtex) return [];
+
+    const workerEntryAbs = `${siteDir}/src/worker-entry.ts`;
+    if (!fs.exists(workerEntryAbs)) {
+      return [
+        {
+          rule: "vtex-proxy-handler-missing",
+          severity: "info",
+          file: "src/worker-entry.ts",
+          message:
+            "VTEX site has no src/worker-entry.ts — /checkout proxy can't run, the user will see the SPA shell instead of VTEX checkout",
+          fix: "Re-run `deco-migrate` (the scaffold emits a worker-entry with createVtexCheckoutProxy), or copy from scripts/migrate/templates/server-entry.ts",
+        },
+      ];
+    }
+
+    const content = fs.readText(workerEntryAbs);
+    // Match either symbol — sites use the factory function OR the
+    // shouldProxyToVtex predicate as the entry point. Presence of
+    // either is a strong signal the proxy block exists; absence of
+    // both means it was dropped.
+    const hasProxyImport =
+      /from\s+["']@decocms\/apps\/vtex\/utils\/proxy["']/.test(content);
+    const hasProxyHandler = /proxyHandler\s*:/.test(content);
+
+    if (hasProxyImport && hasProxyHandler) return [];
+
+    return [
+      {
+        rule: "vtex-proxy-handler-missing",
+        severity: "info",
+        file: "src/worker-entry.ts",
+        message: hasProxyImport
+          ? "imports proxy helpers but no `proxyHandler:` is wired into createDecoWorkerEntry — /checkout requests will fall through to TanStack and render the SPA shell"
+          : "no `@decocms/apps/vtex/utils/proxy` import — VTEX /checkout, /account, /api won't be proxied to the origin",
+        fix: "Add `proxyHandler` to createDecoWorkerEntry; see scripts/migrate/templates/server-entry.ts (generateVtexWorkerEntry) for the canonical block",
+      },
+    ];
+  },
+};
+
 export const ALL_RULES: Rule[] = [
   ruleDeadLibShims,
   ruleObsoleteVitePlugins,
   ruleDeadRuntimeShim,
   ruleSiteLocalGlobals,
   ruleVtexShimRegression,
+  ruleVtexProxyHandlerMissing,
   ruleLocalWidgetsTypes,
   ruleFrameworkTodos,
   ruleLocalFrameworkDuplicate,
@@ -1606,6 +1690,7 @@ export const _internals = {
     ruleDeadRuntimeShim,
     ruleSiteLocalGlobals,
     ruleVtexShimRegression,
+    ruleVtexProxyHandlerMissing,
     ruleHtmxResidue,
     ruleLocalWidgetsTypes,
     ruleFrameworkTodos,
