@@ -690,6 +690,30 @@ export default createDecoWorkerEntry(serverEntry, { admin: {} });
     expect(r.findings[0].message).toContain("no `@decocms/apps/vtex/utils/proxy` import");
   });
 
+  it("does not flag VTEX site using object-shorthand proxyHandler wiring", () => {
+    // Hand-written worker entries commonly hoist proxyHandler to a top-level
+    // const and pass it via shorthand. The detector must treat
+    // `{ proxyHandler }`, `{ proxyHandler, admin }`, and `{ admin, proxyHandler }`
+    // the same as `proxyHandler: ...` — otherwise the audit cries wolf.
+    const shorthandWorkerEntry = `
+import { createDecoWorkerEntry } from "@decocms/start/sdk/workerEntry";
+import { shouldProxyToVtex, createVtexCheckoutProxy } from "@decocms/apps/vtex/utils/proxy";
+const proxy = createVtexCheckoutProxy({ account: "x", checkoutOrigin: "x.vtexcommercestable.com.br" });
+const proxyHandler = async (req: Request, url: URL) => {
+  if (!shouldProxyToVtex(url.pathname)) return null;
+  return proxy(req, url);
+};
+export default createDecoWorkerEntry(serverEntry, { admin: {}, proxyHandler });
+`;
+    const fs = makeFs({
+      "/site/src/commerceLoaders.ts": "import {} from \"@decocms/apps/vtex/mod\";",
+      "/site/src/worker-entry.ts": shorthandWorkerEntry,
+    });
+    const report = runAudit(SITE, fs);
+    const r = report.rules.find((r) => r.rule === "vtex-proxy-handler-missing")!;
+    expect(r.findings).toEqual([]);
+  });
+
   it("flags VTEX site that imports proxy helpers but never wires proxyHandler", () => {
     const fs = makeFs({
       "/site/src/commerceLoaders.ts": "import {} from \"@decocms/apps/vtex/mod\";",

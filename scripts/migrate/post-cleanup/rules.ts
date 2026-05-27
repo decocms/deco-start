@@ -1643,7 +1643,12 @@ const ruleVtexProxyHandlerMissing: Rule = {
     // both means it was dropped.
     const hasProxyImport =
       /from\s+["']@decocms\/apps\/vtex\/utils\/proxy["']/.test(content);
-    const hasProxyHandler = /proxyHandler\s*:/.test(content);
+    // Match both long form (`proxyHandler: async (...) => ...`) and
+    // object-shorthand wiring (`{ proxyHandler }`, `{ proxyHandler, admin }`).
+    // The anchor `[{,]` requires the identifier to appear as a property —
+    // not as a bare `const proxyHandler = ...` declaration, which is
+    // followed by `=` and wouldn't match either branch.
+    const hasProxyHandler = /[{,]\s*proxyHandler\s*[:,}]/.test(content);
 
     if (hasProxyImport && hasProxyHandler) return [];
 
