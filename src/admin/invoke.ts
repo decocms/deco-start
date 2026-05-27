@@ -58,6 +58,41 @@ export function clearInvokeHandlers(): void {
 
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
 
+/**
+ * Copy headers that handlers wrote to `RequestContext.responseHeaders`
+ * onto an outgoing Response.
+ *
+ * Why this exists and is not a `for…of headers.entries()` one-liner:
+ * `Headers.entries()` (and `forEach`) collapses multiple `Set-Cookie`
+ * values into a single comma-joined string (per the Fetch spec).
+ * Browsers silently discard cookies whose value contains an unescaped
+ * comma, so every VTEX cart action that returns multiple cookies
+ * (`checkout.vtex.com__orderFormId`, `segment`, `sc`, `vtex_session`…)
+ * loses them in transit. The next request creates a fresh empty
+ * orderForm and the user lands on /checkout with an empty cart.
+ *
+ * `Headers.getSetCookie()` is the spec-blessed way to read the
+ * un-collapsed list. We append each value individually onto the
+ * response so the browser sees N distinct `Set-Cookie` headers, and
+ * use `forEach` to copy any non-cookie headers as-is.
+ */
+function forwardCtxHeadersTo(response: Response): void {
+  const ctx = RequestContext.current;
+  if (!ctx) return;
+  const cookies =
+    typeof ctx.responseHeaders.getSetCookie === "function"
+      ? ctx.responseHeaders.getSetCookie()
+      : [];
+  for (const cookie of cookies) {
+    response.headers.append("set-cookie", cookie);
+  }
+  ctx.responseHeaders.forEach((value, key) => {
+    if (key.toLowerCase() !== "set-cookie") {
+      response.headers.append(key, value);
+    }
+  });
+}
+
 const isDev =
   typeof globalThis.process !== "undefined" && globalThis.process.env?.NODE_ENV === "development";
 
@@ -171,17 +206,7 @@ export async function handleInvoke(request: Request): Promise<Response> {
       }
       const filtered = selectFields(result, select);
       const response = new Response(JSON.stringify(filtered), { status: 200, headers: JSON_HEADERS });
-
-      // Copy any headers that handlers wrote to RequestContext.responseHeaders
-      // (e.g., Set-Cookie from proxySetCookie). This mirrors deco-cx/deco's
-      // ctx.response.headers → HTTP Response forwarding.
-      const ctx = RequestContext.current;
-      if (ctx) {
-        for (const [key, value] of ctx.responseHeaders.entries()) {
-          response.headers.append(key, value);
-        }
-      }
-
+      forwardCtxHeadersTo(response);
       return response;
     } catch (error) {
       return errorResponse((error as Error).message, 500, error);
@@ -202,8 +227,11 @@ export async function handleInvoke(request: Request): Promise<Response> {
           try {
             let result = await found.handler(payload, request);
             // If a loader returns a Response, extract its JSON body for batching.
-            // Set-Cookie headers from batch items are not forwarded individually
-            // (use single invoke for auth loaders that need cookie passthrough).
+            // Set-Cookie values from a handler-returned Response are *not*
+            // forwarded — those leave the AsyncLocalStorage scope. Handlers
+            // that need cookie passthrough must write to
+            // RequestContext.responseHeaders (which forwardCtxHeadersTo()
+            // below propagates onto the batch response).
             if (result instanceof Response) {
               try { result = await result.json(); } catch { result = null; }
             }
@@ -217,7 +245,12 @@ export async function handleInvoke(request: Request): Promise<Response> {
       }),
     );
 
-    return new Response(JSON.stringify(results), { status: 200, headers: JSON_HEADERS });
+    const response = new Response(JSON.stringify(results), { status: 200, headers: JSON_HEADERS });
+    // All batch handlers share the same RequestContext, so any Set-Cookie
+    // they appended (e.g. from VTEX vtexFetchWithCookies) is in
+    // `responseHeaders` by now. Forward it as N distinct Set-Cookie headers.
+    forwardCtxHeadersTo(response);
+    return response;
   }
 
   return errorResponse("No invoke key specified", 400);

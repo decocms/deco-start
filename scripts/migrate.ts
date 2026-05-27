@@ -255,6 +255,19 @@ function bootstrap(ctx: { sourceDir: string }) {
   const pm = "bun";
   if (!run(`${pm} install`, "Install dependencies", true)) return;
   run("bunx tsx node_modules/@decocms/start/scripts/generate-blocks.ts", "Generate CMS blocks");
+  // generate-invoke emits src/server/invoke.gen.ts with top-level
+  // createServerFn declarations + the forwardResponseCookies bridge that
+  // propagates VTEX Set-Cookie headers (orderFormId, segment, sc…) to the
+  // browser. Without this file, the site falls back to the proxy
+  // `~/runtime.ts` route which hits /deco/invoke and used to drop cookies,
+  // making the cart appear empty at /checkout after addItemToCart. The
+  // upstream invoke handler now also forwards cookies correctly, but
+  // running the generator gives every freshly-migrated site the canonical
+  // RPC path so VTEX hooks (useCart, useUser, useWishlist) work end-to-end.
+  run(
+    "bunx tsx node_modules/@decocms/start/scripts/generate-invoke.ts",
+    "Generate VTEX invoke server functions",
+  );
   run("bunx tsr generate", "Generate TanStack routes");
 
   if (failures > 0) {
