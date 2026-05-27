@@ -11,7 +11,12 @@
  * (e.g. "product") which derives timing from the unified profile system.
  */
 
-import { recordCacheMetric, withTracing } from "../middleware/observability";
+import {
+  recordCacheMetric,
+  recordLoaderError,
+  recordLoaderMetric,
+  withTracing,
+} from "../middleware/observability";
 import { type CacheProfileName, loaderCacheOptions } from "./cacheHeaders";
 
 export type CachePolicy = "no-store" | "no-cache" | "stale-while-revalidate";
@@ -100,17 +105,31 @@ export function createCachedLoader<TProps, TResult>(
     if (inflight) {
       // Treat in-flight dedup as a cache hit — avoided the origin call.
       recordCacheMetric(true, name, undefined, "cachedLoader");
-      return inflight as Promise<TResult>;
+      const start = performance.now();
+      return inflight.then((r) => {
+        recordLoaderMetric(name, performance.now() - start, "HIT");
+        return r as TResult;
+      });
     }
 
     if (isDev) {
       // Dev mode: no caching, but still useful to count attempts.
       recordCacheMetric(false, name, undefined, "cachedLoader");
+      const devStart = performance.now();
       const promise = withTracing(
         "deco.cachedLoader",
-        () => loaderFn(props).finally(() => inflightRequests.delete(cacheKey)),
+        () => loaderFn(props),
         { "deco.loader": name, "deco.cache.policy": "no-cache-dev" },
-      );
+      )
+        .then((r) => {
+          recordLoaderMetric(name, performance.now() - devStart, "BYPASS");
+          return r;
+        })
+        .catch((err) => {
+          recordLoaderError(name);
+          throw err;
+        })
+        .finally(() => inflightRequests.delete(cacheKey));
       inflightRequests.set(cacheKey, promise);
       return promise;
     }
@@ -122,6 +141,7 @@ export function createCachedLoader<TProps, TResult>(
     if (policy === "no-cache") {
       if (entry && !isStale) {
         recordCacheMetric(true, name, "HIT", "cachedLoader");
+        recordLoaderMetric(name, 0, "HIT");
         return entry.value;
       }
     }
@@ -129,12 +149,14 @@ export function createCachedLoader<TProps, TResult>(
     if (policy === "stale-while-revalidate") {
       if (entry && !isStale) {
         recordCacheMetric(true, name, "HIT", "cachedLoader");
+        recordLoaderMetric(name, 0, "HIT");
         return entry.value;
       }
 
       if (entry && isStale && !entry.refreshing) {
         // Stale-while-revalidate hit: serve stale, refresh in background.
         recordCacheMetric(true, name, "STALE-HIT", "cachedLoader");
+        recordLoaderMetric(name, 0, "STALE-HIT");
         entry.refreshing = true;
         loaderFn(props)
           .then((result) => {
@@ -160,6 +182,7 @@ export function createCachedLoader<TProps, TResult>(
         // the decision as STALE-ERROR so dashboards can distinguish
         // this from healthy SWR.
         recordCacheMetric(true, name, "STALE-ERROR", "cachedLoader");
+        recordLoaderMetric(name, 0, "STALE-ERROR");
         return entry.value;
       }
     }
@@ -167,11 +190,13 @@ export function createCachedLoader<TProps, TResult>(
     // Cache miss — emit metric, then run loader inside a span so individual
     // slow loaders are visible in traces.
     recordCacheMetric(false, name, "MISS", "cachedLoader");
+    const loaderStart = performance.now();
     const promise = withTracing("deco.cachedLoader", () => loaderFn(props), {
       "deco.loader": name,
       "deco.cache.policy": policy,
     })
       .then((result) => {
+        recordLoaderMetric(name, performance.now() - loaderStart, "MISS");
         cache.set(cacheKey, {
           value: result,
           createdAt: Date.now(),
@@ -190,9 +215,11 @@ export function createCachedLoader<TProps, TResult>(
             console.warn(
               `[cachedLoader] ${name}: origin error, serving stale entry (age=${Math.round(age / 1000)}s, sie=${Math.round(staleIfError / 1000)}s)`,
             );
+            recordLoaderMetric(name, performance.now() - loaderStart, "STALE-ERROR");
             return entry.value;
           }
         }
+        recordLoaderError(name);
         throw err;
       });
 

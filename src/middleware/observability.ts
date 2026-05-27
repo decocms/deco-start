@@ -253,6 +253,22 @@ export const MetricNames = {
    * `MIGRATION_TOOLING_PLAN.md` for the rationale.
    */
   COMMERCE_REQUEST_DURATION_MS: "commerce_request_duration_ms",
+  /**
+   * Per-loader execution duration. Emitted by `cachedLoader` for every
+   * loader call — cached or not. The `cached` label lets dashboards
+   * separate origin latency from in-memory hit latency without needing
+   * to join on traces.
+   *
+   * Canonical labels: `loader`, `cached`.
+   */
+  LOADER_DURATION_MS: "loader_duration_ms",
+  /**
+   * Counter incremented when a loader throws. Complements
+   * `loader_duration_ms` for error-rate dashboards.
+   *
+   * Canonical labels: `loader`.
+   */
+  LOADER_ERRORS_TOTAL: "loader_errors_total",
 } as const;
 
 /**
@@ -453,6 +469,35 @@ export function recordCommerceMetric(
   if (labels.status_class) merged.status_class = labels.status_class;
   if (typeof labels.cached === "boolean") merged.cached = labels.cached;
   m.histogramRecord?.(MetricNames.COMMERCE_REQUEST_DURATION_MS, durationMs, merged);
+}
+
+/**
+ * Record a loader execution sample. Call from `cachedLoader` after the
+ * loader resolves or rejects. `cache_status` mirrors `CacheDecision` so
+ * dashboards can distinguish HIT (fresh) from STALE-HIT (SWR), STALE-ERROR
+ * (SIE fallback), MISS (origin fetch), and BYPASS (dev / no-store).
+ */
+export function recordLoaderMetric(
+  name: string,
+  durationMs: number,
+  cacheStatus: CacheDecision | "BYPASS",
+) {
+  const m = getState().meter;
+  if (!m) return;
+  m.histogramRecord?.(MetricNames.LOADER_DURATION_MS, durationMs, {
+    loader: name,
+    cache_status: cacheStatus,
+  });
+}
+
+/**
+ * Increment the loader error counter. Call when a loader throws and the
+ * error is not swallowed by a SIE fallback.
+ */
+export function recordLoaderError(name: string) {
+  const m = getState().meter;
+  if (!m) return;
+  m.counterInc(MetricNames.LOADER_ERRORS_TOTAL, 1, { loader: name });
 }
 
 function normalizePath(path: string): string {

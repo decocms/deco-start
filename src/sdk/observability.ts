@@ -65,6 +65,8 @@ export {
   MetricNames,
   recordCacheMetric,
   recordCommerceMetric,
+  recordLoaderError,
+  recordLoaderMetric,
   recordRequestMetric,
   type RequestMetricLabels,
   type RequestStore,
