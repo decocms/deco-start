@@ -255,11 +255,11 @@ export const MetricNames = {
   COMMERCE_REQUEST_DURATION_MS: "commerce_request_duration_ms",
   /**
    * Per-loader execution duration. Emitted by `cachedLoader` for every
-   * loader call — cached or not. The `cached` label lets dashboards
+   * loader call — cached or not. The `cache_status` label lets dashboards
    * separate origin latency from in-memory hit latency without needing
    * to join on traces.
    *
-   * Canonical labels: `loader`, `cached`.
+   * Canonical labels: `loader`, `cache_status`.
    */
   LOADER_DURATION_MS: "loader_duration_ms",
   /**

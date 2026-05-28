@@ -126,6 +126,7 @@ export function createCachedLoader<TProps, TResult>(
           return r;
         })
         .catch((err) => {
+          recordLoaderMetric(name, performance.now() - devStart, "BYPASS");
           recordLoaderError(name);
           throw err;
         })
@@ -219,6 +220,7 @@ export function createCachedLoader<TProps, TResult>(
             return entry.value;
           }
         }
+        recordLoaderMetric(name, performance.now() - loaderStart, "MISS");
         recordLoaderError(name);
         throw err;
       });
