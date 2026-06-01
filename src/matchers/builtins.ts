@@ -243,7 +243,7 @@ function getGeoData(ctx: MatcherContext): GeoSource {
   let latitude = h("cf-iplatitude");
   let longitude = h("cf-iplongitude");
 
-  if (!country || !regionCode) {
+  if (!country || !regionCode || !city || !latitude || !longitude) {
     const req = ctx.request;
     const cf = req ? ((req as any).cf as Record<string, unknown> | undefined) : undefined;
     if (cf) {
@@ -255,7 +255,7 @@ function getGeoData(ctx: MatcherContext): GeoSource {
     }
   }
 
-  if (!country || !regionCode || !city || !latitude) {
+  if (!country || !regionCode || !city || !latitude || !longitude) {
     const cookies = ctx.cookies ?? {};
     country = country || decodeCookie(cookies.__cf_geo_country);
     regionCode = regionCode || decodeCookie(cookies.__cf_geo_region_code);
@@ -313,10 +313,16 @@ function matchLocation(defaultNotMatched: boolean, source: GeoSource) {
       !hasRegion ||
       (target.regionCode!.toLowerCase() === source.regionCode.toLowerCase());
 
+    // Map-mode entries require the visitor to have coordinates — otherwise
+    // we can't tell whether they're inside the target radius, so the
+    // conservative default is "no match". This is a deliberate divergence
+    // from deco-cx/apps, which let coord-only rules vacuously pass when the
+    // visitor had no lat/lng — that behavior matches every visitor without
+    // geo data, which is a footgun in production.
     result = result &&
-      (!source.coordinates ||
-        !hasCoords ||
-        haversineWithinRadius(source.coordinates, target.coordinates!));
+      (!hasCoords ||
+        (!!source.coordinates &&
+          haversineWithinRadius(source.coordinates, target.coordinates!)));
 
     result = result &&
       (!hasCity || target.city!.toLowerCase() === source.city.toLowerCase());

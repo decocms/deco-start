@@ -163,17 +163,18 @@ describe("locationMatcher — Map mode (haversine)", () => {
     ).toBe(false);
   });
 
-  it("source without coordinates short-circuits coordinate check (parity)", () => {
-    // Target has coordinates but source doesn't — original behavior: coordinate
-    // check passes vacuously. With no other constraints on the entry, the entry
-    // matches.
+  it("Map-only rule does NOT match when source has no coordinates", () => {
+    // Deliberate divergence from deco-cx/apps: upstream lets coord-only rules
+    // vacuously pass when the visitor has no lat/lng, which matches every
+    // such visitor — a footgun in production. We require both sides to have
+    // coordinates before the haversine check passes.
     const ctx = ctxFromHeaders({ "cf-region-code": "SP" });
     expect(
       match(
         { includeLocations: [{ coordinates: "-23.5505,-46.6333,5000" }] },
         ctx,
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("AND's coordinates with regionCode on the same entry", () => {

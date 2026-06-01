@@ -172,7 +172,7 @@ const decoWorker = createDecoWorkerEntry(serverEntry, {
       // Prefer VTEX regionalization regionId when present; otherwise fall back
       // to Cloudflare geo so the website/matchers/location.ts matcher gets a
       // properly segmented cache.
-      regionId: (vtx as any).regionId ?? geoRegion ?? undefined,
+      regionId: (vtx as any).regionId ?? (geoRegion || undefined),
     };
   },
   admin: {
