@@ -89,6 +89,14 @@ const decoWorker = createDecoWorkerEntry(serverEntry, {
     handleRender,
     corsHeaders,
   },
+  // Region splits the cache so a RJ-cached response isn't served to SP visitors
+  // when pages use the website/matchers/location.ts matcher. Without this, the
+  // first geo-resolved response leaks across regions.
+  buildSegment: (request) => {
+    const cf = (request as unknown as { cf?: { regionCode?: string } }).cf;
+    const regionCode = request.headers.get("cf-region-code") ?? cf?.regionCode ?? "";
+    return regionCode ? { regionId: regionCode } : {};
+  },
 });
 
 export default instrumentWorker(decoWorker, {
@@ -155,11 +163,16 @@ const decoWorker = createDecoWorkerEntry(serverEntry, {
   csp: CSP_DIRECTIVES,
   buildSegment: (request) => {
     const vtx = extractVtexContext(request);
+    const cf = (request as unknown as { cf?: { regionCode?: string } }).cf;
+    const geoRegion = request.headers.get("cf-region-code") ?? cf?.regionCode ?? "";
     return {
       device: MOBILE_RE.test(request.headers.get("user-agent") ?? "") ? "mobile" : "desktop",
       loggedIn: vtx.isLoggedIn,
       salesChannel: vtx.salesChannel,
-      regionId: (vtx as any).regionId ?? undefined,
+      // Prefer VTEX regionalization regionId when present; otherwise fall back
+      // to Cloudflare geo so the website/matchers/location.ts matcher gets a
+      // properly segmented cache.
+      regionId: (vtx as any).regionId ?? geoRegion ?? undefined,
     };
   },
   admin: {

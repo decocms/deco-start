@@ -489,6 +489,17 @@ export function injectGeoCookies(request: Request): Request {
   }
   headers.set("cookie", combined);
 
+  // Mirror the ASCII-safe geo fields from request.cf into headers so matchers
+  // that read `request.headers.get("cf-region-code")` (parity with the
+  // upstream deco-cx/apps location matcher) still work even if the inbound
+  // request didn't carry them. Non-ASCII fields (region name, city) stay in
+  // the cookies above — putting them in headers would re-trigger the
+  // non-ASCII warning we strip on the loop above.
+  if (cf.country && !headers.has("cf-ipcountry")) headers.set("cf-ipcountry", cf.country);
+  if (cf.regionCode && !headers.has("cf-region-code")) headers.set("cf-region-code", cf.regionCode);
+  if (cf.latitude && !headers.has("cf-iplatitude")) headers.set("cf-iplatitude", cf.latitude);
+  if (cf.longitude && !headers.has("cf-iplongitude")) headers.set("cf-iplongitude", cf.longitude);
+
   return new Request(request, { headers });
 }
 

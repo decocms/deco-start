@@ -186,95 +186,162 @@ function queryStringMatcher(rule: Record<string, unknown>, ctx: MatcherContext):
 }
 
 // -------------------------------------------------------------------------
-// Location matcher
+// Location matcher — parity with deco-cx/apps/website/matchers/location.ts
+//
+// Each entry in includeLocations/excludeLocations is a union of:
+//   Location: { city?, regionCode?, country? }
+//   Map:      { coordinates?: "lat,lng,radius_in_meters" }
+// Fields may coexist on the same entry; the matcher AND's every constraint
+// that is populated. An entry with zero constraints returns defaultNotMatched
+// (true for includes, false for excludes), matching upstream semantics.
 // -------------------------------------------------------------------------
 
-interface LocationRule {
+interface LocationOrMap {
   country?: string;
   regionCode?: string;
   city?: string;
+  /** "latitude,longitude,radius_in_meters" — e.g. "-23.5505,-46.6333,5000" */
+  coordinates?: string;
 }
 
-interface GeoData {
+interface GeoSource {
   country: string;
   regionCode: string;
-  regionName: string;
   city: string;
+  /** "latitude,longitude" when available */
+  coordinates?: string;
+}
+
+function decodeCookie(value: string | undefined): string {
+  if (!value) return "";
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 /**
  * Extract geo data from the request context.
- * Priority: request.cf (Cloudflare Workers) > geo cookies > geo headers.
+ *
+ * Read order mirrors the original deco-cx/apps matcher (header-first), with
+ * additional fallbacks for environments that don't preserve the cf-* request
+ * headers (e.g. when TanStack Start re-wraps the request and drops them):
+ *   1. cf-* request headers (cf-region-code, cf-ipcity, ...)
+ *   2. request.cf (Cloudflare Workers native)
+ *   3. __cf_geo_* cookies (injected by createDecoWorkerEntry)
  */
-function getGeoData(ctx: MatcherContext): GeoData {
-  // 1. Cloudflare Workers: request.cf has authoritative geo data
-  const req = ctx.request;
-  if (req) {
-    const cf = (req as any).cf as Record<string, unknown> | undefined;
-    if (cf?.country) {
-      return {
-        country: (cf.country as string) ?? "",
-        regionCode: (cf.regionCode as string) ?? (cf.region as string) ?? "",
-        regionName: (cf.region as string) ?? "",
-        city: (cf.city as string) ?? "",
-      };
+function getGeoData(ctx: MatcherContext): GeoSource {
+  const headers = ctx.headers ?? {};
+  const reqHeaders = ctx.request?.headers;
+  const h = (name: string): string =>
+    headers[name] ?? reqHeaders?.get(name) ?? "";
+
+  let regionCode = h("cf-region-code");
+  let country = h("cf-ipcountry") || h("x-vercel-ip-country");
+  let city = h("cf-ipcity");
+  let latitude = h("cf-iplatitude");
+  let longitude = h("cf-iplongitude");
+
+  if (!country || !regionCode) {
+    const req = ctx.request;
+    const cf = req ? ((req as any).cf as Record<string, unknown> | undefined) : undefined;
+    if (cf) {
+      country = country || ((cf.country as string) ?? "");
+      regionCode = regionCode || ((cf.regionCode as string) ?? "");
+      city = city || ((cf.city as string) ?? "");
+      latitude = latitude || (cf.latitude != null ? String(cf.latitude) : "");
+      longitude = longitude || (cf.longitude != null ? String(cf.longitude) : "");
     }
   }
 
-  // 2. Geo cookies (set by Cloudflare middleware on Fresh/Deno sites)
-  const cookies = ctx.cookies ?? {};
-  const cookieCountry = cookies.__cf_geo_country ? decodeURIComponent(cookies.__cf_geo_country) : "";
-  if (cookieCountry) {
-    return {
-      country: cookieCountry,
-      regionCode: cookies.__cf_geo_region_code ? decodeURIComponent(cookies.__cf_geo_region_code) : "",
-      regionName: cookies.__cf_geo_region ? decodeURIComponent(cookies.__cf_geo_region) : "",
-      city: cookies.__cf_geo_city ? decodeURIComponent(cookies.__cf_geo_city) : "",
-    };
+  if (!country || !regionCode || !city || !latitude) {
+    const cookies = ctx.cookies ?? {};
+    country = country || decodeCookie(cookies.__cf_geo_country);
+    regionCode = regionCode || decodeCookie(cookies.__cf_geo_region_code);
+    city = city || decodeCookie(cookies.__cf_geo_city);
+    latitude = latitude || decodeCookie(cookies.__cf_geo_lat);
+    longitude = longitude || decodeCookie(cookies.__cf_geo_lng);
   }
 
-  // 3. Fallback: standard geo headers (Vercel, etc.)
-  const headers = ctx.headers ?? {};
-  return {
-    country: headers["cf-ipcountry"] ?? headers["x-vercel-ip-country"] ?? "",
-    regionCode: headers["cf-region"] ?? headers["x-vercel-ip-country-region"] ?? "",
-    regionName: "",
-    city: "",
+  const coordinates = latitude && longitude ? `${latitude},${longitude}` : undefined;
+  return { country, regionCode, city, coordinates };
+}
+
+/**
+ * Haversine "within radius" check.
+ *
+ * @param source "latitude,longitude" from the request's geo.
+ * @param target "latitude,longitude,radius_in_meters" from the rule entry.
+ */
+function haversineWithinRadius(source: string, target: string): boolean {
+  const [slat, slng] = source.split(",").map(Number);
+  const parts = target.split(",").map(Number);
+  const [tlat, tlng, radiusMeters] = parts;
+  if (
+    !Number.isFinite(slat) ||
+    !Number.isFinite(slng) ||
+    !Number.isFinite(tlat) ||
+    !Number.isFinite(tlng) ||
+    !Number.isFinite(radiusMeters)
+  ) {
+    return false;
+  }
+  const R = 6371000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(tlat - slat);
+  const dLng = toRad(tlng - slng);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(slat)) * Math.cos(toRad(tlat)) * Math.sin(dLng / 2) ** 2;
+  const distance = 2 * R * Math.asin(Math.sqrt(a));
+  return distance <= radiusMeters;
+}
+
+function matchLocation(defaultNotMatched: boolean, source: GeoSource) {
+  return (target: LocationOrMap): boolean => {
+    const hasRegion = !!target.regionCode;
+    const hasCity = !!target.city;
+    const hasCountry = !!target.country;
+    const hasCoords = !!target.coordinates;
+
+    if (!hasRegion && !hasCity && !hasCountry && !hasCoords) {
+      return defaultNotMatched;
+    }
+
+    let result =
+      !hasRegion ||
+      (target.regionCode!.toLowerCase() === source.regionCode.toLowerCase());
+
+    result = result &&
+      (!source.coordinates ||
+        !hasCoords ||
+        haversineWithinRadius(source.coordinates, target.coordinates!));
+
+    result = result &&
+      (!hasCity || target.city!.toLowerCase() === source.city.toLowerCase());
+
+    result = result &&
+      (!hasCountry ||
+        resolveCountryCode(target.country!).toUpperCase() ===
+          source.country.toUpperCase());
+
+    return result;
   };
 }
 
-function matchesLocationRule(
-  loc: LocationRule,
-  geo: GeoData,
-): boolean {
-  if (loc.country) {
-    const code = resolveCountryCode(loc.country);
-    if (code.toUpperCase() !== geo.country.toUpperCase()) return false;
-  }
-  if (loc.regionCode) {
-    // Match against both the short code ("SP") and full name ("São Paulo")
-    // so rules authored against either format continue working.
-    const ruleVal = loc.regionCode.toLowerCase();
-    if (geo.regionCode.toLowerCase() !== ruleVal && geo.regionName.toLowerCase() !== ruleVal) return false;
-  }
-  if (loc.city && loc.city.toLowerCase() !== geo.city.toLowerCase()) return false;
-  return true;
-}
-
 function locationMatcher(rule: Record<string, unknown>, ctx: MatcherContext): boolean {
-  const geo = getGeoData(ctx);
-  if (!geo.country) return !((rule.includeLocations as unknown[] | undefined)?.length);
+  const source = getGeoData(ctx);
+  const includeLocations = rule.includeLocations as LocationOrMap[] | undefined;
+  const excludeLocations = rule.excludeLocations as LocationOrMap[] | undefined;
 
-  const includeLocations = rule.includeLocations as LocationRule[] | undefined;
-  const excludeLocations = rule.excludeLocations as LocationRule[] | undefined;
-
-  if (excludeLocations?.some((loc) => matchesLocationRule(loc, geo))) {
+  if (excludeLocations?.some(matchLocation(false, source))) {
     return false;
   }
-  if (includeLocations?.length) {
-    return includeLocations.some((loc) => matchesLocationRule(loc, geo));
+  if (!includeLocations || includeLocations.length === 0) {
+    return true;
   }
-  return true;
+  return includeLocations.some(matchLocation(true, source));
 }
 
 // -------------------------------------------------------------------------

@@ -301,35 +301,53 @@ registerMatcherSchemas([
     key: "website/matchers/location.ts",
     title: "Location",
     namespace: "website",
-    propsSchema: {
-      type: "object",
-      properties: {
-        includeLocations: {
-          type: "array",
-          title: "Include Locations",
-          items: {
-            type: "object",
-            properties: {
-              country: { type: "string", title: "Country" },
-              regionCode: { type: "string", title: "Region" },
-              city: { type: "string", title: "City" },
-            },
+    propsSchema: (() => {
+      const locationOrMapItem = {
+        type: "object" as const,
+        properties: {
+          city: {
+            type: "string",
+            title: "City",
+            examples: ["São Paulo"],
+            description: "Exact city name (case-insensitive) as returned by Cloudflare's cf-ipcity header.",
+          },
+          regionCode: {
+            type: "string",
+            title: "Region Code",
+            examples: ["SP", "RJ", "MG", "47"],
+            description:
+              "Matches Cloudflare's cf-region-code header. Usually the ISO 3166-2 subdivision code (SP, RJ, MG, …); for some regions Cloudflare returns numeric codes (e.g. 47). Use the same value cf-region-code returns for your audience — full region names like \"São Paulo\" are NOT matched.",
+          },
+          country: {
+            type: "string",
+            title: "Country",
+            examples: ["BR", "Brasil", "US"],
+            description: "ISO 3166-1 alpha-2 code (BR, US, AR, …) or a full country name (Brasil, United States) — the matcher resolves common aliases.",
+          },
+          coordinates: {
+            type: "string",
+            title: "Area selection",
+            examples: ["-23.5505,-46.6333,5000"],
+            description: "\"latitude,longitude,radius_in_meters\" for haversine-radius matching. Set this for the Map mode.",
           },
         },
-        excludeLocations: {
-          type: "array",
-          title: "Exclude Locations",
-          items: {
-            type: "object",
-            properties: {
-              country: { type: "string", title: "Country" },
-              regionCode: { type: "string", title: "Region" },
-              city: { type: "string", title: "City" },
-            },
+      };
+      return {
+        type: "object" as const,
+        properties: {
+          includeLocations: {
+            type: "array",
+            title: "Include Locations",
+            items: locationOrMapItem,
+          },
+          excludeLocations: {
+            type: "array",
+            title: "Exclude Locations",
+            items: locationOrMapItem,
           },
         },
-      },
-    },
+      };
+    })(),
   },
   {
     key: "website/matchers/userAgent.ts",
