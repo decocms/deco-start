@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock dependencies before importing the module under test
 vi.mock("./sectionLoaders", () => ({
@@ -19,7 +19,14 @@ vi.mock("./registry", () => ({
   getSection: vi.fn(),
 }));
 
-import { resolveDeferredSectionFull, resolveSectionsList } from "./resolve";
+import {
+  clearCommerceLoaders,
+  registerCommerceLoader,
+  resolveDeferredSectionFull,
+  resolveSectionsList,
+  resolveValue,
+} from "./resolve";
+import { getSearchParam } from "../sdk/loaderUtils";
 import { runSingleSectionLoader } from "./sectionLoaders";
 import { normalizeUrlsInObject } from "../sdk/normalizeUrls";
 import type { DeferredSection } from "./resolve";
@@ -165,5 +172,90 @@ describe("resolveSectionsList", () => {
     }
     const result = await resolveSectionsList(wrapper, makeRctx());
     expect(result).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Commerce loader receives __pageUrl with query string intact
+// ---------------------------------------------------------------------------
+//
+// Regression guard for the Google Shopping deep-link bug: VTEX PDP loaders
+// read `props.skuId` to pre-select a variant on direct navigation, but the
+// framework only injects `__pagePath` and `__pageUrl` — not individual
+// query params. Loaders parse `__pageUrl` via `getSearchParam(props, key)`.
+// This test locks in that `__pageUrl` reaches the loader with the original
+// search string so the helper can do its job.
+
+describe("commerce loader receives __pageUrl with query string", () => {
+  const KEY = "site/loaders/__test/queryParamLoader";
+
+  beforeEach(() => {
+    clearCommerceLoaders();
+  });
+
+  afterEach(() => {
+    clearCommerceLoaders();
+  });
+
+  it("passes __pageUrl to the loader including ?skuId=", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    registerCommerceLoader(KEY, async (props: Record<string, unknown>) => {
+      calls.push({ ...props });
+      return null;
+    });
+
+    await resolveValue(
+      { __resolveType: KEY, slug: "sabonete" },
+      undefined,
+      {
+        url: "https://store.com/produto/sabonete/p?skuId=12345&size=M",
+        path: "/produto/sabonete/p",
+      },
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      slug: "sabonete",
+      __pagePath: "/produto/sabonete/p",
+      __pageUrl: "https://store.com/produto/sabonete/p?skuId=12345&size=M",
+    });
+  });
+
+  it("getSearchParam reads skuId from __pageUrl injected by the framework", async () => {
+    const observed: { skuId: string | null } = { skuId: null };
+    registerCommerceLoader(KEY, async (props: Record<string, unknown>) => {
+      observed.skuId = getSearchParam(props as { __pageUrl?: string }, "skuId");
+      return null;
+    });
+
+    await resolveValue(
+      { __resolveType: KEY },
+      undefined,
+      {
+        url: "https://store.com/produto/sabonete/p?skuId=999",
+        path: "/produto/sabonete/p",
+      },
+    );
+
+    expect(observed.skuId).toBe("999");
+  });
+
+  it("getSearchParam returns null when the URL has no matching param", async () => {
+    const observed: { skuId: string | null } = { skuId: "untouched" };
+    registerCommerceLoader(KEY, async (props: Record<string, unknown>) => {
+      observed.skuId = getSearchParam(props as { __pageUrl?: string }, "skuId");
+      return null;
+    });
+
+    await resolveValue(
+      { __resolveType: KEY },
+      undefined,
+      {
+        url: "https://store.com/produto/sabonete/p",
+        path: "/produto/sabonete/p",
+      },
+    );
+
+    expect(observed.skuId).toBeNull();
   });
 });

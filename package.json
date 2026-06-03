@@ -31,6 +31,7 @@
     "./sdk/cookiePassthrough": "./src/sdk/cookiePassthrough.ts",
     "./sdk/analytics": "./src/sdk/analytics.ts",
     "./sdk/cachedLoader": "./src/sdk/cachedLoader.ts",
+    "./sdk/loaderUtils": "./src/sdk/loaderUtils.ts",
     "./sdk/serverTimings": "./src/sdk/serverTimings.ts",
     "./sdk/cacheHeaders": "./src/sdk/cacheHeaders.ts",
     "./sdk/crypto": "./src/sdk/crypto.ts",
