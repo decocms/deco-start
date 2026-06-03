@@ -614,6 +614,33 @@ async function internalResolve(value: unknown, rctx: ResolveContext): Promise<un
     }
     if (rctx.matcherCtx.url) {
       resolvedProps.__pageUrl = rctx.matcherCtx.url;
+      // Auto-inject URL search params as top-level props so loaders that
+      // expect `props.skuId` / `props.q` / `props.page` (the apps-start
+      // canonical shape) get them populated on direct entry (Google
+      // Shopping deep links, paid ads, email campaigns). Existing values
+      // from the CMS block win — URL params are a fallback, not an
+      // override.
+      //
+      // Safe re: cache fragmentation: commerce loaders run through this
+      // path without a framework-level cache (the section/page cache
+      // layer hashes section.props BEFORE this enrichment in
+      // sectionLoaders.ts), so adding query params here does not
+      // fragment any cache key.
+      if (URL.canParse(rctx.matcherCtx.url)) {
+        const url = new URL(rctx.matcherCtx.url);
+        for (const [k, v] of url.searchParams.entries()) {
+          if (resolvedProps[k] === undefined) resolvedProps[k] = v;
+        }
+      } else {
+        // Loud warning instead of silent swallow: matcherCtx.url should
+        // always be a fully-qualified URL (set from `getRequestUrl()` in
+        // cmsRoute.ts). If we see a malformed value here, something
+        // upstream is wrong — surface it so the caller can fix it.
+        console.warn(
+          `[CMS] malformed matcherCtx.url for "${resolveType}"; ` +
+            `skipping query-param injection: ${rctx.matcherCtx.url}`,
+        );
+      }
     }
 
     try {
