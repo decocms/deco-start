@@ -614,6 +614,26 @@ async function internalResolve(value: unknown, rctx: ResolveContext): Promise<un
     }
     if (rctx.matcherCtx.url) {
       resolvedProps.__pageUrl = rctx.matcherCtx.url;
+      // Auto-inject URL search params as top-level props so loaders that
+      // expect `props.skuId` / `props.q` / `props.page` (the apps-start
+      // canonical shape) get them populated on direct entry (Google
+      // Shopping deep links, paid ads, email campaigns). Existing values
+      // from the CMS block win — URL params are a fallback, not an
+      // override.
+      //
+      // Safe re: cache fragmentation: commerce loaders run through this
+      // path without a framework-level cache (the section/page cache
+      // layer hashes section.props BEFORE this enrichment in
+      // sectionLoaders.ts), so adding query params here does not
+      // fragment any cache key.
+      try {
+        const url = new URL(rctx.matcherCtx.url);
+        for (const [k, v] of url.searchParams.entries()) {
+          if (resolvedProps[k] === undefined) resolvedProps[k] = v;
+        }
+      } catch {
+        // Malformed URL — skip query-param injection silently.
+      }
     }
 
     try {
