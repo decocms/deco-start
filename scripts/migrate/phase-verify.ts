@@ -59,7 +59,7 @@ const MUST_NOT_EXIST = [
   "routes/_middleware.ts",
 ];
 
-const checks: Check[] = [
+export const checks: Check[] = [
   {
     name: "All scaffolded files exist",
     severity: "error",
@@ -233,15 +233,24 @@ const checks: Check[] = [
     },
   },
   {
+    // Only flag imports to files that phase-cleanup actually deletes:
+    // `sdk/clx.ts`, `sdk/useId.ts`, `sdk/usePlatform.tsx`. Earlier versions
+    // also matched `useOffer` and `useVariantPossiblities`, which are
+    // explicitly KEPT as site files (RELATIVE_SDK_REWRITES in
+    // transforms/imports.ts skips them on purpose because sites customize
+    // them). That false positive made every Magento/custom-SDK migration
+    // fail verify even when the imports were valid. See #212.
     name: "No relative imports to deleted SDK files",
     severity: "error",
     fn: (ctx) => {
       const srcDir = path.join(ctx.sourceDir, "src");
       if (!fs.existsSync(srcDir)) return true;
-      // Only match relative imports (../ or ./) to deleted SDK files, not @decocms/* package imports
-      const bad = findFilesWithPattern(srcDir, /from\s+["'](?:\.\.?\/)[^"']*\/sdk\/(?:clx|useId|useOffer|useVariantPossiblities|usePlatform)["']/);
+      const pattern = /from\s+["'](?:\.\.?\/)[^"']*\/sdk\/(?:clx|useId|usePlatform)(?:\.tsx?)?["']/;
+      const bad = findMatchesWithPattern(srcDir, pattern);
       if (bad.length > 0) {
-        console.log(`    Still has relative imports to deleted SDK files: ${bad.join(", ")}`);
+        for (const { file, line } of bad) {
+          console.log(`    ${file}: ${line.trim()}`);
+        }
         return false;
       }
       return true;
@@ -487,6 +496,37 @@ function findFilesWithPattern(
         .join("\n");
       if (pattern.test(uncommented)) {
         results.push(path.basename(fullPath));
+      }
+    }
+  }
+  return results;
+}
+
+/**
+ * Like {@link findFilesWithPattern} but returns each offending line alongside
+ * its file, so the verify output can show *what* matched — not just *where*.
+ * Skips comment-only lines so a doc reference doesn't trigger a false fail.
+ */
+function findMatchesWithPattern(
+  dir: string,
+  pattern: RegExp,
+  results: Array<{ file: string; line: string }> = [],
+  baseDir?: string,
+): Array<{ file: string; line: string }> {
+  const root = baseDir ?? dir;
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "server") continue;
+      findMatchesWithPattern(fullPath, pattern, results, root);
+    } else if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) {
+      const content = fs.readFileSync(fullPath, "utf-8");
+      const rel = path.relative(root, fullPath);
+      for (const line of content.split("\n")) {
+        const trimmed = line.trimStart();
+        if (trimmed.startsWith("//") || trimmed.startsWith("*")) continue;
+        if (pattern.test(line)) results.push({ file: rel, line });
       }
     }
   }

@@ -467,8 +467,21 @@ function extractVtexAccount(sourceDir: string): string | null {
   return null;
 }
 
-function extractPlatform(sourceDir: string): Platform {
-  const platforms: Platform[] = ["vtex", "shopify", "wake", "vnda", "linx", "nuvemshop"];
+export function extractPlatform(sourceDir: string): Platform {
+  // Strategy 2 (apps/{p}.ts existence) is the most reliable signal, but it
+  // only matches when the platform name appears here — so a site whose only
+  // app file is `apps/magento.ts` previously fell through to Strategy 3
+  // and got mis-detected as "vtex" because site.ts imports
+  // `apps/vtex/mod.ts` for color palettes. See #211.
+  const platforms: Platform[] = [
+    "vtex",
+    "shopify",
+    "wake",
+    "vnda",
+    "linx",
+    "nuvemshop",
+    "magento",
+  ];
 
   // Strategy 1: Check deno.json imports for platform-specific app imports
   const denoPath = path.join(sourceDir, "deno.json");

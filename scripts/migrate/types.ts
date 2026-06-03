@@ -5,6 +5,7 @@ export type Platform =
   | "wake"
   | "linx"
   | "nuvemshop"
+  | "magento"
   | "custom";
 
 export interface FileRecord {
