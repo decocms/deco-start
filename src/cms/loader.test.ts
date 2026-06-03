@@ -139,6 +139,26 @@ describe("findPageByPath specificity", () => {
     expect(match?.blockKey).toBe("pages-bf");
   });
 
+  it("prefers the home page over an optional-group splat catch-all", () => {
+    // Regression: /{granado/}?* matches "/" and was out-ranking the home
+    // because the `{granado` segment counted as a param. The home block
+    // is a literal-only `/` path and must always win.
+    setBlocks({
+      "pages-home": {
+        name: "Home",
+        path: "/",
+        sections: [],
+      },
+      "pages-pdp-plp": {
+        name: "PDP & PLP",
+        path: "/{granado/}?*",
+        sections: [],
+      },
+    });
+    const match = findPageByPath("/");
+    expect(match?.blockKey).toBe("pages-home");
+  });
+
   it("falls back to the splat page for unknown URLs", () => {
     const match = findPageByPath("/perfumaria");
     expect(match?.blockKey).toBe("pages-pdp-plp");
