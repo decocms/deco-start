@@ -363,7 +363,10 @@ export function decoVitePlugin() {
               site: siteName,
               env: envName,
               port,
-              decoHost: process.env.DECO_HOST === "true",
+              // Default to the .deco.host relay (matches startTunnel's documented
+              // default). Set DECO_HOST=false to opt back into the legacy
+              // simpletunnel.deco.site relay.
+              decoHost: process.env.DECO_HOST !== "false",
             });
             server.httpServer?.on("close", () => tunnel.close());
           } catch (err) {
