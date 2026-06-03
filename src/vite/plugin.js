@@ -471,6 +471,28 @@ export function decoVitePlugin() {
         env.optimizeDeps.esbuildOptions.jsx = "automatic";
         env.optimizeDeps.esbuildOptions.jsxImportSource = "react";
       }
+
+      // Force @decocms/start through the SSR transform pipeline so TanStack
+      // Start's compiler can register the framework's createServerFn handlers
+      // (loadDeferredSection, etc.) in the per-environment serverFnsById
+      // manifest. Without this, Vite pre-bundles @decocms/start via
+      // optimizeDeps before plugins run, the handler never enters the
+      // manifest, and every POST /_serverFn/* call from the browser returns
+      // HTTP 500 ("Invalid server function ID"). See #197.
+      if (name === "ssr") {
+        env.resolve = env.resolve || {};
+        const existing = env.resolve.noExternal;
+        const additions = ["@decocms/start"];
+        if (existing === true) {
+          // Already noExternal everything — nothing to add.
+        } else if (Array.isArray(existing)) {
+          env.resolve.noExternal = [...new Set([...existing, ...additions])];
+        } else if (existing) {
+          env.resolve.noExternal = [existing, ...additions];
+        } else {
+          env.resolve.noExternal = additions;
+        }
+      }
     },
 
     generateBundle(_, bundle) {
