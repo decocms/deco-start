@@ -130,14 +130,23 @@ export function withBlocksOverride<T>(override: Record<string, unknown>, fn: () 
 // Higher key wins. Compared lexicographically:
 //   [literalSegments, paramSegments, hasNoSplat]
 // So `/foo/bar` > `/foo/:x` > `/foo/*` > `/*`, and `/my-account/*` > `/*`.
+//
+// URLPattern syntax (`{group}?`, `:slug([\w-]+)`, trailing `*`) is supported:
+// any segment containing `{`, `}`, or `?` counts as a param, and a segment
+// containing `*` flips the splat bit. This keeps optional-group patterns
+// (e.g. `/{granado/}?*`) from out-ranking real literal pages.
 function pathSpecificityKey(path: string): [number, number, number] {
   const parts = path.split("/").filter(Boolean);
   let literals = 0;
   let params = 0;
   let hasSplat = false;
   for (const part of parts) {
-    if (part === "*") hasSplat = true;
-    else if (part.startsWith(":") || part.startsWith("$")) params++;
+    if (part.includes("*")) hasSplat = true;
+    else if (
+      part.startsWith(":") ||
+      part.startsWith("$") ||
+      /[{}?]/.test(part)
+    ) params++;
     else literals++;
   }
   return [literals, params, hasSplat ? 0 : 1];
@@ -166,33 +175,37 @@ export function getAllPages(): Array<{ key: string; page: DecoPage }> {
     .map(({ key, page }) => ({ key, page }));
 }
 
-function matchPath(pattern: string, urlPath: string): Record<string, string> | null {
-  if (pattern === "/*") return { _splat: urlPath };
-
-  const patternParts = pattern.split("/").filter(Boolean);
-  const urlParts = urlPath.split("/").filter(Boolean);
-
-  // Trailing `*` means "match this prefix and any remaining segments".
-  const hasSplat = patternParts[patternParts.length - 1] === "*";
-  const fixedLen = hasSplat ? patternParts.length - 1 : patternParts.length;
-
-  if (hasSplat) {
-    if (urlParts.length < fixedLen) return null;
-  } else if (urlParts.length !== fixedLen) {
+/**
+ * Match a CMS page path pattern against a URL path.
+ *
+ * Mirrors the original deco-cx/deco Fresh framework
+ * (`runtime/features/render.tsx`) by delegating to the platform's native
+ * `URLPattern`. Supports the full URLPattern syntax that the admin emits:
+ * `:slug`, `:slug([\w-]+)`, optional groups `{...}?`, and trailing `*`
+ * splats. Splats are exposed as the standard numbered groups (`"0"`, `"1"`,
+ * …), matching the Fresh shape.
+ *
+ * Malformed patterns return `null` instead of throwing — bad CMS data must
+ * never take down the worker.
+ */
+export function matchPath(
+  pattern: string,
+  urlPath: string,
+): Record<string, string> | null {
+  let result: URLPatternResult | null;
+  try {
+    result = new URLPattern({ pathname: pattern }).exec({ pathname: urlPath });
+  } catch {
     return null;
   }
+  if (!result) return null;
 
-  const params: Record<string, string> = {};
-  for (let i = 0; i < fixedLen; i++) {
-    const pp = patternParts[i];
-    const up = urlParts[i];
-    if (pp.startsWith(":")) params[pp.slice(1)] = up;
-    else if (pp !== up) return null;
+  const groups = result.pathname.groups as Record<string, string | undefined>;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(groups)) {
+    if (v !== undefined) out[k] = v;
   }
-
-  if (hasSplat) params._splat = urlParts.slice(fixedLen).join("/");
-
-  return params;
+  return out;
 }
 
 /**
