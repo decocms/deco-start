@@ -151,10 +151,35 @@ export function registerSectionLoader(sectionKey: string, loader: SectionLoaderF
 
 /**
  * Register multiple section loaders at once.
+ *
+ * Dev-only diagnostic: when a request-dependent loader (one built from
+ * `withDevice`/`withMobile`/`withSearchParam`, possibly through `compose`)
+ * is registered for a section that's also in `layoutSections`, the layout
+ * cache will serve the first visitor's variant to every viewer for
+ * `LAYOUT_CACHE_TTL` (5 min). We log a loud warning explaining the
+ * remediation options. See #206.
  */
 export function registerSectionLoaders(loaders: Record<string, SectionLoaderFn>): void {
   for (const [key, loader] of Object.entries(loaders)) {
     loaderRegistry.set(key, loader);
+  }
+  if (typeof process !== "undefined" && process.env?.NODE_ENV !== "production") {
+    for (const [key, loader] of Object.entries(loaders)) {
+      const requestDependent =
+        (loader as SectionLoaderFn & { __requestDependent?: boolean }).__requestDependent === true;
+      if (requestDependent && layoutSections.has(key)) {
+        console.warn(
+          `[SectionLoaders] "${key}" is registered as a layout section ` +
+            `(cached for 5min by component path) but its loader is request-` +
+            `dependent (withDevice/withMobile/withSearchParam). The first ` +
+            `visitor's variant will be served to all users for 5min. Fix: ` +
+            `(1) remove "export const layout = true" from the section, ` +
+            `(2) call unregisterLayoutSections(["${key}"]) in setup.ts ` +
+            `after applySectionConventions, or (3) move the request-` +
+            `dependent logic out of the layout loader.`,
+        );
+      }
+    }
   }
 }
 
@@ -183,10 +208,31 @@ const layoutInflight = new Map<string, Promise<ResolvedSection>>();
  * Register section keys that should be cached as layout sections.
  * Layout sections (Header, Footer, etc.) are cached server-side
  * for LAYOUT_CACHE_TTL to avoid redundant enrichment on every navigation.
+ *
+ * The cache key is the component path only — it does NOT include UA,
+ * cookies, or geo. Sections whose loader depends on those signals must
+ * not be layout-cached: see {@link unregisterLayoutSections} to opt a
+ * section out of the auto-discovery done by `applySectionConventions`.
  */
 export function registerLayoutSections(keys: string[]): void {
   for (const key of keys) {
     layoutSections.add(key);
+  }
+}
+
+/**
+ * Remove section keys from the layout cache set. Use this to opt a section
+ * out of caching when `applySectionConventions` auto-registered it via
+ * `export const layout = true` but the section's loader is in fact request-
+ * dependent (Header with `withDevice()`, geo-aware promo, etc.).
+ *
+ * Call after `applySectionConventions` and before the first request.
+ *
+ * See #206 for the contamination bug this prevents.
+ */
+export function unregisterLayoutSections(keys: string[]): void {
+  for (const key of keys) {
+    layoutSections.delete(key);
   }
 }
 

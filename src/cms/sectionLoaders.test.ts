@@ -2,12 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureTracer, type Span } from "../sdk/observability";
 import type { ResolvedSection } from "./resolve";
 import {
+  isLayoutSection,
   registerCacheableSections,
   registerLayoutSections,
   registerSectionLoader,
+  registerSectionLoaders,
   runSectionLoaders,
   runSingleSectionLoader,
+  unregisterLayoutSections,
 } from "./sectionLoaders";
+import { compose, withDevice, withMobile, withSearchParam } from "./sectionMixins";
 
 const G = globalThis as any;
 
@@ -121,6 +125,103 @@ describe("runSingleSectionLoader — cache keying", () => {
     await runSingleSectionLoader(section, new Request("https://store.com/b"));
 
     expect(loader).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Layout cache opt-out (#206)
+// ---------------------------------------------------------------------------
+
+describe("unregisterLayoutSections", () => {
+  it("drops a key from the layout set so the loader re-runs per request", async () => {
+    const loader = vi.fn(async (props: Record<string, unknown>) => props);
+    registerSectionLoader("site/sections/Header.tsx", loader);
+    registerLayoutSections(["site/sections/Header.tsx"]);
+    expect(isLayoutSection("site/sections/Header.tsx")).toBe(true);
+
+    unregisterLayoutSections(["site/sections/Header.tsx"]);
+    expect(isLayoutSection("site/sections/Header.tsx")).toBe(false);
+
+    const section = makeSection("site/sections/Header.tsx", {});
+    await runSingleSectionLoader(section, new Request("https://store.com/a"));
+    await runSingleSectionLoader(section, new Request("https://store.com/b"));
+
+    // No layout caching after unregister — loader runs per request.
+    expect(loader).toHaveBeenCalledTimes(2);
+  });
+
+  it("is a no-op for keys that were never registered", () => {
+    expect(() =>
+      unregisterLayoutSections(["site/sections/Never.tsx"]),
+    ).not.toThrow();
+    expect(isLayoutSection("site/sections/Never.tsx")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dev warning: layout + request-dependent loader → cache contamination (#206)
+// ---------------------------------------------------------------------------
+
+describe("registerSectionLoaders — request-dependent + layout warning (#206)", () => {
+  const originalNodeEnv = process.env.NODE_ENV;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    process.env.NODE_ENV = "development";
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    process.env.NODE_ENV = originalNodeEnv;
+    warnSpy.mockRestore();
+  });
+
+  it("warns when a request-dependent loader is registered for a layout section", () => {
+    registerLayoutSections(["site/sections/Header.tsx"]);
+    registerSectionLoaders({
+      "site/sections/Header.tsx": withDevice(),
+    });
+    const calls = warnSpy.mock.calls.map((c) => String(c[0]));
+    expect(calls.some((m) => m.includes("Header.tsx"))).toBe(true);
+    expect(calls.some((m) => m.includes("layout section"))).toBe(true);
+    expect(calls.some((m) => m.includes("unregisterLayoutSections"))).toBe(true);
+  });
+
+  it("warns when a composed loader contains any request-dependent mixin", () => {
+    registerLayoutSections(["site/sections/Footer.tsx"]);
+    registerSectionLoaders({
+      "site/sections/Footer.tsx": compose(
+        withSearchParam(),
+        async (props) => props,
+      ),
+    });
+    expect(warnSpy).toHaveBeenCalled();
+  });
+
+  it("does NOT warn for a layout section whose loader is request-independent", () => {
+    registerLayoutSections(["site/sections/Theme.tsx"]);
+    registerSectionLoaders({
+      "site/sections/Theme.tsx": async (props) => props,
+    });
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("does NOT warn after unregisterLayoutSections drops the key", () => {
+    registerLayoutSections(["site/sections/Header.tsx"]);
+    unregisterLayoutSections(["site/sections/Header.tsx"]);
+    registerSectionLoaders({
+      "site/sections/Header.tsx": withDevice(),
+    });
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("does NOT warn in production", () => {
+    process.env.NODE_ENV = "production";
+    registerLayoutSections(["site/sections/Header.tsx"]);
+    registerSectionLoaders({
+      "site/sections/Header.tsx": withMobile(),
+    });
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 });
 

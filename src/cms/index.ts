@@ -74,6 +74,7 @@ export {
   registerSectionLoaders,
   runSectionLoaders,
   runSingleSectionLoader,
+  unregisterLayoutSections,
 } from "./sectionLoaders";
 export {
   compose,
