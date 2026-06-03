@@ -266,23 +266,33 @@ describe("commerce loader auto-injects URL search params as props", () => {
     expect(calls[0]?.__pageUrl).toBeUndefined();
   });
 
-  it("does not throw on malformed URL — loader still runs with __pageUrl set", async () => {
+  it("warns and skips injection when matcherCtx.url is malformed", async () => {
     const calls: Array<Record<string, unknown>> = [];
     registerCommerceLoader(KEY, async (props: Record<string, unknown>) => {
       calls.push({ ...props });
       return null;
     });
 
-    await expect(
-      resolveValue({ __resolveType: KEY, slug: "abc" }, undefined, {
-        url: "not a url",
-        path: "/",
-      }),
-    ).resolves.not.toThrow();
-    expect(calls[0]).toMatchObject({ slug: "abc", __pageUrl: "not a url" });
-    // No new props were injected — loader sees only what was given + __pageUrl.
-    expect(Object.keys(calls[0] ?? {}).sort()).toEqual(
-      ["__pagePath", "__pageUrl", "slug"].sort(),
-    );
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(
+        resolveValue({ __resolveType: KEY, slug: "abc" }, undefined, {
+          url: "not a url",
+          path: "/",
+        }),
+      ).resolves.not.toThrow();
+
+      // Loader still ran with __pageUrl set, but no query params were
+      // injected and the warning surfaced the upstream bug.
+      expect(calls[0]).toMatchObject({ slug: "abc", __pageUrl: "not a url" });
+      expect(Object.keys(calls[0] ?? {}).sort()).toEqual(
+        ["__pagePath", "__pageUrl", "slug"].sort(),
+      );
+      const warnings = warnSpy.mock.calls.map((c) => String(c[0]));
+      expect(warnings.some((w) => w.includes("malformed matcherCtx.url"))).toBe(true);
+      expect(warnings.some((w) => w.includes(KEY))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

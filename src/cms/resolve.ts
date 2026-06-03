@@ -626,13 +626,20 @@ async function internalResolve(value: unknown, rctx: ResolveContext): Promise<un
       // layer hashes section.props BEFORE this enrichment in
       // sectionLoaders.ts), so adding query params here does not
       // fragment any cache key.
-      try {
+      if (URL.canParse(rctx.matcherCtx.url)) {
         const url = new URL(rctx.matcherCtx.url);
         for (const [k, v] of url.searchParams.entries()) {
           if (resolvedProps[k] === undefined) resolvedProps[k] = v;
         }
-      } catch {
-        // Malformed URL — skip query-param injection silently.
+      } else {
+        // Loud warning instead of silent swallow: matcherCtx.url should
+        // always be a fully-qualified URL (set from `getRequestUrl()` in
+        // cmsRoute.ts). If we see a malformed value here, something
+        // upstream is wrong — surface it so the caller can fix it.
+        console.warn(
+          `[CMS] malformed matcherCtx.url for "${resolveType}"; ` +
+            `skipping query-param injection: ${rctx.matcherCtx.url}`,
+        );
       }
     }
 
