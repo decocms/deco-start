@@ -11,6 +11,7 @@
 
 import { getCacheProfile } from "../sdk/cacheHeaders";
 import { djb2 } from "../sdk/djb2";
+import { withInflightTimeout } from "../sdk/inflightTimeout";
 import { withTracing } from "../sdk/observability";
 import type { ResolvedSection } from "./resolve";
 
@@ -123,20 +124,22 @@ function runCacheableSectionLoader(
 
   if (entry) return Promise.resolve(entry.section);
 
-  const promise = (async () => {
-    const enrichedProps = await loader(section.props as Record<string, unknown>, request);
-    const enriched = { ...section, props: enrichedProps };
-    sectionLoaderCache.set(key, {
-      section: enriched,
-      createdAt: Date.now(),
-      refreshing: false,
-    });
-    evictSectionCacheIfNeeded();
-    return enriched;
-  })();
+  const promise = withInflightTimeout(
+    (async () => {
+      const enrichedProps = await loader(section.props as Record<string, unknown>, request);
+      const enriched = { ...section, props: enrichedProps };
+      sectionLoaderCache.set(key, {
+        section: enriched,
+        createdAt: Date.now(),
+        refreshing: false,
+      });
+      evictSectionCacheIfNeeded();
+      return enriched;
+    })(),
+    `sectionLoader ${key}`,
+  ).finally(() => sectionLoaderInflight.delete(key));
 
   sectionLoaderInflight.set(key, promise);
-  promise.finally(() => sectionLoaderInflight.delete(key));
   return promise;
 }
 
@@ -228,15 +231,17 @@ function resolveLayoutSection(
   const existing = layoutInflight.get(key);
   if (existing) return existing;
 
-  const promise = (async () => {
-    const enrichedProps = await loader(section.props as Record<string, unknown>, request);
-    const enriched = { ...section, props: enrichedProps };
-    setCachedLayout(key, enriched);
-    return enriched;
-  })();
+  const promise = withInflightTimeout(
+    (async () => {
+      const enrichedProps = await loader(section.props as Record<string, unknown>, request);
+      const enriched = { ...section, props: enrichedProps };
+      setCachedLayout(key, enriched);
+      return enriched;
+    })(),
+    `layoutSection ${key}`,
+  ).finally(() => layoutInflight.delete(key));
 
   layoutInflight.set(key, promise);
-  promise.finally(() => layoutInflight.delete(key));
 
   return promise;
 }

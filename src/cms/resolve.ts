@@ -6,6 +6,7 @@ import {
 } from "../admin/schema";
 import { getMeter, MetricNames, withTracing } from "../middleware/observability";
 import { djb2Hex } from "../sdk/djb2";
+import { withInflightTimeout } from "../sdk/inflightTimeout";
 import { normalizeUrlsInObject } from "../sdk/normalizeUrls";
 import { findPageByPath, loadBlocks } from "./loader";
 import { getOnBeforeResolveProps, getSection, registerOnBeforeResolveProps } from "./registry";
@@ -1483,12 +1484,14 @@ async function resolveDecoPageImpl(
             const inflight = resolvedLayoutInflight.get(layoutKey);
             if (inflight) return inflight;
 
-            const p = resolveRawSection(section, rctx).then((results) => {
-              setCachedResolvedLayout(layoutKey, results);
-              return results;
-            });
+            const p = withInflightTimeout(
+              resolveRawSection(section, rctx).then((results) => {
+                setCachedResolvedLayout(layoutKey, results);
+                return results;
+              }),
+              `resolvedLayout ${layoutKey}`,
+            ).finally(() => resolvedLayoutInflight.delete(layoutKey));
             resolvedLayoutInflight.set(layoutKey, p);
-            p.finally(() => resolvedLayoutInflight.delete(layoutKey));
             return p;
           }
 
@@ -1576,12 +1579,14 @@ export async function resolvePageSections(
           const inflight = resolvedLayoutInflight.get(layoutKey);
           if (inflight) return inflight;
 
-          const p = resolveRawSection(section, rctx).then((results) => {
-            setCachedResolvedLayout(layoutKey, results);
-            return results;
-          });
+          const p = withInflightTimeout(
+            resolveRawSection(section, rctx).then((results) => {
+              setCachedResolvedLayout(layoutKey, results);
+              return results;
+            }),
+            `resolvedLayout ${layoutKey}`,
+          ).finally(() => resolvedLayoutInflight.delete(layoutKey));
           resolvedLayoutInflight.set(layoutKey, p);
-          p.finally(() => resolvedLayoutInflight.delete(layoutKey));
           return p;
         }
 

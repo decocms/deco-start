@@ -18,6 +18,7 @@ import {
   withTracing,
 } from "../middleware/observability";
 import { type CacheProfileName, loaderCacheOptions } from "./cacheHeaders";
+import { withInflightTimeout } from "./inflightTimeout";
 
 export type CachePolicy = "no-store" | "no-cache" | "stale-while-revalidate";
 
@@ -116,10 +117,13 @@ export function createCachedLoader<TProps, TResult>(
       // Dev mode: no caching, but still useful to count attempts.
       recordCacheMetric(false, name, undefined, "cachedLoader");
       const devStart = performance.now();
-      const promise = withTracing(
-        "deco.cachedLoader",
-        () => loaderFn(props),
-        { "deco.loader": name, "deco.cache.policy": "no-cache-dev" },
+      const promise = withInflightTimeout(
+        withTracing(
+          "deco.cachedLoader",
+          () => loaderFn(props),
+          { "deco.loader": name, "deco.cache.policy": "no-cache-dev" },
+        ),
+        `cachedLoader:dev ${cacheKey}`,
       )
         .then((r) => {
           recordLoaderMetric(name, performance.now() - devStart, "BYPASS");
@@ -192,10 +196,13 @@ export function createCachedLoader<TProps, TResult>(
     // slow loaders are visible in traces.
     recordCacheMetric(false, name, "MISS", "cachedLoader");
     const loaderStart = performance.now();
-    const promise = withTracing("deco.cachedLoader", () => loaderFn(props), {
-      "deco.loader": name,
-      "deco.cache.policy": policy,
-    })
+    const promise = withInflightTimeout(
+      withTracing("deco.cachedLoader", () => loaderFn(props), {
+        "deco.loader": name,
+        "deco.cache.policy": policy,
+      }),
+      `cachedLoader ${cacheKey}`,
+    )
       .then((result) => {
         recordLoaderMetric(name, performance.now() - loaderStart, "MISS");
         cache.set(cacheKey, {
@@ -204,11 +211,9 @@ export function createCachedLoader<TProps, TResult>(
           refreshing: false,
         });
         evictIfNeeded();
-        inflightRequests.delete(cacheKey);
         return result;
       })
       .catch((err) => {
-        inflightRequests.delete(cacheKey);
         // SIE fallback: if we have a stale entry within the error window, return it
         if (staleIfError > 0 && entry) {
           const age = now - entry.createdAt;
@@ -223,7 +228,8 @@ export function createCachedLoader<TProps, TResult>(
         recordLoaderMetric(name, performance.now() - loaderStart, "MISS");
         recordLoaderError(name);
         throw err;
-      });
+      })
+      .finally(() => inflightRequests.delete(cacheKey));
 
     inflightRequests.set(cacheKey, promise);
     return promise;
