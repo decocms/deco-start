@@ -9,7 +9,9 @@
     "deco-post-cleanup": "./scripts/migrate-post-cleanup.ts",
     "deco-htmx-analyze": "./scripts/htmx-analyze.ts",
     "deco-cf-observability": "./scripts/migrate-to-cf-observability.ts",
-    "deco-audit-observability": "./scripts/audit-observability-config.ts"
+    "deco-audit-observability": "./scripts/audit-observability-config.ts",
+    "deco-migrate-blocks-to-kv": "./scripts/migrate-blocks-to-kv.ts",
+    "deco-sync-blocks-to-kv": "./scripts/sync-blocks-to-kv.ts"
   },
   "exports": {
     ".": "./src/index.ts",
