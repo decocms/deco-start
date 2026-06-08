@@ -1,3 +1,5 @@
+export type { BlockSnapshot, BlockSource, KVNamespace } from "./blockSource";
+export { BundledBlockSource, computeRevision, KV_KEYS } from "./blockSource";
 export type { DecoPage, Resolvable } from "./loader";
 export {
   findPageByPath,
