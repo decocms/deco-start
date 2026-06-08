@@ -38,6 +38,7 @@ import {
   getCacheProfile,
 } from "./cacheHeaders";
 import { buildHtmlShell } from "./htmlShell";
+import { ensureBlocksHydrated, maybePollRevision } from "./kvHydration";
 import {
   getActiveSpan,
   logRequest,
@@ -1250,6 +1251,14 @@ export function createDecoWorkerEntry(
     ctx: WorkerExecutionContext,
   ): Promise<Response> {
     const url = new URL(request.url);
+
+    // Fast-deploy: hydrate the in-memory decofile from KV on the first request
+    // per isolate (awaited, ~10-30ms once), then opportunistically poll for
+    // content changes (non-blocking, via ctx.waitUntil). No-op unless the
+    // DECO_KV binding is present — non-migrated sites are unaffected. Runs
+    // before admin routes so /.decofile reads reflect KV too.
+    await ensureBlocksHydrated(env, ctx);
+    maybePollRevision(env, ctx);
 
     // Admin routes (/_meta, /.decofile, /live/previews) — always handled first
     const adminResponse = await tryAdminRoute(request);
