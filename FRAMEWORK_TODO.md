@@ -108,3 +108,13 @@ Issues discovered during the portal-davinci migration script development.
 | `@decocms/start/worker` wrong path → `@decocms/start/sdk/workerEntry` | `server-entry.ts` | Fixed in script |
 | `SiteTheme` / `Font` import removed by catch-all rule | `imports.ts` | Fixed in script |
 | Bootstrap failures silently ignored | `migrate.ts` | Fixed in script |
+
+---
+
+## Fast Deploy (KV-first content) — cross-repo follow-ups
+
+Framework + CI scripts landed in this repo (see [`docs/fast-deploy.md`](./docs/fast-deploy.md)). Remaining work lives in other repos:
+
+- **admin.deco.cx (Studio)**: publish a delta envelope to `/.decofile` + call `/_cache/purge`; gate on a per-site `fast_deploy_enabled` capability; dispatch deco-sync-bot commit off the critical path.
+- **Site CI**: provision KV namespace + `DECO_KV` binding; add `sync-content-to-kv.yml`; gate `deploy.yml` to code-only changes.
+- **Framework follow-up**: module-level `loadBlocks()` consumers (e.g. `loadRedirects` in worker-entry) read the bundled snapshot pre-hydration — move into request path to fast-deploy them.

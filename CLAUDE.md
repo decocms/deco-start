@@ -119,6 +119,10 @@ The admin (admin.deco.cx) communicates with self-hosted storefronts via:
 
 Schema is composed at runtime: `generate-schema.ts` produces section schemas, `composeMeta()` in `src/admin/schema.ts` injects page schemas and framework definitions.
 
+## Fast Deploy (KV-first content)
+
+Optional path that decouples CMS content updates from code deploys: content is served from Cloudflare KV (`decofile:current` + `index:revision`) with the bundled `blocks.gen` as fallback. Whole-snapshot swap — each isolate loads the decofile once and swaps the in-memory map via `setBlocks()`, so the synchronous resolver is unchanged. Gated on an explicit opt-in — requires BOTH `DECO_FAST_DEPLOY=1` and the `DECO_KV` binding; inert otherwise. Read path: `src/cms/blockSource.ts`, `src/cms/kvBlockSource.ts`, `src/sdk/kvHydration.ts` (wired in `workerEntry.ts`). Write-through + delta payloads: `src/admin/decofile.ts`. CI: `scripts/{migrate,sync}-blocks-to-kv.ts`. Full guide + cross-repo contracts: [`docs/fast-deploy.md`](./docs/fast-deploy.md).
+
 ## Migration Guide
 
 Detailed migration playbook from Fresh/Preact/Deno to TanStack Start/React/Workers is available at `.agents/skills/deco-to-tanstack-migration/` (the canonical location — also surfaced as a Cursor skill via the `.agents/` skills root). Covers:
