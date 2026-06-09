@@ -1207,18 +1207,16 @@ export function createDecoWorkerEntry(
         const xCacheRaw = finalResponse.headers.get("X-Cache");
         const cacheDecision = isCacheDecision(xCacheRaw) ? xCacheRaw : undefined;
         const colo = (request as unknown as { cf?: { colo?: string } }).cf?.colo;
+        // NOTE: `request.id` and `trace.id` are intentionally NOT stamped
+        // on the metric. They are per-request identifiers and would
+        // collapse aggregation (every request → its own histogram data
+        // point). They are stamped on the span (see line 1129) and on
+        // the access log (see logRequest call below); use those for
+        // request-level correlation.
         recordRequestMetric(method, reqUrl.pathname, finalResponse.status, durationMs, {
           ...(cacheDecision ? { cache_decision: cacheDecision } : {}),
           ...(cacheDecision ? { cache_layer: "edge" as const } : {}),
           ...(typeof colo === "string" && colo.length > 0 ? { region: colo } : {}),
-          ...(identity.requestId || identity.traceId
-            ? {
-                extra: {
-                  ...(identity.requestId ? { "request.id": identity.requestId } : {}),
-                  ...(identity.traceId ? { "trace.id": identity.traceId } : {}),
-                },
-              }
-            : {}),
         });
       } catch {
         /* swallow — observability must never fail the request */

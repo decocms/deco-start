@@ -334,6 +334,21 @@ export function statusClassFor(status: number): string {
  * `status_class` label bounds the cardinality further for dashboards
  * that don't need the raw value.
  */
+/**
+ * Per-request identifiers that MUST NOT be stamped on metric labels.
+ * They belong on spans (where they are 1:1 with the entity being
+ * observed) and on logs (where they enable cross-channel correlation).
+ * Putting them on metric labels collapses aggregation — every request
+ * becomes its own histogram data point.
+ */
+const HIGH_CARDINALITY_BLOCKLIST = new Set<string>([
+  "request.id",
+  "trace.id",
+  "span.id",
+  "session.id",
+  "user.id",
+]);
+
 export interface RequestMetricLabels {
   /** TanStack route pattern (`/_products/$slug/p`) — closed set. */
   route_pattern?: string;
@@ -399,7 +414,15 @@ export function recordRequestMetric(
   if (labels?.cache_layer) merged.cache_layer = labels.cache_layer;
   if (labels?.region) merged.region = labels.region;
   if (labels?.extra) {
-    for (const [k, v] of Object.entries(labels.extra)) merged[k] = v;
+    for (const [k, v] of Object.entries(labels.extra)) {
+      // Defense-in-depth — refuse to stamp known per-request identifiers
+      // on metric labels. These belong on spans and logs only; putting
+      // them here makes every request its own histogram data point and
+      // destroys aggregation. Caller-supplied `extra` should remain a
+      // low-cardinality escape hatch (A/B variant, feature flag, ...).
+      if (HIGH_CARDINALITY_BLOCKLIST.has(k)) continue;
+      merged[k] = v;
+    }
   }
   // OTel canonical HTTP metrics define a single histogram per direction
   // (`http.server.request.duration` for incoming). The request count is
