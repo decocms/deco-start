@@ -136,11 +136,7 @@ function pickIndex(metricName: string, labels?: Record<string, unknown>): string
   // For HTTP request metrics the natural index is the path (matches the
   // schema: `indexes[0]=path`). For other metrics, fall back to the metric
   // name so the dataset is always queryable by index.
-  if (
-    metricName === MetricNames.HTTP_REQUESTS_TOTAL ||
-    metricName === MetricNames.HTTP_REQUEST_DURATION_MS ||
-    metricName === MetricNames.HTTP_REQUEST_ERRORS
-  ) {
+  if (metricName === MetricNames.HTTP_SERVER_REQUEST_DURATION) {
     const p = labels.path;
     if (typeof p === "string" && p.length > 0) return p;
   }

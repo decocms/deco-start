@@ -65,8 +65,10 @@ describe("observability granular modules", () => {
     expect(typeof observability.withTracing).toBe("function");
     expect(typeof observability.recordRequestMetric).toBe("function");
     expect(typeof observability.recordCacheMetric).toBe("function");
-    expect(observability.MetricNames.HTTP_REQUEST_DURATION_MS).toBe("http_request_duration_ms");
-    expect(observability.MetricNames.RESOLVE_DURATION_MS).toBe("resolve_duration_ms");
+    expect(observability.MetricNames.HTTP_SERVER_REQUEST_DURATION).toBe(
+      "http.server.request.duration",
+    );
+    expect(observability.MetricNames.RESOLVE_DURATION).toBe("deco.cms.resolve.duration");
   });
 
   it("ClickHouse collector adapter is a documented stub that throws", () => {
@@ -341,8 +343,8 @@ describe("instrumentWorker — OTLP/HTTP metrics exporter wiring", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe("https://ingest.test/v1/metrics");
 
-    // Payload carries the resource floor and at least the http_requests_total
-    // counter that recordRequestMetric emits.
+    // Payload carries the resource floor and at least the canonical
+    // `http.server.request.duration` histogram that recordRequestMetric emits.
     const payload = JSON.parse(calls[0].body) as {
       resourceMetrics: Array<{
         resource: { attributes: Array<{ key: string; value: { stringValue: string } }> };
@@ -355,8 +357,7 @@ describe("instrumentWorker — OTLP/HTTP metrics exporter wiring", () => {
       value: { stringValue: "smoke-site" },
     });
     const names = payload.resourceMetrics[0].scopeMetrics[0].metrics.map((m) => m.name);
-    expect(names).toContain("http_requests_total");
-    expect(names).toContain("http_request_duration_ms");
+    expect(names).toContain("http.server.request.duration");
   });
 
   it("otlpMetricsEnabled=false disables the OTLP meter even when env is set", async () => {

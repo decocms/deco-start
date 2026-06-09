@@ -72,6 +72,15 @@ export interface OtlpHttpMeterOptions {
   nowMs?: () => number;
   /** Optional sink for transport errors so callers can surface them. */
   onError?: (kind: "flush" | "overflow" | "kind-mismatch", err: unknown) => void;
+  /**
+   * Per-metric metadata emitted in the OTLP payload's `description` and
+   * `unit` fields. Looked up by metric name at flush time. Names absent
+   * from the map flush with empty description/unit (still valid OTLP).
+   * The framework owns the lookup; callers MUST NOT pass metadata at
+   * record time. See `MetricNames` / `METRIC_METADATA` in
+   * `middleware/observability.ts`.
+   */
+  metricMetadata?: Record<string, { description?: string; unit?: string }>;
 }
 
 export interface OtlpHttpMeter extends MeterAdapter {
@@ -141,6 +150,7 @@ export function createOtlpHttpMeterAdapter(options: OtlpHttpMeterOptions): OtlpH
   const fetchImpl = options.fetchImpl ?? fetch;
   const now = options.nowMs ?? (() => Date.now());
   const onError = options.onError;
+  const metricMetadata = options.metricMetadata ?? {};
 
   // Buffer state — per-isolate, never reset (CUMULATIVE temporality).
   const metrics = new Map<string, MetricEntry>();
@@ -295,6 +305,7 @@ export function createOtlpHttpMeterAdapter(options: OtlpHttpMeterOptions): OtlpH
       scopeVersion,
       histogramBounds,
       flushAtNs,
+      metricMetadata,
     });
 
     const controller = new AbortController();
@@ -390,6 +401,7 @@ interface SerializeOpts {
   scopeVersion: string;
   histogramBounds: number[];
   flushAtNs: string;
+  metricMetadata: Record<string, { description?: string; unit?: string }>;
 }
 
 function serializeOtlp(
@@ -399,6 +411,9 @@ function serializeOtlp(
   const otlpMetrics: unknown[] = [];
 
   for (const [name, entry] of metrics) {
+    const meta = opts.metricMetadata[name];
+    const description = meta?.description ?? "";
+    const unit = meta?.unit ?? "";
     if (entry.kind === "counter" && entry.counter) {
       const dataPoints: unknown[] = [];
       for (const point of entry.counter.values()) {
@@ -411,6 +426,8 @@ function serializeOtlp(
       }
       otlpMetrics.push({
         name,
+        description,
+        unit,
         sum: {
           aggregationTemporality: 2, // CUMULATIVE
           isMonotonic: true,
@@ -428,6 +445,8 @@ function serializeOtlp(
       }
       otlpMetrics.push({
         name,
+        description,
+        unit,
         gauge: { dataPoints },
       });
     } else if (entry.kind === "histogram" && entry.histogram) {
@@ -447,6 +466,8 @@ function serializeOtlp(
       }
       otlpMetrics.push({
         name,
+        description,
+        unit,
         histogram: {
           aggregationTemporality: 2, // CUMULATIVE
           dataPoints,

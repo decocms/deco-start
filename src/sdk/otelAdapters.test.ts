@@ -27,8 +27,8 @@ describe("createAnalyticsEngineMeterAdapter", () => {
 
     const meter = createAnalyticsEngineMeterAdapter({ binding });
 
-    meter.counterInc("http_requests_total", 1, { method: "GET", path: "/", status: 200 });
-    meter.histogramRecord?.("http_request_duration_ms", 150, {
+    meter.counterInc("deco.cache.hits", 1, { profile: "product" });
+    meter.histogramRecord?.("http.server.request.duration", 150, {
       method: "GET",
       path: "/",
       status: 200,
@@ -37,11 +37,12 @@ describe("createAnalyticsEngineMeterAdapter", () => {
 
     expect(writeDataPoint).toHaveBeenCalledTimes(3);
 
-    // For HTTP request metrics, indexes[0] must be the path.
-    expect(writeDataPoint.mock.calls[0]?.[0].indexes).toEqual(["/"]);
+    // Non-HTTP counter falls back to the metric name as the index.
+    expect(writeDataPoint.mock.calls[0]?.[0].indexes).toEqual(["deco.cache.hits"]);
     expect(writeDataPoint.mock.calls[0]?.[0].doubles).toEqual([1]);
-    expect(writeDataPoint.mock.calls[0]?.[0].blobs?.[0]).toBe("http_requests_total");
+    expect(writeDataPoint.mock.calls[0]?.[0].blobs?.[0]).toBe("deco.cache.hits");
 
+    // For canonical HTTP server histogram, indexes[0] must be the path.
     expect(writeDataPoint.mock.calls[1]?.[0].indexes).toEqual(["/"]);
     expect(writeDataPoint.mock.calls[1]?.[0].doubles).toEqual([150]);
 
@@ -57,8 +58,8 @@ describe("createAnalyticsEngineMeterAdapter", () => {
     RequestContext.run(new Request("https://x.example/"), () => {
       setRuntimeEnv(env);
       const meter = createAnalyticsEngineMeterAdapter();
-      // Use a known HTTP metric name so path is promoted to index[0].
-      meter.counterInc("http_requests_total", 1, { path: "/x" });
+      // Canonical HTTP server histogram → path is promoted to index[0].
+      meter.histogramRecord?.("http.server.request.duration", 1, { path: "/x" });
       expect(writeDataPoint).toHaveBeenCalledOnce();
       expect(writeDataPoint.mock.calls[0]?.[0].indexes).toEqual(["/x"]);
     });

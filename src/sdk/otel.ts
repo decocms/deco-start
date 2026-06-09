@@ -83,6 +83,7 @@ import {
 } from "@opentelemetry/semantic-conventions/incubating";
 import { createCompositeLogger, createCompositeMeter } from "./composite";
 import { configureLogger, defaultLoggerAdapter, setLoggerAttributeFloor, type LogLevel } from "./logger";
+import { METRIC_METADATA } from "../middleware/observability";
 import { configureMeter, configureTracer, getActiveSpan } from "./observability";
 import { createAnalyticsEngineMeterAdapter } from "./otelAdapters";
 import { createOtlpHttpErrorLogAdapter, type OtlpHttpErrorLog } from "./otelHttpErrorLog";
@@ -609,6 +610,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
       resourceAttributes: floor,
       scopeVersion: decoRuntimeVersion,
       fetchImpl: opts.otlpMetricsFetchImpl,
+      metricMetadata: METRIC_METADATA,
       onError: (kind, err) => {
         // Surface flush + overflow errors at warn so operators see them in
         // CF Logs without enabling debug. Stays JSON via the logger so
