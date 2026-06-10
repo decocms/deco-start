@@ -59,8 +59,31 @@
  */
 
 import { SpanStatusCode, trace } from "@opentelemetry/api";
+// OTel community SemConv constants — official attribute names from the OTel
+// specification. Importing from the package (rather than typing strings)
+// guards against typos, surfaces deprecations via TypeScript, and tracks
+// upstream spec changes via the dep version.
+//   https://opentelemetry.io/docs/specs/semconv/resource/
+//   https://www.npmjs.com/package/@opentelemetry/semantic-conventions
+//
+// Stable attributes (graduated in upstream SemConv) come from the default
+// entry point. Incubating attributes (still experimental upstream) come from
+// the `/incubating` subpath — using them is a deliberate trade-off: stable
+// attribute names + a stability disclaimer documented in the conventions
+// guide (see context/04_engineering/o11y/02-conventions.md §4.2).
+import {
+  ATTR_DEPLOYMENT_ENVIRONMENT_NAME,
+  ATTR_SERVICE_INSTANCE_ID,
+  ATTR_SERVICE_NAME,
+  ATTR_SERVICE_VERSION,
+} from "@opentelemetry/semantic-conventions";
+import {
+  ATTR_CLOUD_PLATFORM,
+  ATTR_CLOUD_PROVIDER,
+} from "@opentelemetry/semantic-conventions/incubating";
 import { createCompositeLogger, createCompositeMeter } from "./composite";
-import { configureLogger, defaultLoggerAdapter, setLoggerAttributeFloor } from "./logger";
+import { configureLogger, defaultLoggerAdapter, setLoggerAttributeFloor, type LogLevel } from "./logger";
+import { METRIC_METADATA } from "../middleware/observability";
 import { configureMeter, configureTracer, getActiveSpan } from "./observability";
 import { createAnalyticsEngineMeterAdapter } from "./otelAdapters";
 import { createOtlpHttpErrorLogAdapter, type OtlpHttpErrorLog } from "./otelHttpErrorLog";
@@ -105,6 +128,25 @@ export interface OtelOptions {
   /** Set to `false` to disable the OTLP/HTTP error-log exporter explicitly. */
   otlpErrorLogsEnabled?: boolean;
   /**
+   * Minimum log level that the OTLP/HTTP error-log channel forwards.
+   * Defaults to `"error"` — production-safe: only errors travel
+   * direct-POST; info/warn flow through CF Destinations sampling. Set
+   * to `"warn"` to include warnings, or `"info"` / `"debug"` to capture
+   * everything (preview / local-dev only — bypasses sampling and can
+   * overwhelm the rate-limit bucket).
+   *
+   * Precedence: env var (`otlpErrorLogsMinLevelEnvVar`, default
+   * `DECO_OTEL_LOGS_MIN_LEVEL`) > this option > `"error"`. Invalid env
+   * values fall through silently.
+   */
+  otlpErrorLogsMinLevel?: LogLevel;
+  /**
+   * Env var name to read the OTLP/HTTP error-log minimum level from.
+   * Defaults to `"DECO_OTEL_LOGS_MIN_LEVEL"`. Value MUST be one of
+   * `"debug"`, `"info"`, `"warn"`, `"error"`.
+   */
+  otlpErrorLogsMinLevelEnvVar?: string;
+  /**
    * Env var name holding the OTLP/HTTP traces endpoint used by the
    * direct-POST span exporter. Defaults to `"DECO_OTEL_TRACES_ENDPOINT"`.
    * When set (and `otlpTracesEnabled !== false`), framework `deco.*`
@@ -130,8 +172,20 @@ export interface OtelOptions {
    * `deco.cms.resolvePage`, ...) are kept iff their root
    * `deco.http.request` span is kept. Set to `1` to capture every trace
    * (preview / debug only — production cost grows linearly).
+   *
+   * Precedence: env var (`otlpTracesSamplingRateEnvVar`, default
+   * `DECO_OTEL_TRACES_SAMPLING_RATE`) > this option > `0.01`. Reading from
+   * env lets local-dev opt into 100% sampling via `.dev.vars` without
+   * changing the worker entry.
    */
   otlpTracesSamplingRate?: number;
+  /**
+   * Env var name to read the head sampling rate from when set on `env`.
+   * Defaults to `DECO_OTEL_TRACES_SAMPLING_RATE`. Value MUST be a finite
+   * number in `[0, 1]`. Invalid values are ignored (falls back to
+   * `otlpTracesSamplingRate` then `0.01`).
+   */
+  otlpTracesSamplingRateEnvVar?: string;
   /** Test seam — replace the global `fetch` used by the traces exporter. */
   otlpTracesFetchImpl?: typeof fetch;
   /**
@@ -422,12 +476,30 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
   // inherit resource attrs, so we stamp them per-span/per-log defensively.
   // service.version comes from the CF_VERSION_METADATA binding which is
   // unique per deployment — needed to correlate regressions with releases.
+  //
+  // service.instance.id (OTel SemConv required for distributed services) is a
+  // per-isolate UUID generated at boot. Distinguishes parallel isolates on the
+  // same deploy — required so the System Health Agent can attribute behavior
+  // (memory creep, slow cold starts) to a specific instance.
+  //   https://opentelemetry.io/docs/specs/semconv/resource/#service
+  //
+  // cloud.provider / cloud.platform are stamped statically here because every
+  // isolate runs on CF Workers. cloud.region (the CF colo) is per-request, not
+  // per-isolate, so it's NOT in the resource floor — it MUST be attached at
+  // the span level by the request handler.
+  //   https://opentelemetry.io/docs/specs/semconv/resource/cloud/
+  //
+  // Note: `deco.runtime.version` and `deco.apps.version` are Deco extensions
+  // (not in OTel SemConv), so they remain as string literals.
   const floor: Record<string, string> = {
-    "service.name": serviceName,
+    [ATTR_SERVICE_NAME]: serviceName,
+    [ATTR_SERVICE_INSTANCE_ID]: crypto.randomUUID(),
+    [ATTR_DEPLOYMENT_ENVIRONMENT_NAME]: deploymentEnvironment,
+    [ATTR_CLOUD_PROVIDER]: "cloudflare",
+    [ATTR_CLOUD_PLATFORM]: "cloudflare_workers",
     "deco.runtime.version": decoRuntimeVersion,
-    "deployment.environment": deploymentEnvironment,
   };
-  if (serviceVersion) floor["service.version"] = serviceVersion;
+  if (serviceVersion) floor[ATTR_SERVICE_VERSION] = serviceVersion;
   if (opts.decoAppsVersion) floor["deco.apps.version"] = opts.decoAppsVersion;
 
   // Stamp on every span we create. CF-managed trace export emits its own
@@ -463,11 +535,24 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
   const otlpLogsEndpoint = (env[otlpLogsEnvVar] as string | undefined) ?? "";
   const otlpErrorLogsEnabled =
     opts.otlpErrorLogsEnabled !== false && otlpLogsEndpoint.length > 0;
+  // Minimum log level precedence: env var > options > "error" default.
+  // Invalid env values fall through silently.
+  const otlpLogsMinLevelEnvVar =
+    opts.otlpErrorLogsMinLevelEnvVar ?? "DECO_OTEL_LOGS_MIN_LEVEL";
+  const otlpLogsMinLevelFromEnv = (
+    (env[otlpLogsMinLevelEnvVar] as string | undefined) ?? ""
+  ).toLowerCase();
+  const validLogLevels = ["debug", "info", "warn", "error"] as const;
+  const otlpLogsMinLevel: LogLevel =
+    (validLogLevels as readonly string[]).includes(otlpLogsMinLevelFromEnv)
+      ? (otlpLogsMinLevelFromEnv as LogLevel)
+      : opts.otlpErrorLogsMinLevel ?? "error";
   if (otlpErrorLogsEnabled) {
     otlpErrorLog = createOtlpHttpErrorLogAdapter({
       endpoint: otlpLogsEndpoint,
       resourceAttributes: floor,
       scopeVersion: decoRuntimeVersion,
+      minLevel: otlpLogsMinLevel,
       fetchImpl: opts.otlpErrorLogsFetchImpl,
       onError: (kind, err) => {
         // Don't recurse — use console.warn directly, not logger.warn.
@@ -525,6 +610,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
       resourceAttributes: floor,
       scopeVersion: decoRuntimeVersion,
       fetchImpl: opts.otlpMetricsFetchImpl,
+      metricMetadata: METRIC_METADATA,
       onError: (kind, err) => {
         // Surface flush + overflow errors at warn so operators see them in
         // CF Logs without enabling debug. Stays JSON via the logger so
@@ -555,11 +641,24 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
   const otlpTracesEnabled =
     opts.otlpTracesEnabled !== false && otlpTracesEndpoint.length > 0;
   if (otlpTracesEnabled) {
+    // Sampling rate precedence: env var > options > 0.01 default.
+    // Invalid env values (NaN, < 0, > 1) fall through silently.
+    const otlpTracesSamplingRateEnvVar =
+      opts.otlpTracesSamplingRateEnvVar ?? "DECO_OTEL_TRACES_SAMPLING_RATE";
+    const samplingRateFromEnv = Number.parseFloat(
+      (env[otlpTracesSamplingRateEnvVar] as string | undefined) ?? "",
+    );
+    const samplingRateOverride =
+      Number.isFinite(samplingRateFromEnv) &&
+      samplingRateFromEnv >= 0 &&
+      samplingRateFromEnv <= 1
+        ? samplingRateFromEnv
+        : undefined;
     otlpTracer = createOtlpHttpTracerAdapter({
       endpoint: otlpTracesEndpoint,
       resourceAttributes: floor,
       scopeVersion: decoRuntimeVersion,
-      headSamplingRate: opts.otlpTracesSamplingRate ?? 0.01,
+      headSamplingRate: samplingRateOverride ?? opts.otlpTracesSamplingRate ?? 0.01,
       fetchImpl: opts.otlpTracesFetchImpl,
       getActiveSpanForParent: () => getActiveSpan(),
       getRequestTraceContext,
@@ -588,6 +687,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
     analyticsEngine: aeEnabled,
     otlpMetrics: otlpEnabled,
     otlpErrorLogs: otlpErrorLogsEnabled,
+    otlpErrorLogsMinLevel: otlpLogsMinLevel,
     otlpTraces: otlpTracesEnabled,
     runtimeVersion: decoRuntimeVersion,
     deploymentEnvironment,

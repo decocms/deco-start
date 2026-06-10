@@ -1361,7 +1361,7 @@ export async function resolveDecoPage(
       const result = await resolveDecoPageImpl(targetPath, matcherCtx);
       try {
         getMeter()?.histogramRecord?.(
-          MetricNames.RESOLVE_DURATION_MS,
+          MetricNames.RESOLVE_DURATION,
           performance.now() - startedAt,
           { path: targetPath },
         );

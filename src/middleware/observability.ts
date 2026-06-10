@@ -33,6 +33,11 @@
  */
 
 import * as asyncHooks from "node:async_hooks";
+import {
+  METRIC_HTTP_CLIENT_REQUEST_DURATION,
+  METRIC_HTTP_SERVER_REQUEST_DURATION,
+} from "@opentelemetry/semantic-conventions";
+import { logger } from "../sdk/logger";
 
 // ---------------------------------------------------------------------------
 // RequestStore — minimal per-request context abstraction. Inlined here so
@@ -230,46 +235,76 @@ export function getMeter(): MeterAdapter | null {
   return getState().meter;
 }
 
-/** Pre-defined metric names for consistency. */
+/**
+ * Pre-defined metric names. Where the OTel community SemConv defines a
+ * canonical metric we use the constant imported from
+ * `@opentelemetry/semantic-conventions` (e.g.
+ * `METRIC_HTTP_SERVER_REQUEST_DURATION`) — never write the string ourselves.
+ * Browse: https://opentelemetry.io/docs/specs/semconv/http/http-metrics/
+ *
+ * Concepts the OTel community does NOT define (cache hits, CMS resolve,
+ * per-loader latency) use the Deco extension namespace `deco.*` in dotted
+ * notation, matching the OTel attribute-naming convention.
+ *
+ * Unit / value handling: emitters declare the unit honestly via the
+ * METRIC_METADATA map below; the framework never converts numeric values.
+ * Consumers (otel-ingest collector, future Go Collector swap, query
+ * layers) apply UCUM conversions if their target backend requires a
+ * specific unit (e.g. canonical OTel `s` for HTTP durations).
+ */
 export const MetricNames = {
-  HTTP_REQUESTS_TOTAL: "http_requests_total",
-  HTTP_REQUEST_DURATION_MS: "http_request_duration_ms",
-  HTTP_REQUEST_ERRORS: "http_request_errors_total",
-  CACHE_HIT: "cache_hit_total",
-  CACHE_MISS: "cache_miss_total",
-  RESOLVE_DURATION_MS: "resolve_duration_ms",
-  FETCH_DURATION_MS: "fetch_duration_ms",
-  /**
-   * Per-provider outbound commerce fetch duration. Owned by
-   * `@decocms/start` (not `@decocms/apps`) so every site emits this
-   * histogram unconditionally as soon as it bumps the framework,
-   * regardless of apps-start version. Apps register operation strings
-   * (`vtex.intelligent-search.product_search`,
-   * `shopify.graphql.cart_create`, ...) via `recordCommerceMetric`
-   * below; the framework owns the cardinality contract.
-   *
-   * Canonical labels: `provider`, `operation`, `status_class`, `cached`.
-   * See `recordCommerceMetric` for the full label set and Phase 2 in
-   * `MIGRATION_TOOLING_PLAN.md` for the rationale.
-   */
-  COMMERCE_REQUEST_DURATION_MS: "commerce_request_duration_ms",
-  /**
-   * Per-loader execution duration. Emitted by `cachedLoader` for every
-   * loader call — cached or not. The `cache_status` label lets dashboards
-   * separate origin latency from in-memory hit latency without needing
-   * to join on traces.
-   *
-   * Canonical labels: `loader`, `cache_status`.
-   */
-  LOADER_DURATION_MS: "loader_duration_ms",
-  /**
-   * Counter incremented when a loader throws. Complements
-   * `loader_duration_ms` for error-rate dashboards.
-   *
-   * Canonical labels: `loader`.
-   */
-  LOADER_ERRORS_TOTAL: "loader_errors_total",
+  // OTel SemConv (stable).
+  HTTP_SERVER_REQUEST_DURATION: METRIC_HTTP_SERVER_REQUEST_DURATION,
+  HTTP_CLIENT_REQUEST_DURATION: METRIC_HTTP_CLIENT_REQUEST_DURATION,
+  // Deco extensions — no canonical OTel metric exists for these concepts.
+  CACHE_HIT: "deco.cache.hits",
+  CACHE_MISS: "deco.cache.misses",
+  RESOLVE_DURATION: "deco.cms.resolve.duration",
+  LOADER_DURATION: "deco.loader.duration",
+  LOADER_ERRORS: "deco.loader.errors",
 } as const;
+
+/**
+ * Per-metric metadata emitted in the OTLP payload's `description` and
+ * `unit` fields. The framework declares units honestly — durations are in
+ * `ms` because that's what `recordRequestMetric`-style callers pass. If a
+ * downstream consumer needs canonical OTel seconds for
+ * `http.server.request.duration`, conversion happens in the collector or
+ * the query layer, NOT in this framework.
+ *
+ * Keep keys aligned with `MetricNames` values so a missing entry is a
+ * type error at compile time when a new metric ships without metadata.
+ */
+export const METRIC_METADATA: Record<string, { description: string; unit: string }> = {
+  [MetricNames.HTTP_SERVER_REQUEST_DURATION]: {
+    description: "Duration of HTTP server requests handled at the Worker entry point.",
+    unit: "ms",
+  },
+  [MetricNames.HTTP_CLIENT_REQUEST_DURATION]: {
+    description: "Duration of outbound HTTP client requests (commerce, generic fetch).",
+    unit: "ms",
+  },
+  [MetricNames.CACHE_HIT]: {
+    description: "Cache lookups resulting in HIT, STALE-HIT, or STALE-ERROR.",
+    unit: "{request}",
+  },
+  [MetricNames.CACHE_MISS]: {
+    description: "Cache lookups resulting in MISS or BYPASS.",
+    unit: "{request}",
+  },
+  [MetricNames.RESOLVE_DURATION]: {
+    description: "Duration of `deco.cms.resolvePage` — CMS route to block tree resolution.",
+    unit: "ms",
+  },
+  [MetricNames.LOADER_DURATION]: {
+    description: "Per-loader execution duration, emitted by cachedLoader.",
+    unit: "ms",
+  },
+  [MetricNames.LOADER_ERRORS]: {
+    description: "Per-loader error count.",
+    unit: "{error}",
+  },
+};
 
 /**
  * Map an HTTP status code to its canonical class label (`2xx` / ... /
@@ -299,6 +334,21 @@ export function statusClassFor(status: number): string {
  * `status_class` label bounds the cardinality further for dashboards
  * that don't need the raw value.
  */
+/**
+ * Per-request identifiers that MUST NOT be stamped on metric labels.
+ * They belong on spans (where they are 1:1 with the entity being
+ * observed) and on logs (where they enable cross-channel correlation).
+ * Putting them on metric labels collapses aggregation — every request
+ * becomes its own histogram data point.
+ */
+const HIGH_CARDINALITY_BLOCKLIST = new Set<string>([
+  "request.id",
+  "trace.id",
+  "span.id",
+  "session.id",
+  "user.id",
+]);
+
 export interface RequestMetricLabels {
   /** TanStack route pattern (`/_products/$slug/p`) — closed set. */
   route_pattern?: string;
@@ -364,13 +414,23 @@ export function recordRequestMetric(
   if (labels?.cache_layer) merged.cache_layer = labels.cache_layer;
   if (labels?.region) merged.region = labels.region;
   if (labels?.extra) {
-    for (const [k, v] of Object.entries(labels.extra)) merged[k] = v;
+    for (const [k, v] of Object.entries(labels.extra)) {
+      // Defense-in-depth — refuse to stamp known per-request identifiers
+      // on metric labels. These belong on spans and logs only; putting
+      // them here makes every request its own histogram data point and
+      // destroys aggregation. Caller-supplied `extra` should remain a
+      // low-cardinality escape hatch (A/B variant, feature flag, ...).
+      if (HIGH_CARDINALITY_BLOCKLIST.has(k)) continue;
+      merged[k] = v;
+    }
   }
-  m.counterInc(MetricNames.HTTP_REQUESTS_TOTAL, 1, merged);
-  m.histogramRecord?.(MetricNames.HTTP_REQUEST_DURATION_MS, durationMs, merged);
-  if (status >= 500) {
-    m.counterInc(MetricNames.HTTP_REQUEST_ERRORS, 1, merged);
-  }
+  // OTel canonical HTTP metrics define a single histogram per direction
+  // (`http.server.request.duration` for incoming). The request count is
+  // derived from the histogram's `count` field; error rate is derived by
+  // filtering on `http.response.status_code`. Separate `_total` /
+  // `_errors_total` counters were removed because they duplicate
+  // histogram-derived signals and aren't part of the canonical spec.
+  m.histogramRecord?.(MetricNames.HTTP_SERVER_REQUEST_DURATION, durationMs, merged);
 }
 
 /**
@@ -427,10 +487,14 @@ export function recordCacheMetric(
 
   const m = getState().meter;
   if (!m) return;
+  // Label names mirror the dotted span attributes `deco.cache.decision`,
+  // `deco.cache.profile`, `deco.cache.layer` (see model/registry/deco.yaml +
+  // model/metrics.yaml). Prometheus convention requires snake_case without
+  // dots — so `cache_decision` / `cache_layer` (not `decision` / `layer`).
   const labels: Labels = {};
   if (profile) labels.profile = profile;
-  if (decision) labels.decision = decision;
-  if (layer) labels.layer = layer;
+  if (decision) labels.cache_decision = decision;
+  if (layer) labels.cache_layer = layer;
   m.counterInc(hit ? MetricNames.CACHE_HIT : MetricNames.CACHE_MISS, 1, labels);
 }
 
@@ -468,7 +532,10 @@ export function recordCommerceMetric(
   };
   if (labels.status_class) merged.status_class = labels.status_class;
   if (typeof labels.cached === "boolean") merged.cached = labels.cached;
-  m.histogramRecord?.(MetricNames.COMMERCE_REQUEST_DURATION_MS, durationMs, merged);
+  // Canonical OTel HTTP client metric — outbound commerce calls share the
+  // same metric as any other outbound HTTP request; `peer.service` /
+  // `commerce.operation` attributes disambiguate consumer queries.
+  m.histogramRecord?.(MetricNames.HTTP_CLIENT_REQUEST_DURATION, durationMs, merged);
 }
 
 /**
@@ -484,7 +551,7 @@ export function recordLoaderMetric(
 ) {
   const m = getState().meter;
   if (!m) return;
-  m.histogramRecord?.(MetricNames.LOADER_DURATION_MS, durationMs, {
+  m.histogramRecord?.(MetricNames.LOADER_DURATION, durationMs, {
     loader: name,
     cache_status: cacheStatus,
   });
@@ -497,7 +564,7 @@ export function recordLoaderMetric(
 export function recordLoaderError(name: string) {
   const m = getState().meter;
   if (!m) return;
-  m.counterInc(MetricNames.LOADER_ERRORS_TOTAL, 1, { loader: name });
+  m.counterInc(MetricNames.LOADER_ERRORS, 1, { loader: name });
 }
 
 function normalizePath(path: string): string {
@@ -527,28 +594,20 @@ export function logRequest(
   extra?: Record<string, unknown>,
 ) {
   const url = new URL(request.url);
-
-  if (isDev) {
-    const color = status >= 500 ? "\x1b[31m" : status >= 400 ? "\x1b[33m" : "\x1b[32m";
-    const extraStr = extra ? ` ${JSON.stringify(extra)}` : "";
-    console.log(
-      `${color}${request.method}\x1b[0m ${url.pathname} ${status} ${durationMs.toFixed(0)}ms${extraStr}`,
-    );
-  } else {
-    const ctx = getActiveSpan()?.spanContext?.();
-    console.log(
-      JSON.stringify({
-        level: status >= 500 ? "error" : "info",
-        method: request.method,
-        path: url.pathname,
-        status,
-        durationMs: Math.round(durationMs),
-        timestamp: new Date().toISOString(),
-        ...(ctx ? { trace_id: ctx.traceId, span_id: ctx.spanId } : {}),
-        ...extra,
-      }),
-    );
-  }
+  // Route through the framework logger so the access log fans out to every
+  // configured adapter — local stdout via `defaultLoggerAdapter`, OTLP direct-
+  // POST via `otlpErrorLog.adapter` when configured (subject to its
+  // `DECO_OTEL_LOGS_MIN_LEVEL` threshold). 5xx upgrades to `error`; 4xx and
+  // 2xx land on `info`. `request.id` and `trace_id` are stamped by the
+  // logger floor automatically (no need to attach manually here).
+  const level = status >= 500 ? "error" : "info";
+  logger[level]("request handled", {
+    method: request.method,
+    path: url.pathname,
+    status,
+    duration_ms: Math.round(durationMs),
+    ...extra,
+  });
 }
 
 // noopRequestStore is kept as a no-op fallback for advanced tests; not

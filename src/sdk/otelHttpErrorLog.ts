@@ -69,6 +69,15 @@ export interface OtlpHttpErrorLogOptions {
    */
   rateLimitBurstCapacity?: number;
   rateLimitRefillPerMinute?: number;
+  /**
+   * Minimum log level that this adapter forwards to OTLP. Levels below
+   * this threshold are silently dropped at ingress. Defaults to `"error"`
+   * — production-safe (only errors travel direct-POST; info/warn flow
+   * through CF Destinations sampling). Set to `"info"` or `"debug"` in
+   * local dev to capture lower-severity logs in the same channel.
+   * Resolved from `DECO_OTEL_LOGS_MIN_LEVEL` in `bootObservability`.
+   */
+  minLevel?: LogLevel;
   /** Test seam — override fetch. */
   fetchImpl?: typeof fetch;
   /** Test seam — override Date.now(). */
@@ -121,6 +130,7 @@ export function createOtlpHttpErrorLogAdapter(options: OtlpHttpErrorLogOptions):
   const flushTimeoutMs = options.flushTimeoutMs ?? 5000;
   const burstCapacity = options.rateLimitBurstCapacity ?? 20;
   const refillPerMinute = options.rateLimitRefillPerMinute ?? 100;
+  const minSeverity = SEVERITY_NUMBER[options.minLevel ?? "error"];
   const fetchImpl = options.fetchImpl ?? fetch;
   const now = options.nowMs ?? (() => Date.now());
   const onError = options.onError;
@@ -152,8 +162,9 @@ export function createOtlpHttpErrorLogAdapter(options: OtlpHttpErrorLogOptions):
 
   const adapter: LoggerAdapter = {
     log(level, msg, attrs) {
-      // Filter levels upstream so the buffer only ever holds errors.
-      if (level !== "error") return;
+      // Filter by severity threshold (default: error only). Lower-severity
+      // records are silently dropped at ingress so the buffer never holds them.
+      if (SEVERITY_NUMBER[level] < minSeverity) return;
 
       if (!tryConsumeToken()) {
         onError?.(

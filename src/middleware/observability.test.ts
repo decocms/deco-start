@@ -75,44 +75,45 @@ describe("recordRequestMetric — canonical labels (D-11)", () => {
 
     recordRequestMetric("GET", "/products/abc123/p", 200, 42);
 
-    expect(counters).toHaveLength(1);
-    expect(counters[0]?.name).toBe(MetricNames.HTTP_REQUESTS_TOTAL);
-    expect(counters[0]?.labels).toMatchObject({
+    // Canonical OTel HTTP server metric is histogram-only; the count
+    // dimension is derived from the histogram's bucket counts at query
+    // time, so we no longer emit a parallel `_total` counter.
+    expect(counters).toHaveLength(0);
+    expect(histograms).toHaveLength(1);
+    expect(histograms[0]?.name).toBe(MetricNames.HTTP_SERVER_REQUEST_DURATION);
+    expect(histograms[0]?.value).toBe(42);
+    expect(histograms[0]?.labels).toMatchObject({
       method: "GET",
       // Default normalization: dynamic segments collapsed.
       route_pattern: "/products/:slug/p",
       status: 200,
       status_class: "2xx",
     });
-    expect(histograms).toHaveLength(1);
-    expect(histograms[0]?.name).toBe(MetricNames.HTTP_REQUEST_DURATION_MS);
-    expect(histograms[0]?.value).toBe(42);
   });
 
   it("prefers caller-supplied route_pattern over normalized path", () => {
-    const { adapter, counters } = captureMeter();
+    const { adapter, histograms } = captureMeter();
     configureMeter(adapter);
 
     recordRequestMetric("GET", "/anything/random/123", 200, 5, {
       route_pattern: "/_products/$slug/p",
     });
 
-    expect(counters[0]?.labels?.route_pattern).toBe("/_products/$slug/p");
+    expect(histograms[0]?.labels?.route_pattern).toBe("/_products/$slug/p");
   });
 
-  it("emits http_request_errors_total on 5xx", () => {
-    const { adapter, counters } = captureMeter();
+  it("tags 5xx requests with status_class=5xx for downstream error filtering", () => {
+    const { adapter, histograms } = captureMeter();
     configureMeter(adapter);
 
     recordRequestMetric("POST", "/checkout", 503, 120);
 
-    const errCounter = counters.find((c) => c.name === MetricNames.HTTP_REQUEST_ERRORS);
-    expect(errCounter).toBeDefined();
-    expect(errCounter?.labels?.status_class).toBe("5xx");
+    expect(histograms[0]?.labels?.status_class).toBe("5xx");
+    expect(histograms[0]?.labels?.status).toBe(503);
   });
 
   it("propagates optional labels (outcome, cache_decision, cache_layer, region, extra)", () => {
-    const { adapter, counters } = captureMeter();
+    const { adapter, histograms } = captureMeter();
     configureMeter(adapter);
 
     recordRequestMetric("GET", "/", 200, 10, {
@@ -123,7 +124,7 @@ describe("recordRequestMetric — canonical labels (D-11)", () => {
       extra: { ab_variant: "B" },
     });
 
-    expect(counters[0]?.labels).toMatchObject({
+    expect(histograms[0]?.labels).toMatchObject({
       outcome: "ok",
       cache_decision: "STALE-HIT",
       cache_layer: "edge",
@@ -156,8 +157,8 @@ describe("recordCacheMetric — cache_layer label", () => {
     expect(counters[0]?.name).toBe(MetricNames.CACHE_HIT);
     expect(counters[0]?.labels).toMatchObject({
       profile: "product",
-      decision: "HIT",
-      layer: "edge",
+      cache_decision: "HIT",
+      cache_layer: "edge",
     });
   });
 
@@ -186,8 +187,8 @@ describe("recordCacheMetric — cache_layer label", () => {
     recordCacheMetric(true, "loader-x", "HIT", "cachedLoader");
     recordCacheMetric(true, "vtex-product", "HIT", "vtex-swr");
 
-    expect(counters[0]?.labels?.layer).toBe("cachedLoader");
-    expect(counters[1]?.labels?.layer).toBe("vtex-swr");
+    expect(counters[0]?.labels?.cache_layer).toBe("cachedLoader");
+    expect(counters[1]?.labels?.cache_layer).toBe("vtex-swr");
   });
 });
 
@@ -196,7 +197,7 @@ describe("recordCommerceMetric (D-11)", () => {
     configureMeter({ counterInc: () => {} });
   });
 
-  it("emits commerce_request_duration_ms with provider + operation labels", () => {
+  it("emits http.client.request.duration with provider + operation labels", () => {
     const { adapter, histograms } = captureMeter();
     configureMeter(adapter);
 
@@ -207,7 +208,7 @@ describe("recordCommerceMetric (D-11)", () => {
     });
 
     expect(histograms).toHaveLength(1);
-    expect(histograms[0]?.name).toBe(MetricNames.COMMERCE_REQUEST_DURATION_MS);
+    expect(histograms[0]?.name).toBe(MetricNames.HTTP_CLIENT_REQUEST_DURATION);
     expect(histograms[0]?.value).toBe(123);
     expect(histograms[0]?.labels).toMatchObject({
       provider: "vtex",
