@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { proxyToFallback, type SiteConfig, type WorkerHandler, withABTesting } from "./abTesting";
+import {
+  getStableBucket,
+  proxyToFallback,
+  type SiteConfig,
+  tagBucket,
+  type WorkerHandler,
+  withABTesting,
+} from "./abTesting";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -227,5 +234,93 @@ describe("withABTesting — outer-catch defense", () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("handler saw: payload");
     expect(handler.fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ratio-fingerprinted cookie
+// ---------------------------------------------------------------------------
+
+describe("getStableBucket — ratio fingerprint", () => {
+  it("honors the cookie when its ratio fingerprint matches the current ratio", () => {
+    const request = new Request(`https://${REAL_HOST}/`, {
+      headers: { cookie: "_deco_bucket=fallback:50", "cf-connecting-ip": "1.2.3.4" },
+    });
+    expect(getStableBucket(request, 0.5, makeUrl("/"))).toBe("fallback");
+  });
+
+  it("ignores the cookie when the KV ratio has changed (fingerprint mismatch)", () => {
+    // Cookie remembers an old 50/50 assignment. Operator bumped to 100/0 in
+    // KV → cookie is no longer authoritative; bucket must be recomputed
+    // against the new threshold (here: 1.0 → always "worker").
+    const request = new Request(`https://${REAL_HOST}/`, {
+      headers: { cookie: "_deco_bucket=fallback:50", "cf-connecting-ip": "1.2.3.4" },
+    });
+    expect(getStableBucket(request, 1.0, makeUrl("/"))).toBe("worker");
+  });
+
+  it("ignores legacy unix-timestamp cookies and re-evaluates against current ratio", () => {
+    // Pre-fingerprint cookies (bucket:unixTs) parse to null and fall through
+    // to the hash. Ratio=0 forces "fallback" regardless of IP.
+    const request = new Request(`https://${REAL_HOST}/`, {
+      headers: {
+        cookie: "_deco_bucket=worker:1711540800",
+        "cf-connecting-ip": "1.2.3.4",
+      },
+    });
+    expect(getStableBucket(request, 0, makeUrl("/"))).toBe("fallback");
+  });
+
+  it("query param override beats the cookie even when fingerprint matches", () => {
+    const request = new Request(`https://${REAL_HOST}/?_deco_bucket=worker`, {
+      headers: { cookie: "_deco_bucket=fallback:50" },
+    });
+    expect(
+      getStableBucket(
+        request,
+        0.5,
+        new URL(`https://${REAL_HOST}/?_deco_bucket=worker`),
+      ),
+    ).toBe("worker");
+  });
+});
+
+describe("tagBucket — ratio fingerprint", () => {
+  it("writes the cookie with the current ratio fingerprint when none exists", () => {
+    const request = new Request(`https://${REAL_HOST}/`);
+    const res = tagBucket(new Response("ok"), "worker", REAL_HOST, request, 0.7);
+    const setCookie = res.headers.get("set-cookie") ?? "";
+    expect(setCookie).toContain("_deco_bucket=worker:70");
+    expect(setCookie).toContain(`Domain=${REAL_HOST}`);
+    expect(setCookie).toContain("SameSite=Lax");
+  });
+
+  it("rewrites the cookie when the ratio changes (cookie fingerprint stale)", () => {
+    const request = new Request(`https://${REAL_HOST}/`, {
+      headers: { cookie: "_deco_bucket=worker:30" },
+    });
+    const res = tagBucket(new Response("ok"), "worker", REAL_HOST, request, 0.7);
+    const setCookie = res.headers.get("set-cookie") ?? "";
+    expect(setCookie).toContain("_deco_bucket=worker:70");
+  });
+
+  it("does NOT rewrite the cookie when bucket and ratio still match", () => {
+    const request = new Request(`https://${REAL_HOST}/`, {
+      headers: { cookie: "_deco_bucket=worker:50" },
+    });
+    const res = tagBucket(new Response("ok"), "worker", REAL_HOST, request, 0.5);
+    expect(res.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("rounds the ratio to an integer percent (0.501 → 50)", () => {
+    const request = new Request(`https://${REAL_HOST}/`);
+    const res = tagBucket(new Response("ok"), "worker", REAL_HOST, request, 0.501);
+    expect(res.headers.get("set-cookie")).toContain("_deco_bucket=worker:50");
+  });
+
+  it("defaults Max-Age to 1 year (cookie expiry is no longer the invalidation mechanism)", () => {
+    const request = new Request(`https://${REAL_HOST}/`);
+    const res = tagBucket(new Response("ok"), "worker", REAL_HOST, request, 0.5);
+    expect(res.headers.get("set-cookie")).toContain(`Max-Age=${60 * 60 * 24 * 365}`);
   });
 });

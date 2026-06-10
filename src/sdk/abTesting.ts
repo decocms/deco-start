@@ -7,7 +7,11 @@
  *
  * Features:
  * - FNV-1a IP hashing for stable, deterministic bucket assignment
- * - Sticky bucketing via cookie ("bucket:timestamp" format)
+ * - Sticky bucketing via cookie ("bucket:ratioPct" format) — the cookie carries
+ *   a fingerprint of the KV ratio at the time of assignment. When the ratio
+ *   changes in KV, all cookies with the old fingerprint are re-evaluated
+ *   against the new threshold, so the distribution rebalances in one visit
+ *   per user; once stable, cookies converge and become sticky again.
  * - Query param override for QA (?_deco_bucket=worker)
  * - Circuit breaker: worker errors auto-fallback to legacy origin
  * - Fallback proxy with hostname rewriting (Set-Cookie, Location, body)
@@ -66,7 +70,15 @@ export interface ABTestConfig {
 	/** Cookie name for bucket persistence. @default "_deco_bucket" */
 	cookieName?: string;
 
-	/** Cookie max-age in seconds. @default 86400 (1 day) */
+	/**
+	 * Cookie max-age in seconds. @default 31536000 (1 year)
+	 *
+	 * Long by design: the cookie's ratio fingerprint handles invalidation
+	 * (a change in KV ratio implicitly invalidates all old cookies), so
+	 * there's no need for the browser to expire the cookie to pick up
+	 * ratio changes. Shorter values just cause more user-bucket churn
+	 * across sessions without any rebalancing benefit.
+	 */
 	cookieMaxAge?: number;
 
 	/** Auto-fallback to legacy on worker errors. @default true */
@@ -138,30 +150,46 @@ function parseCookies(header: string): Record<string, string> {
 }
 
 /**
+ * Convert a 0–1 ratio to a 0–100 integer percentage. Anchors the cookie
+ * fingerprint to the resolution at which bucketing decisions are actually
+ * made (`hash % 100 < ratio * 100`), so two equivalent ratios like 0.5 and
+ * 0.500001 produce the same fingerprint and don't invalidate cookies.
+ */
+const RATIO_PCT_MAX = 100;
+
+function ratioToPct(ratio: number): number {
+	if (!Number.isFinite(ratio) || ratio <= 0) return 0;
+	if (ratio >= 1) return RATIO_PCT_MAX;
+	return Math.round(ratio * RATIO_PCT_MAX);
+}
+
+/**
  * Parse the bucket cookie value.
  *
- * New format: "worker:1711540800" (bucket + unix timestamp).
- * Legacy format: "worker" or "fallback" (no timestamp — old 30d cookie).
+ * Format: "worker:50" (bucket + ratioPct fingerprint, 0–100). The fingerprint
+ * is the KV ratio at the time the cookie was set. Callers must compare it
+ * against the current KV ratio and only honor the cookie when they match.
+ *
+ * Legacy formats ("worker:1711540800" with unix timestamp, or bare
+ * "worker"/"fallback") parse to `null` so they're treated as missing and
+ * re-evaluated against the current ratio. Those cookies vanish naturally
+ * because the legacy default Max-Age was 1 day.
  */
 function parseBucketCookie(
 	raw: string | undefined,
-): { bucket: Bucket; ts: number } | null {
+): { bucket: Bucket; ratioPct: number } | null {
 	if (!raw) return null;
 
 	const colonIdx = raw.indexOf(":");
-	if (colonIdx > 0) {
-		const bucket = raw.slice(0, colonIdx);
-		const ts = parseInt(raw.slice(colonIdx + 1), 10);
-		if ((bucket === "worker" || bucket === "fallback") && !isNaN(ts)) {
-			return { bucket, ts };
-		}
-	}
+	if (colonIdx <= 0) return null;
 
-	if (raw === "worker" || raw === "fallback") {
-		return { bucket: raw, ts: 0 };
-	}
+	const bucket = raw.slice(0, colonIdx);
+	if (bucket !== "worker" && bucket !== "fallback") return null;
 
-	return null;
+	const ratioPct = parseInt(raw.slice(colonIdx + 1), 10);
+	if (isNaN(ratioPct) || ratioPct < 0 || ratioPct > RATIO_PCT_MAX) return null;
+
+	return { bucket, ratioPct };
 }
 
 // ---------------------------------------------------------------------------
@@ -171,8 +199,16 @@ function parseBucketCookie(
 /**
  * Deterministically assign a bucket based on:
  * 1. Query param override (?_deco_bucket=worker)
- * 2. Existing cookie (stickiness)
+ * 2. Existing cookie whose ratio fingerprint matches the current KV ratio
  * 3. IP hash against ratio threshold
+ *
+ * Step 2 is the key correctness property: a cookie set when the KV ratio
+ * was X is only trusted while the KV ratio is still X. When the operator
+ * changes the ratio in KV, all cookies with the old fingerprint fall
+ * through to step 3 and are re-evaluated against the new threshold — the
+ * fnv1a IP hash being deterministic means each user converges to the new
+ * distribution in a single visit, then the cookie is re-issued with the
+ * new fingerprint and becomes sticky again.
  */
 export function getStableBucket(
 	request: Request,
@@ -183,44 +219,53 @@ export function getStableBucket(
 	const override = url.searchParams.get(cookieName);
 	if (override === "worker" || override === "fallback") return override;
 
+	const currentRatioPct = ratioToPct(ratio);
 	const cookies = parseCookies(request.headers.get("cookie") ?? "");
 	const parsed = parseBucketCookie(cookies[cookieName]);
-	if (parsed) return parsed.bucket;
+	if (parsed && parsed.ratioPct === currentRatioPct) return parsed.bucket;
 
-	if (ratio <= 0) return "fallback";
-	if (ratio >= 1) return "worker";
+	if (currentRatioPct <= 0) return "fallback";
+	if (currentRatioPct >= RATIO_PCT_MAX) return "worker";
 
 	const ip =
 		request.headers.get("cf-connecting-ip") ?? Math.random().toString();
-	return fnv1a(ip) % 100 < ratio * 100 ? "worker" : "fallback";
+	return fnv1a(ip) % RATIO_PCT_MAX < currentRatioPct ? "worker" : "fallback";
 }
 
 /**
  * Tag a response with the bucket assignment and refresh the sticky cookie
- * if needed (missing, changed, or stale).
+ * when the current bucket/ratio differs from what the cookie carries.
+ *
+ * The cookie value is `<bucket>:<ratioPct>` — see `parseBucketCookie`. The
+ * fingerprint is what makes ratio changes in KV propagate automatically:
+ * when the operator bumps the ratio, this function rewrites the cookie on
+ * the next response so the user starts honoring the new threshold.
  */
 export function tagBucket(
 	response: Response,
 	bucket: Bucket,
 	hostname: string,
 	request: Request,
+	ratio: number,
 	cookieName: string = "_deco_bucket",
-	maxAge: number = 86400,
+	maxAge: number = 60 * 60 * 24 * 365,
 ): Response {
 	const res = new Response(response.body, response);
 	res.headers.set("x-deco-bucket", bucket);
 
+	const currentRatioPct = ratioToPct(ratio);
 	const cookies = parseCookies(request.headers.get("cookie") ?? "");
 	const parsed = parseBucketCookie(cookies[cookieName]);
-	const now = Math.floor(Date.now() / 1000);
 
 	const needsSet =
-		!parsed || parsed.bucket !== bucket || now - parsed.ts > maxAge;
+		!parsed ||
+		parsed.bucket !== bucket ||
+		parsed.ratioPct !== currentRatioPct;
 
 	if (needsSet) {
 		res.headers.append(
 			"set-cookie",
-			`${cookieName}=${bucket}:${now}; Path=/; Max-Age=${maxAge}; Domain=${hostname}; SameSite=Lax`,
+			`${cookieName}=${bucket}:${currentRatioPct}; Path=/; Max-Age=${maxAge}; Domain=${hostname}; SameSite=Lax`,
 		);
 	}
 
@@ -345,7 +390,7 @@ export function withABTesting(
 	const {
 		kvBinding = "SITES_KV",
 		cookieName = "_deco_bucket",
-		cookieMaxAge = 86400,
+		cookieMaxAge = 60 * 60 * 24 * 365,
 		circuitBreaker = true,
 		shouldBypassAB,
 		preHandler,
@@ -401,6 +446,7 @@ export function withABTesting(
 						bucket,
 						url.hostname,
 						request,
+						ratio,
 						cookieName,
 						cookieMaxAge,
 					);
@@ -414,6 +460,7 @@ export function withABTesting(
 						bucket,
 						url.hostname,
 						request,
+						ratio,
 						cookieName,
 						cookieMaxAge,
 					);
@@ -435,6 +482,7 @@ export function withABTesting(
 						"fallback",
 						url.hostname,
 						request,
+						ratio,
 						cookieName,
 						cookieMaxAge,
 					);
