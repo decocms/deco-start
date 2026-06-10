@@ -219,34 +219,56 @@ interface WorkerHandler {
 }
 
 // ---------------------------------------------------------------------------
-// Boot state — guard against double-init across worker reloads
+// Boot state — pinned to globalThis via Symbol.for so multiple bundled
+// copies of this module converge on the SAME state.
+//
+// Why: Vite (and any bundler chunking by entry) can produce more than one
+// inlined copy of this file when multiple package entries — e.g.
+// `@decocms/start/sdk/otel` and `@decocms/start/sdk/workerEntry` — both
+// pull it transitively. With plain module-scoped `let` variables, the
+// auto-wrap path inside `createDecoWorkerEntry` ends up writing the meter
+// into Copy A's `otlpMeter` while the per-request `recordRequestMetric`
+// closure reads from Copy B's empty `otlpMeter`. Net effect in prod:
+// `bootObservability` runs (we observed the very first `POST /v1/metrics`
+// from miess-tanstack), but every subsequent request's `flush()` finds an
+// empty buffer because the meter the framework writes into is a different
+// instance from the one the exporter drains.
+//
+// `observability.ts` already uses this pattern (see the `STATE_KEY` block
+// there); the comment there flags this exact failure mode. The reason it
+// took so long to surface here is that until PR #232 added the auto-wrap
+// inside `createDecoWorkerEntry`, sites always called `instrumentWorker`
+// once from their own `worker-entry.ts` — a single bundle entry — so
+// nobody hit the duplication path.
+//
+// CF Workers guarantee one `globalThis` per isolate, so there's no risk
+// of cross-isolate bleed. Symbol.for keeps the registry stable across
+// hot reloads in `wrangler dev` too.
 // ---------------------------------------------------------------------------
 
-let booted = false;
+interface BootState {
+  booted: boolean;
+  otlpMeter: OtlpHttpMeter | null;
+  otlpErrorLog: OtlpHttpErrorLog | null;
+  otlpTracer: OtlpHttpTracer | null;
+  spanAttributeFloor: Record<string, string>;
+}
 
-/**
- * Module-level handle to the OTLP/HTTP metrics exporter — installed by
- * `bootObservability` when `DECO_OTEL_METRICS_ENDPOINT` is set on `env`.
- * `instrumentWorker` calls `flush()` via `ctx.waitUntil(...)` at the end
- * of every request so the buffer drains to roughly within one cooldown
- * window of real time before the isolate sleeps.
- */
-let otlpMeter: OtlpHttpMeter | null = null;
+const BOOT_STATE_KEY = Symbol.for("@decocms/start/sdk/otel/boot.v1");
 
-/**
- * Module-level handle to the OTLP/HTTP error-log exporter — installed
- * by `bootObservability` when `DECO_OTEL_LOGS_ENDPOINT` is set on `env`.
- * Flushed alongside the metrics exporter via `ctx.waitUntil(...)`.
- */
-let otlpErrorLog: OtlpHttpErrorLog | null = null;
-
-/**
- * Module-level handle to the OTLP/HTTP trace exporter — installed by
- * `bootObservability` when `DECO_OTEL_TRACES_ENDPOINT` is set on `env`.
- * Flushed alongside the metrics + error-log exporters via
- * `ctx.waitUntil(...)` at the end of every request.
- */
-let otlpTracer: OtlpHttpTracer | null = null;
+function getBootState(): BootState {
+  const g = globalThis as Record<symbol, unknown>;
+  if (!g[BOOT_STATE_KEY]) {
+    g[BOOT_STATE_KEY] = {
+      booted: false,
+      otlpMeter: null,
+      otlpErrorLog: null,
+      otlpTracer: null,
+      spanAttributeFloor: {},
+    } satisfies BootState;
+  }
+  return g[BOOT_STATE_KEY] as BootState;
+}
 
 /**
  * Per-request inbound W3C trace context, parsed from the `traceparent`
@@ -273,15 +295,11 @@ export function _setRequestTraceContext(ctx: TraceContext | null): void {
 
 /**
  * Per-span attribute floor — stamped on every span we create via
- * `configureTracer().startSpan(...)`. CF's trace export emits its own
- * resource attribute set (service.name=Worker name, faas.name,
- * cloudflare.script_version.id, etc.) so framework-level dimensions like
- * `deco.runtime.version` only survive when stamped per-span.
- *
- * Populated by `bootObservability` before any span is created. Stays an
- * empty object until then so early span creation is a no-op stamp.
+ * `configureTracer().startSpan(...)`. Lives on the shared `BootState`
+ * (see above) so framework code paths that read it through different
+ * bundled copies of this module all see the floor `bootObservability`
+ * just installed.
  */
-let spanAttributeFloor: Record<string, string> = {};
 
 // ---------------------------------------------------------------------------
 // instrumentWorker
@@ -328,23 +346,24 @@ export function instrumentWorker(
         // throttles itself per isolate — calling on every request is
         // cheap; the network only fires when the cooldown elapses or
         // the buffer fills.
-        if (otlpMeter) {
+        const state = getBootState();
+        if (state.otlpMeter) {
           try {
-            ctx.waitUntil(otlpMeter.flush());
+            ctx.waitUntil(state.otlpMeter.flush());
           } catch {
             /* ctx.waitUntil throwing is benign — never block the response */
           }
         }
-        if (otlpErrorLog) {
+        if (state.otlpErrorLog) {
           try {
-            ctx.waitUntil(otlpErrorLog.flush());
+            ctx.waitUntil(state.otlpErrorLog.flush());
           } catch {
             /* swallow */
           }
         }
-        if (otlpTracer) {
+        if (state.otlpTracer) {
           try {
-            ctx.waitUntil(otlpTracer.flush());
+            ctx.waitUntil(state.otlpTracer.flush());
           } catch {
             /* swallow */
           }
@@ -362,7 +381,7 @@ export function instrumentWorker(
 function buildOtelApiTracer(): import("../middleware/observability").TracerAdapter {
   return {
     startSpan: (name, attrs) => {
-      const merged = { ...spanAttributeFloor, ...(attrs ?? {}) };
+      const merged = { ...getBootState().spanAttributeFloor, ...(attrs ?? {}) };
       const span = trace.getTracer("@decocms/start").startSpan(name, { attributes: merged });
       return {
         end: () => span.end(),
@@ -410,7 +429,7 @@ function configureTracerStack(otlpAdapter: OtlpHttpTracer | null): void {
   // is enabled in wrangler.jsonc.
   configureTracer({
     startSpan(name, attrs) {
-      const merged = { ...spanAttributeFloor, ...(attrs ?? {}) };
+      const merged = { ...getBootState().spanAttributeFloor, ...(attrs ?? {}) };
       const primary = otlpAdapter.startSpan(name, merged);
       const secondary = bridge.startSpan(name, merged);
       return {
@@ -463,7 +482,8 @@ function configureTracerStack(otlpAdapter: OtlpHttpTracer | null): void {
 // ---------------------------------------------------------------------------
 
 function bootObservability(opts: OtelOptions, env: Record<string, unknown>): void {
-  if (booted) return;
+  const state = getBootState();
+  if (state.booted) return;
 
   const serviceName = opts.serviceName ?? (env.DECO_SITE_NAME as string | undefined) ?? "deco-site";
   const decoRuntimeVersion = opts.decoRuntimeVersion ?? DECO_RUNTIME_VERSION;
@@ -506,7 +526,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
   // resource attribute set, so legacy resource attrs don't survive.
   // Stamping per-span preserves the dimensions dashboards / saved searches
   // filter on.
-  spanAttributeFloor = floor;
+  state.spanAttributeFloor = floor;
 
   // Stamp on every log record. CF Workers Logs ships the JSON body
   // verbatim — without this floor, panels grouping logs by these
@@ -548,7 +568,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
       ? (otlpLogsMinLevelFromEnv as LogLevel)
       : opts.otlpErrorLogsMinLevel ?? "error";
   if (otlpErrorLogsEnabled) {
-    otlpErrorLog = createOtlpHttpErrorLogAdapter({
+    state.otlpErrorLog = createOtlpHttpErrorLogAdapter({
       endpoint: otlpLogsEndpoint,
       resourceAttributes: floor,
       scopeVersion: decoRuntimeVersion,
@@ -575,11 +595,14 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
       },
     });
   } else {
-    otlpErrorLog = null;
+    state.otlpErrorLog = null;
   }
 
   configureLogger(
-    createCompositeLogger([defaultLoggerAdapter, otlpErrorLog ? otlpErrorLog.adapter : null]),
+    createCompositeLogger([
+      defaultLoggerAdapter,
+      state.otlpErrorLog ? state.otlpErrorLog.adapter : null,
+    ]),
   );
 
   // Meter — fan out to two backends when both are configured:
@@ -605,7 +628,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
   const otlpEndpoint = (env[otlpEnvVar] as string | undefined) ?? "";
   const otlpEnabled = opts.otlpMetricsEnabled !== false && otlpEndpoint.length > 0;
   if (otlpEnabled) {
-    otlpMeter = createOtlpHttpMeterAdapter({
+    state.otlpMeter = createOtlpHttpMeterAdapter({
       endpoint: otlpEndpoint,
       resourceAttributes: floor,
       scopeVersion: decoRuntimeVersion,
@@ -622,10 +645,10 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
       },
     });
   } else {
-    otlpMeter = null;
+    state.otlpMeter = null;
   }
 
-  const composedMeter = createCompositeMeter([aeAdapter, otlpMeter]);
+  const composedMeter = createCompositeMeter([aeAdapter, state.otlpMeter]);
   // Composite meter is always installed — when both backends are absent the
   // composite becomes a 0-element no-op via createCompositeMeter's filter.
   configureMeter(composedMeter);
@@ -654,7 +677,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
       samplingRateFromEnv <= 1
         ? samplingRateFromEnv
         : undefined;
-    otlpTracer = createOtlpHttpTracerAdapter({
+    state.otlpTracer = createOtlpHttpTracerAdapter({
       endpoint: otlpTracesEndpoint,
       resourceAttributes: floor,
       scopeVersion: decoRuntimeVersion,
@@ -670,15 +693,15 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
       },
     });
   } else {
-    otlpTracer = null;
+    state.otlpTracer = null;
   }
 
   // Wire the tracer stack — composes the OTLP direct-POST adapter (when
   // configured) with the @opentelemetry/api bridge. See
   // `configureTracerStack` for the fanout semantics.
-  configureTracerStack(otlpTracer);
+  configureTracerStack(state.otlpTracer);
 
-  booted = true;
+  state.booted = true;
 
   // Single boot-time breadcrumb so operators can confirm the wiring at a
   // glance from CF Logs without enabling debug.
@@ -700,11 +723,12 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
  * `instrumentWorker` with different options. Do not call from app code.
  */
 export function _resetBootStateForTests(): void {
-  booted = false;
-  spanAttributeFloor = {};
-  otlpMeter = null;
-  otlpErrorLog = null;
-  otlpTracer = null;
+  const state = getBootState();
+  state.booted = false;
+  state.spanAttributeFloor = {};
+  state.otlpMeter = null;
+  state.otlpErrorLog = null;
+  state.otlpTracer = null;
   setLoggerAttributeFloor({});
 }
 
