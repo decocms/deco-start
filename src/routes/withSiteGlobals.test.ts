@@ -13,7 +13,12 @@ vi.mock("../cms", () => ({
 }));
 
 import { loadBlocks, resolvePageSections } from "../cms";
-import { __resetSiteGlobalsCache, resolveSiteGlobals, withSiteGlobals } from "./withSiteGlobals";
+import {
+  __resetSiteGlobalsCache,
+  dedupeGlobals,
+  resolveSiteGlobals,
+  withSiteGlobals,
+} from "./withSiteGlobals";
 
 const mockedLoadBlocks = loadBlocks as unknown as ReturnType<typeof vi.fn>;
 const mockedResolvePageSections = resolvePageSections as unknown as ReturnType<typeof vi.fn>;
@@ -151,122 +156,51 @@ describe("withSiteGlobals", () => {
     });
   });
 
-  describe("withSiteGlobals wrapper", () => {
-    it("passes through null page (404) without merging globals", async () => {
-      mockedLoadBlocks.mockReturnValue({});
-      const baseLoader = vi.fn().mockResolvedValue(null);
-      const cfg = withSiteGlobals({ loader: baseLoader });
-      const result = await cfg.loader();
-      expect(result).toBeNull();
+  describe("withSiteGlobals (deprecated no-op)", () => {
+    // Site globals merging moved into the `loadCmsPage` server function so SSR
+    // and SPA navigations both go through the same server-side path (#233).
+    // The wrapper is now a passthrough kept only for backward compatibility.
+    it("is an identity wrapper — returns the route config unchanged", () => {
+      const baseLoader = vi.fn().mockResolvedValue({ resolvedSections: [] });
+      const input = { loader: baseLoader, otherField: "kept" } as any;
+      const cfg = withSiteGlobals(input);
+      expect(cfg).toBe(input);
+      expect(cfg.loader).toBe(baseLoader);
+    });
+  });
+
+  describe("dedupeGlobals", () => {
+    it("returns empty when globals is empty", () => {
+      expect(
+        dedupeGlobals(
+          [],
+          [{ component: "Header.tsx", props: {}, key: "p0" }],
+        ),
+      ).toEqual([]);
     });
 
-    it("merges resolved globals BEFORE page sections", async () => {
-      mockedLoadBlocks.mockReturnValue({
-        site: { theme: { __resolveType: "Theme" } },
-      });
-      mockedResolvePageSections.mockResolvedValue([
+    it("drops globals whose component already appears in existing", () => {
+      const globals = [
         { component: "Theme.tsx", props: {}, key: "g0" },
-      ]);
-      const baseLoader = vi.fn().mockResolvedValue({
-        resolvedSections: [
-          { component: "Header.tsx", props: {}, key: "p0" },
-          { component: "Hero.tsx", props: {}, key: "p1" },
-        ],
-        // arbitrary other route fields preserved
-        cacheProfile: "static",
-      });
+        { component: "Session.tsx", props: {}, key: "g1" },
+      ];
+      const existing = [
+        { component: "Session.tsx", props: { fromPage: true }, key: "p0" },
+      ];
 
-      const cfg = withSiteGlobals({ loader: baseLoader });
-      const result = await cfg.loader();
-
-      expect(result.resolvedSections.map((s: any) => s.component)).toEqual([
-        "Theme.tsx",
-        "Header.tsx",
-        "Hero.tsx",
-      ]);
-      expect(result.cacheProfile).toBe("static");
+      const result = dedupeGlobals(globals, existing);
+      // Session dropped (already on page); Theme kept.
+      expect(result.map((s) => s.component)).toEqual(["Theme.tsx"]);
     });
 
-    it("dedupes globals whose component already appears on the page", async () => {
-      mockedLoadBlocks.mockReturnValue({
-        site: {
-          global: [{ __resolveType: "Session" }, { __resolveType: "Theme" }],
-        },
-      });
-      mockedResolvePageSections.mockResolvedValue([
-        { component: "Session.tsx", props: {}, key: "g0" },
-        { component: "Theme.tsx", props: {}, key: "g1" },
-      ]);
-      const baseLoader = vi.fn().mockResolvedValue({
-        // Page already mounts Session — global Session should NOT duplicate.
-        resolvedSections: [{ component: "Session.tsx", props: { fromPage: true }, key: "p0" }],
-      });
-
-      const cfg = withSiteGlobals({ loader: baseLoader });
-      const result = await cfg.loader();
-
-      const components = result.resolvedSections.map((s: any) => s.component);
-      // Only one Session, taken from the page (page-level wins).
-      expect(components).toEqual(["Theme.tsx", "Session.tsx"]);
-      const session = result.resolvedSections.find((s: any) => s.component === "Session.tsx");
-      expect(session.props.fromPage).toBe(true);
-    });
-
-    it("dedupes within globals (Session in both site.global AND site.pageSections)", async () => {
-      mockedLoadBlocks.mockReturnValue({
-        site: {
-          global: [{ __resolveType: "Session" }],
-          pageSections: [{ __resolveType: "Session" }],
-        },
-      });
-      mockedResolvePageSections.mockResolvedValue([
+    it("dedupes within globals (first-wins)", () => {
+      const globals = [
         { component: "Session.tsx", props: { from: "global" }, key: "g0" },
         { component: "Session.tsx", props: { from: "pageSections" }, key: "g1" },
-      ]);
-      const baseLoader = vi.fn().mockResolvedValue({ resolvedSections: [] });
-
-      const cfg = withSiteGlobals({ loader: baseLoader });
-      const result = await cfg.loader();
-
-      // Only one Session ends up in the final tree (first-wins within globals).
-      expect(result.resolvedSections).toHaveLength(1);
-      expect(result.resolvedSections[0].props.from).toBe("global");
-    });
-
-    it("attaches siteGlobals.rawRefs for site to read head-injection data", async () => {
-      const analyticsRef = {
-        __resolveType: "website/sections/Analytics/Analytics.tsx",
-        trackingIds: ["GTM-ABC"],
-      };
-      mockedLoadBlocks.mockReturnValue({
-        site: { global: [analyticsRef] },
-      });
-      mockedResolvePageSections.mockResolvedValue([]);
-      const baseLoader = vi.fn().mockResolvedValue({ resolvedSections: [] });
-
-      const cfg = withSiteGlobals({ loader: baseLoader });
-      const result = await cfg.loader();
-
-      expect(result.siteGlobals).toEqual({ rawRefs: [analyticsRef] });
-    });
-
-    it("preserves wrapped loader's other return fields", async () => {
-      mockedLoadBlocks.mockReturnValue({});
-      const baseLoader = vi.fn().mockResolvedValue({
-        resolvedSections: [],
-        seo: { title: "Hello" },
-        cacheProfile: "product",
-        device: "mobile",
-        pageUrl: "https://store.com/x",
-      });
-
-      const cfg = withSiteGlobals({ loader: baseLoader });
-      const result = await cfg.loader();
-
-      expect(result.seo).toEqual({ title: "Hello" });
-      expect(result.cacheProfile).toBe("product");
-      expect(result.device).toBe("mobile");
-      expect(result.pageUrl).toBe("https://store.com/x");
+      ];
+      const result = dedupeGlobals(globals, []);
+      expect(result).toHaveLength(1);
+      expect(result[0].props.from).toBe("global");
     });
   });
 });

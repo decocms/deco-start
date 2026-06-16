@@ -52,6 +52,7 @@ import {
 } from "../sdk/cacheHeaders";
 import { normalizeUrlsInObject } from "../sdk/normalizeUrls";
 import { type Device, detectDevice } from "../sdk/useDevice";
+import { dedupeGlobals, resolveSiteGlobals } from "./withSiteGlobals";
 
 const isServer = typeof document === "undefined";
 
@@ -103,12 +104,28 @@ async function loadCmsPageInternal(fullPath: string) {
   const request = new Request(urlWithSearch, {
     headers: originRequest.headers,
   });
-  const enrichedSections = await runSectionLoaders(page.resolvedSections, request);
+
+  // Resolve page sections and site globals in parallel. Globals are merged
+  // into the same `resolvedSections` array so the path through this server
+  // function is identical for SSR (F5) and SPA (<Link>) navigations — see
+  // #233 for the previous SPA-breakage when `withSiteGlobals` ran client-side
+  // and saw an empty client-bundled `blocks.gen.ts`.
+  const [enrichedSections, globals] = await Promise.all([
+    runSectionLoaders(page.resolvedSections, request),
+    resolveSiteGlobals(),
+  ]);
+
+  // Page sections take precedence over globals — dedupe drops any global
+  // whose component is already rendered by the page.
+  const mergedSections: ResolvedSection[] = [
+    ...dedupeGlobals(globals.resolvedSections, enrichedSections),
+    ...enrichedSections,
+  ];
 
   // Pre-import eager section modules so their default exports are cached
   // in resolvedComponents. This ensures SSR renders with direct component
   // refs, and the client hydration can skip React.lazy/Suspense.
-  const eagerKeys = enrichedSections.map((s) => s.component);
+  const eagerKeys = mergedSections.map((s) => s.component);
   await preloadSectionComponents(eagerKeys);
 
   const cacheProfile = detectCacheProfile(basePath);
@@ -116,20 +133,21 @@ async function loadCmsPageInternal(fullPath: string) {
   const device = detectDevice(ua);
 
   // Build SEO: merge page-level seo block (primary) with section-contributed SEO (secondary)
-  const seo = await buildPageSeo(page.seoSection, enrichedSections, request);
+  const seo = await buildPageSeo(page.seoSection, mergedSections, request);
 
   // Destructure seoSection out — it's an internal artifact, not serialized to client
   const { seoSection: _seo, ...pageData } = page;
 
   return {
     ...pageData,
-    resolvedSections: normalizeUrlsInObject(enrichedSections),
+    resolvedSections: normalizeUrlsInObject(mergedSections),
     deferredSections: normalizeUrlsInObject(page.deferredSections),
     cacheProfile,
     pageUrl: urlWithSearch,
     pagePath: basePath,
     seo,
     device,
+    siteGlobals: { rawRefs: globals.rawRefs },
   };
 }
 
@@ -166,24 +184,33 @@ export const loadCmsHomePage = createServerFn({ method: "GET" }).handler(async (
   };
   const page = await resolveDecoPage("/", matcherCtx);
   if (!page) return null;
-  const enrichedSections = await runSectionLoaders(page.resolvedSections, request);
+  const [enrichedSections, globals] = await Promise.all([
+    runSectionLoaders(page.resolvedSections, request),
+    resolveSiteGlobals(),
+  ]);
 
-  const eagerKeys = enrichedSections.map((s) => s.component);
+  const mergedSections: ResolvedSection[] = [
+    ...dedupeGlobals(globals.resolvedSections, enrichedSections),
+    ...enrichedSections,
+  ];
+
+  const eagerKeys = mergedSections.map((s) => s.component);
   await preloadSectionComponents(eagerKeys);
 
   const device = detectDevice(ua);
-  const seo = await buildPageSeo(page.seoSection, enrichedSections, request);
+  const seo = await buildPageSeo(page.seoSection, mergedSections, request);
 
   const { seoSection: _seo, ...pageData } = page;
 
   return {
     ...pageData,
-    resolvedSections: normalizeUrlsInObject(enrichedSections),
+    resolvedSections: normalizeUrlsInObject(mergedSections),
     deferredSections: normalizeUrlsInObject(page.deferredSections),
     pagePath: "/",
     pageUrl: serverUrl.toString(),
     seo,
     device,
+    siteGlobals: { rawRefs: globals.rawRefs },
   };
 });
 

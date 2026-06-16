@@ -32,7 +32,15 @@ import { loadBlocks, onChange, resolvePageSections } from "../cms";
 // Types
 // ---------------------------------------------------------------------------
 
-/** Loader output additions when `withSiteGlobals` is applied. */
+/**
+ * A raw site-block ref — the JSON object pulled from a `.deco/blocks/*.json`
+ * file before block resolution. Always an object with at least
+ * `__resolveType`; concrete props vary by block.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type SiteGlobalRef = Record<string, any>;
+
+/** Loader output additions when site globals are merged into the page. */
 export interface SiteGlobalsLoaderData {
   /**
    * Raw refs (before resolution) declared in `site.theme`, `site.global`, and
@@ -43,18 +51,18 @@ export interface SiteGlobalsLoaderData {
    *
    * Ordering: `theme`, then `global`, then `pageSections`.
    */
-  rawRefs: unknown[];
+  rawRefs: SiteGlobalRef[];
 }
 
 interface SiteBlock {
-  theme?: unknown;
-  global?: unknown[];
-  pageSections?: unknown[];
+  theme?: SiteGlobalRef;
+  global?: SiteGlobalRef[];
+  pageSections?: SiteGlobalRef[];
 }
 
 interface CacheEntry {
   resolvedSections: ResolvedSection[];
-  rawRefs: unknown[];
+  rawRefs: SiteGlobalRef[];
   expiresAt: number;
 }
 
@@ -80,8 +88,8 @@ function readSiteBlock(): SiteBlock | null {
   return site ?? null;
 }
 
-function gatherSectionRefs(site: SiteBlock): unknown[] {
-  const refs: unknown[] = [];
+function gatherSectionRefs(site: SiteBlock): SiteGlobalRef[] {
+  const refs: SiteGlobalRef[] = [];
   if (site.theme) refs.push(site.theme);
   if (Array.isArray(site.global)) refs.push(...site.global);
   if (Array.isArray(site.pageSections)) refs.push(...site.pageSections);
@@ -106,7 +114,7 @@ const EMPTY_ENTRY: CacheEntry = {
  */
 export async function resolveSiteGlobals(): Promise<{
   resolvedSections: ResolvedSection[];
-  rawRefs: unknown[];
+  rawRefs: SiteGlobalRef[];
 }> {
   const now = Date.now();
   if (cache && cache.expiresAt > now) return cache;
@@ -153,7 +161,7 @@ export async function resolveSiteGlobals(): Promise<{
  * both in `site.global` and in a page's section list, which would otherwise
  * render twice.
  */
-function dedupeGlobals(globals: ResolvedSection[], existing: ResolvedSection[]): ResolvedSection[] {
+export function dedupeGlobals(globals: ResolvedSection[], existing: ResolvedSection[]): ResolvedSection[] {
   if (globals.length === 0) return [];
   const seenComponents = new Set<string>();
   for (const s of existing) {
@@ -199,23 +207,25 @@ function wrapLoader<L extends AnyLoader>(loader: L): L {
 // ---------------------------------------------------------------------------
 
 /**
- * Wrap a route config (from `cmsRouteConfig` or `cmsHomeRouteConfig`) so
- * that its loader merges site globals into `resolvedSections` and exposes
- * the raw site-block refs as `loaderData.siteGlobals.rawRefs`.
+ * @deprecated Site globals are now resolved automatically inside the
+ * `loadCmsPage` / `loadCmsHomePage` server functions. Wrapping
+ * `cmsRouteConfig` is a no-op — the call is kept for backward compat so
+ * existing sites don't need to change their `routes/$.tsx` immediately.
  *
- * Sites that don't declare `site.theme/site.global/site.pageSections` in
- * the CMS see no behavior change (the wrapper short-circuits).
+ * Previously, this wrapper called `resolveSiteGlobals()` from the route
+ * loader, which runs **client-side** on SPA navigations. On SPA, the vite
+ * plugin replaces `blocks.gen.ts` with `{}` in the client bundle, so
+ * `loadBlocks()` returned a stub and globals silently dropped — see #233.
  *
- * Ordering: globals render BEFORE page sections (theme injects CSS first,
- * fixed-position helpers mount as asides, etc.). Within globals, ordering
- * is `theme → global → pageSections`.
+ * Moving resolution into the server function makes SSR (F5) and SPA
+ * navigations both go through the same server-side path.
  */
 export function withSiteGlobals<T extends { loader: AnyLoader }>(routeConfig: T): T {
-  return {
-    ...routeConfig,
-    loader: wrapLoader(routeConfig.loader),
-  };
+  return routeConfig;
 }
+
+/** @internal Exposed for direct use by `cmsRoute.ts`. */
+export { wrapLoader };
 
 // ---------------------------------------------------------------------------
 // Test-only resets (not exported in public types — used by withSiteGlobals.test.ts)
