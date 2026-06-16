@@ -182,6 +182,37 @@ function findHandler(
   return null;
 }
 
+// Track which missing keys we've already warned about so dev console doesn't
+// log the same warning every IntersectionObserver / nav loop iteration.
+const warnedMissingKeys = new Set<string>();
+
+function unknownHandlerMessage(key: string): string {
+  const isLoader = key.includes("/loaders/");
+  const isAction = key.includes("/actions/");
+  const kind = isAction ? "action" : isLoader ? "loader" : "loader/action";
+  const dir = isAction ? "src/actions/" : "src/loaders/";
+  const cliHint = "npm run generate:loaders";
+  const setupHint =
+    isAction
+      ? "setInvokeActions(() => COMMERCE_ACTIONS)"
+      : "setInvokeLoaders(() => COMMERCE_LOADERS)";
+  return (
+    `Unknown handler: ${key}. ` +
+    `Check that the ${kind} exists in ${dir} (file path must match the key — ` +
+    `keys like "site/loaders/foo" resolve to ${dir}foo.ts) and that it is ` +
+    `included in src/server/cms/loaders.gen.ts. Regenerate with \`${cliHint}\` ` +
+    `or wire it manually via ${setupHint} in setup.ts. If you previously ran ` +
+    `the generator with --decofile-dir / --prune-by-decofile, drop the flag ` +
+    `to register code-driven loaders as well.`
+  );
+}
+
+function warnMissingHandlerOnce(key: string): void {
+  if (!isDev || warnedMissingKeys.has(key)) return;
+  warnedMissingKeys.add(key);
+  console.warn(`[invoke] ${unknownHandlerMessage(key)}`);
+}
+
 export async function handleInvoke(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const pathParts = url.pathname.split("/deco/invoke/");
@@ -194,7 +225,8 @@ export async function handleInvoke(request: Request): Promise<Response> {
   if (invokeKey) {
     const found = findHandler(invokeKey);
     if (!found) {
-      return errorResponse(`Unknown handler: ${invokeKey}`, 404);
+      warnMissingHandlerOnce(invokeKey);
+      return errorResponse(unknownHandlerMessage(invokeKey), 404);
     }
 
     try {
@@ -240,7 +272,8 @@ export async function handleInvoke(request: Request): Promise<Response> {
             results[key] = { error: (error as Error).message };
           }
         } else {
-          results[key] = { error: `Unknown handler: ${resolveType}` };
+          warnMissingHandlerOnce(resolveType);
+          results[key] = { error: unknownHandlerMessage(resolveType) };
         }
       }),
     );
