@@ -19,6 +19,7 @@ import {
   setResolvedComponent,
 } from "../cms/registry";
 import type { DeferredSection, ResolvedSection } from "../cms/resolve";
+import { DeviceProvider } from "../sdk/useDevice";
 
 import { SectionErrorBoundary } from "./SectionErrorFallback";
 
@@ -488,8 +489,12 @@ export function DecoPageRenderer({
   const items = mergeSections(sections ?? [], deferredSections ?? []);
   const hasDeferred = deferredSections && deferredSections.length > 0;
 
+  // DeviceProvider resolves the device once here (where ALS is reliable on
+  // both server and client) and propagates via React context, so descendants
+  // inside Suspense boundaries don't re-read ALS and risk falling back to a
+  // stale "desktop" value that contaminates the edge cache. See #231.
   return (
-    <>
+    <DeviceProvider>
       {hasDeferred && <FadeInStyle />}
       {items.map((item, index) => {
         if (item.type === "deferred") {
@@ -643,6 +648,6 @@ export function DecoPageRenderer({
           </section>
         );
       })}
-    </>
+    </DeviceProvider>
   );
 }

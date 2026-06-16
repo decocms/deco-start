@@ -67,6 +67,8 @@ export {
   checkMobile,
   checkTablet,
   type Device,
+  DeviceContext,
+  DeviceProvider,
   detectDevice,
   isMobileUA,
   MOBILE_RE,
