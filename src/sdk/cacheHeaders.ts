@@ -253,14 +253,12 @@ interface CachePattern {
   profile: CacheProfileName;
 }
 
+const PRIVATE_PREFIX_RE =
+  /^\/(cart|checkout|account|login|my-account)(\/|$)/;
+
 const builtinPatterns: CachePattern[] = [
   {
-    test: (p) =>
-      p.startsWith("/cart") ||
-      p.startsWith("/checkout") ||
-      p.startsWith("/account") ||
-      p.startsWith("/login") ||
-      p.startsWith("/my-account"),
+    test: (p) => PRIVATE_PREFIX_RE.test(p),
     profile: "private",
   },
   {
