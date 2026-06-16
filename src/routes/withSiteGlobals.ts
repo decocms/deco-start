@@ -121,10 +121,19 @@ export async function resolveSiteGlobals(): Promise<{
   if (inflight) return inflight;
 
   const site = readSiteBlock();
-  if (!site) return EMPTY_ENTRY;
+  if (!site) {
+    // Cache the empty result so subsequent requests don't re-walk the
+    // block registry. `onChange` invalidation still applies — if a Site
+    // block appears later, the listener nulls `cache` and we re-check.
+    cache = EMPTY_ENTRY;
+    return EMPTY_ENTRY;
+  }
 
   const rawRefs = gatherSectionRefs(site);
-  if (rawRefs.length === 0) return EMPTY_ENTRY;
+  if (rawRefs.length === 0) {
+    cache = EMPTY_ENTRY;
+    return EMPTY_ENTRY;
+  }
 
   inflight = (async () => {
     try {
@@ -179,32 +188,10 @@ export function dedupeGlobals(globals: ResolvedSection[], existing: ResolvedSect
 }
 
 // ---------------------------------------------------------------------------
-// Loader wrapper
+// Public wrapper API (deprecated — kept for backward compat)
 // ---------------------------------------------------------------------------
 
 type AnyLoader = (...args: any[]) => Promise<any>;
-
-function wrapLoader<L extends AnyLoader>(loader: L): L {
-  const wrapped: AnyLoader = async (...args: Parameters<L>) => {
-    const [page, globals] = await Promise.all([loader(...args), resolveSiteGlobals()]);
-    if (!page) return page;
-
-    const existing: ResolvedSection[] =
-      (page as { resolvedSections?: ResolvedSection[] }).resolvedSections ?? [];
-    const merged = [...dedupeGlobals(globals.resolvedSections, existing), ...existing];
-
-    return {
-      ...page,
-      resolvedSections: merged,
-      siteGlobals: { rawRefs: globals.rawRefs } satisfies SiteGlobalsLoaderData,
-    };
-  };
-  return wrapped as L;
-}
-
-// ---------------------------------------------------------------------------
-// Public wrapper API
-// ---------------------------------------------------------------------------
 
 /**
  * @deprecated Site globals are now resolved automatically inside the
@@ -223,9 +210,6 @@ function wrapLoader<L extends AnyLoader>(loader: L): L {
 export function withSiteGlobals<T extends { loader: AnyLoader }>(routeConfig: T): T {
   return routeConfig;
 }
-
-/** @internal Exposed for direct use by `cmsRoute.ts`. */
-export { wrapLoader };
 
 // ---------------------------------------------------------------------------
 // Test-only resets (not exported in public types — used by withSiteGlobals.test.ts)
