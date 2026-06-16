@@ -58,6 +58,8 @@ export interface HealthMetrics {
   cache: {
     entries: number;
     inflight: number;
+    estimatedBytes: number;
+    maxBytes: number;
   };
   memory?: {
     rss: number;

@@ -42,18 +42,75 @@ interface CacheEntry<T = unknown> {
   value: T;
   createdAt: number;
   refreshing: boolean;
+  /** Estimated payload size in bytes (UTF-16 length of JSON.stringify). */
+  estimatedBytes: number;
 }
 
 const DEFAULT_MAX_AGE = 60_000;
-const MAX_CACHE_ENTRIES = 500;
+
+/**
+ * Byte-cap for the in-memory loader cache. Default 32 MB — comfortably below
+ * the Cloudflare Workers 128 MB isolate limit even when other caches (router,
+ * VTEX fetch cache, V8 heap) are also resident.
+ *
+ * Override via env: `DECO_LOADER_CACHE_MAX_BYTES=67108864` (64 MB).
+ *
+ * Switched from entry-count to byte-based eviction because PLP payloads
+ * (~0.5–2 MB each) blew past 128 MB at well under the previous 500-entry cap.
+ */
+const DEFAULT_MAX_CACHE_BYTES = 32 * 1024 * 1024;
+
+function resolveMaxBytes(): number {
+  const env = typeof globalThis.process !== "undefined"
+    ? globalThis.process.env
+    : undefined;
+  const raw = env?.DECO_LOADER_CACHE_MAX_BYTES;
+  if (!raw) return DEFAULT_MAX_CACHE_BYTES;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_CACHE_BYTES;
+}
+
+const MAX_CACHE_BYTES = resolveMaxBytes();
 
 const cache = new Map<string, CacheEntry>();
+let cacheBytes = 0;
+
+function estimateBytes(value: unknown): number {
+  try {
+    // UTF-16 string length is an order-of-magnitude estimate of the bytes the
+    // object retains in V8 (V8 keeps a structured representation, not JSON).
+    // The absolute value is less important than the relative pressure signal.
+    return JSON.stringify(value)?.length ?? 0;
+  } catch {
+    // Circular refs / non-serializable values: fall back to a fixed budget so
+    // the entry still counts against the cap.
+    return 1024;
+  }
+}
+
+function setCacheEntry<T>(key: string, entry: CacheEntry<T>) {
+  const prev = cache.get(key);
+  if (prev) cacheBytes -= prev.estimatedBytes;
+  cacheBytes += entry.estimatedBytes;
+  cache.set(key, entry);
+}
+
+function deleteCacheEntry(key: string) {
+  const prev = cache.get(key);
+  if (!prev) return;
+  cacheBytes -= prev.estimatedBytes;
+  cache.delete(key);
+}
 
 function evictIfNeeded() {
-  if (cache.size <= MAX_CACHE_ENTRIES) return;
-  const oldest = [...cache.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt);
-  const toDelete = oldest.slice(0, cache.size - MAX_CACHE_ENTRIES);
-  for (const [key] of toDelete) cache.delete(key);
+  if (cacheBytes <= MAX_CACHE_BYTES) return;
+  const oldest = [...cache.entries()].sort(
+    (a, b) => a[1].createdAt - b[1].createdAt,
+  );
+  for (const [key] of oldest) {
+    deleteCacheEntry(key);
+    if (cacheBytes <= MAX_CACHE_BYTES) break;
+  }
 }
 
 const inflightRequests = new Map<string, Promise<unknown>>();
@@ -165,18 +222,20 @@ export function createCachedLoader<TProps, TResult>(
         entry.refreshing = true;
         loaderFn(props)
           .then((result) => {
-            cache.set(cacheKey, {
+            setCacheEntry(cacheKey, {
               value: result,
               createdAt: Date.now(),
               refreshing: false,
+              estimatedBytes: estimateBytes(result),
             });
+            evictIfNeeded();
           })
           .catch(() => {
             // Background refresh failed — entry stays stale.
             // If past the SIE window, evict so we don't serve indefinitely stale data.
             entry.refreshing = false;
             if (staleIfError > 0 && now - entry.createdAt > maxAge + staleIfError) {
-              cache.delete(cacheKey);
+              deleteCacheEntry(cacheKey);
             }
           });
         return entry.value;
@@ -205,10 +264,11 @@ export function createCachedLoader<TProps, TResult>(
     )
       .then((result) => {
         recordLoaderMetric(name, performance.now() - loaderStart, "MISS");
-        cache.set(cacheKey, {
+        setCacheEntry(cacheKey, {
           value: result,
           createdAt: Date.now(),
           refreshing: false,
+          estimatedBytes: estimateBytes(result),
         });
         evictIfNeeded();
         return result;
@@ -278,6 +338,7 @@ export function createCachedLoaderFromModule<TProps, TResult>(
 /** Clear all cached entries. Useful for decofile hot-reload. */
 export function clearLoaderCache() {
   cache.clear();
+  cacheBytes = 0;
   inflightRequests.clear();
 }
 
@@ -286,5 +347,7 @@ export function getLoaderCacheStats() {
   return {
     entries: cache.size,
     inflight: inflightRequests.size,
+    estimatedBytes: cacheBytes,
+    maxBytes: MAX_CACHE_BYTES,
   };
 }
