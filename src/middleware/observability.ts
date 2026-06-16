@@ -602,10 +602,10 @@ export function logRequest(
   // logger floor automatically (no need to attach manually here).
   const level = status >= 500 ? "error" : "info";
   logger[level]("request handled", {
-    method: request.method,
-    path: url.pathname,
-    status,
-    duration_ms: Math.round(durationMs),
+    "http.request.method": request.method,
+    "url.path": url.pathname,
+    "http.response.status_code": status,
+    "duration_ms": Math.round(durationMs),
     ...extra,
   });
 }
