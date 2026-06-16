@@ -737,10 +737,8 @@ export function _resetBootStateForTests(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Build-time @decocms/start version. Updated automatically by the release
- * process (semantic-release prepareCmd in .releaserc.json) — do not
- * hand-edit. We deliberately avoid importing package.json to keep the
- * module side-effect-free across the various build pipelines that consume
- * @decocms/start.
+ * @decocms/start version, read from package.json so it stays in sync
+ * automatically with every semantic-release cut.
  */
-const DECO_RUNTIME_VERSION = "6.6.1";
+import pkg from "../../package.json" with { type: "json" };
+const DECO_RUNTIME_VERSION = pkg.version;
