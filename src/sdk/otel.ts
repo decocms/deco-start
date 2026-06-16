@@ -740,5 +740,5 @@ export function _resetBootStateForTests(): void {
  * @decocms/start version, read from package.json so it stays in sync
  * automatically with every semantic-release cut.
  */
-import pkg from "../../package.json" with { type: "json" };
+import pkg from "../../package.json";
 const DECO_RUNTIME_VERSION = pkg.version;
