@@ -18,7 +18,7 @@
     }],
     "@semantic-release/release-notes-generator",
     ["@semantic-release/exec", {
-      "prepareCmd": "npm version ${nextRelease.version} --no-git-tag-version",
+      "prepareCmd": "npm version ${nextRelease.version} --no-git-tag-version && node -e \"const fs=require('fs'),f='src/sdk/otel.ts';fs.writeFileSync(f,fs.readFileSync(f,'utf8').replace(/const DECO_RUNTIME_VERSION = \\\"[^\\\"]+\\\"/,'const DECO_RUNTIME_VERSION = \\\"${nextRelease.version}\\\"'))\"",
       "publishCmd": "npm publish --access public"
     }],
     "@semantic-release/github"
