@@ -3,7 +3,22 @@
  * mixins are exercised by sectionLoaders integration tests already.
  */
 import { describe, expect, it, vi } from "vitest";
-import { compose, withSectionLoader, withSearchParam } from "./sectionMixins";
+import {
+  compose,
+  withDevice,
+  withMobile,
+  withSearchParam,
+  withSectionLoader,
+} from "./sectionMixins";
+
+// `__requestDependent` is the runtime tag the framework reads in
+// `registerSectionLoaders` to decide whether to emit the layout-cache
+// contamination warning (#206). Any future mixin that depends on the
+// request must opt in by setting this flag — and `compose` must propagate
+// it whenever any input has it.
+const isRequestDependent = (fn: unknown): boolean =>
+  typeof fn === "function" &&
+  (fn as { __requestDependent?: boolean }).__requestDependent === true;
 
 const makeReq = (url = "https://store.example/foo?q=hello") =>
   new Request(url, { headers: { "user-agent": "vitest" } });
@@ -113,5 +128,36 @@ describe("withSectionLoader", () => {
     // dynamic import's responsibility (which the runtime memoises).
     await mixin({ a: 2 }, makeReq());
     expect(modImport).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("request-dependent tagging (#206)", () => {
+  it("tags withDevice", () => {
+    expect(isRequestDependent(withDevice())).toBe(true);
+  });
+
+  it("tags withMobile", () => {
+    expect(isRequestDependent(withMobile())).toBe(true);
+  });
+
+  it("tags withSearchParam", () => {
+    expect(isRequestDependent(withSearchParam())).toBe(true);
+  });
+
+  it("does NOT tag withSectionLoader (its loader may or may not touch req)", () => {
+    expect(isRequestDependent(withSectionLoader(async () => ({})))).toBe(false);
+  });
+
+  it("compose propagates the flag when any input is request-dependent", () => {
+    expect(isRequestDependent(compose(withDevice(), async (p) => p))).toBe(true);
+    expect(isRequestDependent(compose(async (p) => p, withSearchParam()))).toBe(true);
+  });
+
+  it("compose does NOT set the flag when no input is request-dependent", () => {
+    expect(isRequestDependent(compose(async (p) => p, async (p) => p))).toBe(false);
+  });
+
+  it("empty compose() is not request-dependent", () => {
+    expect(isRequestDependent(compose())).toBe(false);
   });
 });
