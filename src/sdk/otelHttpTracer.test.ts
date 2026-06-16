@@ -328,6 +328,58 @@ describe("createOtlpHttpTracerAdapter (D-12)", () => {
     );
   });
 
+  it("setAttribute http.status_code >= 400 promotes span to ERROR", async () => {
+    const { fetchImpl, calls } = captureFetch();
+    const stack = activeSpanStack();
+    const tracer = createOtlpHttpTracerAdapter({
+      endpoint: "https://collector.example/v1/traces",
+      resourceAttributes: {},
+      headSamplingRate: 1,
+      minFlushIntervalMs: 0,
+      fetchImpl,
+      getActiveSpanForParent: () => stack.get(),
+    });
+
+    for (const status of [400, 429, 500, 503]) {
+      const span = tracer.startSpan("vtex.catalog.search");
+      span.setAttribute?.("http.status_code", status);
+      span.end();
+    }
+    await tracer.flush();
+
+    const spans = (calls[0].payload as { resourceSpans: Array<{ scopeSpans: Array<{ spans: Array<{ status: { code: number; message: string } }> }> }> })
+      .resourceSpans[0].scopeSpans[0].spans;
+    for (const span of spans) {
+      // ERROR = 2
+      expect(span.status.code).toBe(2);
+      expect(span.status.message).toMatch(/^HTTP (400|429|500|503)$/);
+    }
+  });
+
+  it("setAttribute http.status_code < 400 does not overwrite an existing ERROR status", async () => {
+    const { fetchImpl, calls } = captureFetch();
+    const stack = activeSpanStack();
+    const tracer = createOtlpHttpTracerAdapter({
+      endpoint: "https://collector.example/v1/traces",
+      resourceAttributes: {},
+      headSamplingRate: 1,
+      minFlushIntervalMs: 0,
+      fetchImpl,
+      getActiveSpanForParent: () => stack.get(),
+    });
+
+    const span = tracer.startSpan("deco.cache.lookup");
+    span.setError?.(new Error("internal failure"));
+    // A 200 attribute set afterwards should not clear the ERROR status
+    span.setAttribute?.("http.status_code", 200);
+    span.end();
+    await tracer.flush();
+
+    const span0 = (calls[0].payload as { resourceSpans: Array<{ scopeSpans: Array<{ spans: Array<{ status: { code: number } }> }> }> })
+      .resourceSpans[0].scopeSpans[0].spans[0];
+    expect(span0.status.code).toBe(2);
+  });
+
   it("flush is a no-op when the buffer is empty", async () => {
     const fetchImpl = vi.fn() as unknown as typeof fetch;
     const stack = activeSpanStack();

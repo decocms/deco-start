@@ -331,10 +331,17 @@ export function createOtlpHttpTracerAdapter(options: OtlpHttpTracerOptions): Otl
       },
       setAttribute(key: string, value: string | number | boolean): void {
         record.attributes[key] = value;
-        // Status promotion: setting an OK-ish HTTP status_code transitions
-        // an UNSET span to OK so dashboards see "succeeded" explicitly.
-        if (key === "http.status_code" && typeof value === "number" && value < 400 && record.status.code === 0) {
-          record.status = { code: STATUS_OK, message: "" };
+        // Status promotion driven by http.status_code:
+        //   < 400 → OK   (explicit success so dashboards don't show UNSET)
+        //   ≥ 400 → ERROR (upstream returned an error; fetch() itself didn't
+        //           throw, so the catch path never ran — this is the only
+        //           place we can promote the status correctly)
+        if (key === "http.status_code" && typeof value === "number") {
+          if (value < 400 && record.status.code === 0) {
+            record.status = { code: STATUS_OK, message: "" };
+          } else if (value >= 400) {
+            record.status = { code: STATUS_ERROR, message: `HTTP ${value}` };
+          }
         }
       },
       spanContext(): { traceId: string; spanId: string; traceFlags: number } {

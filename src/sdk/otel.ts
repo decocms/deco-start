@@ -390,7 +390,12 @@ function buildOtelApiTracer(): import("../middleware/observability").TracerAdapt
           if (error instanceof Error) span.recordException(error);
           span.setStatus({ code: SpanStatusCode.ERROR, message });
         },
-        setAttribute: (k, v) => span.setAttribute(k, v),
+        setAttribute: (k, v) => {
+          span.setAttribute(k, v);
+          if (k === "http.status_code" && typeof v === "number" && v >= 400) {
+            span.setStatus({ code: SpanStatusCode.ERROR, message: `HTTP ${v}` });
+          }
+        },
         spanContext: () => {
           const ctx = span.spanContext();
           return {
