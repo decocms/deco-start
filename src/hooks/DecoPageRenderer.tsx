@@ -359,6 +359,26 @@ function DeferredSectionWrapper({
       .replace(/\.tsx$/, "")
       .replace(/^site-sections-/, "");
 
+    // Sync path: render directly without Suspense. React 19 SSR streaming
+    // omits the <!--$--> markers when a Suspense boundary resolves sync,
+    // which then triggers a hydration mismatch (minified error #418).
+    // See also the matching bifurcation in the main render path and the
+    // Await-resolved path elsewhere in this file.
+    const SyncComp = getSyncComponent(section.component);
+    if (SyncComp) {
+      return (
+        <section
+          id={sectionId}
+          data-manifest-key={section.key}
+          style={{ animation: "decoFadeIn 0.3s ease-out" }}
+        >
+          <SectionErrorBoundary sectionKey={section.key} fallback={errorFallback}>
+            {createElement(SyncComp, section.props)}
+          </SectionErrorBoundary>
+        </section>
+      );
+    }
+
     const LazyComponent = getLazyComponent(section.component);
     if (!LazyComponent) return null;
 
