@@ -14,22 +14,30 @@
  *
  * Files listed in --exclude are skipped (they need custom wiring in setup.ts).
  *
- * CMS-aware filtering (`--decofile-dir`): when supplied, the script walks
- * every JSON file in the directory and collects the set of `__resolveType`
- * references. Only loaders whose key appears in that set are emitted —
- * keeping the registry to what the site actually uses and avoiding the
- * "200 dead passthroughs" pattern.
+ * **Default behavior: register every loader/action file on disk.** This
+ * matches Fresh (`@deco/deco`) where `manifestGen.ts` auto-registers every
+ * file under `src/loaders/` and `src/actions/`, so code-driven invocations
+ * (`runtime.site.loaders.deliveryPromise({...})` from React/hooks/effects)
+ * resolve without manual registry wiring after a Fresh → TanStack migration.
+ *
+ * Opt-in CMS pruning (`--prune-by-decofile`): when supplied, the script
+ * walks every JSON file in the directory and collects the set of
+ * `__resolveType` references. Only loaders whose key appears in that set
+ * are emitted — trimming dead entries on sites that ONLY invoke loaders
+ * through CMS blocks. The previous `--decofile-dir` flag is a deprecated
+ * alias for the same behavior; it logs a warning on use.
  *
  * Usage (from site root):
  *   npx tsx node_modules/@decocms/start/scripts/generate-loaders.ts
- *   npx tsx node_modules/@decocms/start/scripts/generate-loaders.ts --decofile-dir .deco/blocks
+ *   npx tsx node_modules/@decocms/start/scripts/generate-loaders.ts --prune-by-decofile .deco/blocks
  *
  * CLI:
- *   --loaders-dir   override loaders input    (default: src/loaders)
- *   --actions-dir   override actions input    (default: src/actions)
- *   --out-file      override output           (default: src/server/cms/loaders.gen.ts)
- *   --exclude       comma-separated list of loader keys to skip (they have custom wiring)
- *   --decofile-dir  if provided, only emit entries whose key appears as `__resolveType` in any JSON
+ *   --loaders-dir         override loaders input  (default: src/loaders)
+ *   --actions-dir         override actions input  (default: src/actions)
+ *   --out-file            override output         (default: src/server/cms/loaders.gen.ts)
+ *   --exclude             comma-separated list of loader keys to skip (they have custom wiring)
+ *   --prune-by-decofile   only emit entries whose key appears as `__resolveType` in any JSON
+ *   --decofile-dir        @deprecated alias for --prune-by-decofile
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -45,8 +53,17 @@ const actionsDir = path.resolve(process.cwd(), arg("actions-dir", "src/actions")
 const outFile = path.resolve(process.cwd(), arg("out-file", "src/server/cms/loaders.gen.ts"));
 const excludeRaw = arg("exclude", "");
 const excludeSet = new Set(excludeRaw.split(",").map((s) => s.trim()).filter(Boolean));
-const decofileDirRaw = arg("decofile-dir", "");
-const decofileDir = decofileDirRaw ? path.resolve(process.cwd(), decofileDirRaw) : null;
+
+const pruneByDecofileRaw = arg("prune-by-decofile", "");
+const legacyDecofileDirRaw = arg("decofile-dir", "");
+if (legacyDecofileDirRaw && !pruneByDecofileRaw) {
+  console.warn(
+    "[generate-loaders] --decofile-dir is deprecated; use --prune-by-decofile <path> instead. " +
+      "The default (no flag) now registers every loader/action file, matching Fresh's auto-discovery.",
+  );
+}
+const pruneDirRaw = pruneByDecofileRaw || legacyDecofileDirRaw;
+const decofileDir = pruneDirRaw ? path.resolve(process.cwd(), pruneDirRaw) : null;
 
 function walkDir(dir: string): string[] {
   const results: string[] = [];
