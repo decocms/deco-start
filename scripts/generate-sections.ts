@@ -41,7 +41,23 @@ interface SectionMeta {
 }
 
 const EXPORT_CONST_RE = /export\s+const\s+(eager|cache|layout|sync|clientOnly|seo)\s*=\s*(.+?)(?:;|\n)/g;
-const LOADING_FALLBACK_RE = /export\s+(?:function|const)\s+LoadingFallback\b/;
+// Detects `export function LoadingFallback(...)`, `export const LoadingFallback = ...`, etc.
+const LOADING_FALLBACK_INLINE_RE = /export\s+(?:function|const|let|var)\s+LoadingFallback\b/;
+// Detects re-exports like:
+//   export { LoadingFallback } from "..."
+//   export { default as LoadingFallback } from "..."
+//   export { Foo as LoadingFallback } from "..."
+// False-positive for `export { LoadingFallback as Foo }` (exports `Foo`, not
+// `LoadingFallback`), but that's unrealistic in section files and would surface
+// as a loud build error rather than silent CLS.
+const LOADING_FALLBACK_REEXPORT_RE = /export\s*\{[^}]*\bLoadingFallback\b[^}]*\}/;
+
+function hasLoadingFallbackExport(content: string): boolean {
+  return (
+    LOADING_FALLBACK_INLINE_RE.test(content) ||
+    LOADING_FALLBACK_REEXPORT_RE.test(content)
+  );
+}
 
 function extractMeta(content: string): SectionMeta | null {
   const meta: SectionMeta = {};
@@ -59,7 +75,7 @@ function extractMeta(content: string): SectionMeta | null {
     }
   }
 
-  if (LOADING_FALLBACK_RE.test(content)) {
+  if (hasLoadingFallbackExport(content)) {
     meta.hasLoadingFallback = true;
     found = true;
   }
