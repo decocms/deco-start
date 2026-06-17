@@ -652,6 +652,15 @@ async function internalResolve(value: unknown, rctx: ResolveContext): Promise<un
     }
   }
 
+  // Preview handler — admin sends { __resolveType: "preview", block: "BlockName", ...props }
+  // to preview a named block. Redirect resolution to the named block.
+  if (resolveType === "preview") {
+    const blockName = obj.block as string | undefined;
+    if (!blockName) return null;
+    const { __resolveType: _, block: _b, ...overrideProps } = obj;
+    return internalResolve({ __resolveType: blockName, ...overrideProps }, childCtx);
+  }
+
   // Named block reference (memoized)
   const blocks = loadBlocks();
   if (blocks[resolveType]) {
