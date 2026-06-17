@@ -299,6 +299,9 @@ export function createInstrumentedFetch(
             if (value) span.setAttribute?.(attr, value);
           }
           span.setAttribute?.("http.status_code", response.status);
+          if (response.status >= 400) {
+            span.setError?.(new Error(`HTTP ${response.status} ${response.statusText}`));
+          }
           span.end();
           return response;
         } catch (error) {
