@@ -737,12 +737,8 @@ export function _resetBootStateForTests(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Build-time @decocms/start version. Hand-bumped at release; we deliberately
- * avoid `import("../../package.json")` to keep the module side-effect-free
- * and JSON-import-quirk-free across the various build pipelines that
- * consume @decocms/start.
- *
- * Drift is acceptable — this attribute is for operator triage, not for
- * billing / SLOs.
+ * @decocms/start version, read from package.json so it stays in sync
+ * automatically with every semantic-release cut.
  */
-const DECO_RUNTIME_VERSION = "5.0.0";
+import pkg from "../../package.json";
+const DECO_RUNTIME_VERSION = pkg.version;
