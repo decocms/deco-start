@@ -8,6 +8,12 @@ import { getMeter, MetricNames, withTracing } from "../middleware/observability"
 import { djb2Hex } from "../sdk/djb2";
 import { withInflightTimeout } from "../sdk/inflightTimeout";
 import { normalizeUrlsInObject } from "../sdk/normalizeUrls";
+import {
+  applyDecoSegmentCookie,
+  evaluateWithStickiness,
+  type MatcherFlag,
+  type ResolveChainEntry,
+} from "./matcherStickiness";
 import { findPageByPath, loadBlocks } from "./loader";
 import { getOnBeforeResolveProps, getSection, registerOnBeforeResolveProps } from "./registry";
 import { isLayoutSection, runSingleSectionLoader } from "./sectionLoaders";
@@ -257,6 +263,10 @@ export interface MatcherContext {
   cookies?: Record<string, string>;
   headers?: Record<string, string>;
   request?: Request;
+  /** @internal resolve chain for sticky cookie naming */
+  _resolveChain?: ResolveChainEntry[];
+  /** @internal collected flags for deco_segment aggregation */
+  _matcherFlags?: MatcherFlag[];
 }
 
 /**
@@ -268,6 +278,8 @@ interface ResolveContext {
   matcherCtx: MatcherContext;
   memo: Map<string, unknown>;
   depth: number;
+  resolveChain: ResolveChainEntry[];
+  matcherFlags: MatcherFlag[];
 }
 
 // ---------------------------------------------------------------------------
@@ -405,6 +417,7 @@ if (!G.__deco._builtinMatchersRegistered) {
     },
     "website/matchers/random.ts": (rule) => {
       const traffic = typeof rule.traffic === "number" ? rule.traffic : 0.5;
+      // Sticky session layer in evaluateMatcher persists the first draw.
       return Math.random() < traffic;
     },
     "website/matchers/date.ts": (rule) => {
@@ -473,6 +486,30 @@ function ensureInitialized() {
 // Matcher evaluation
 // ---------------------------------------------------------------------------
 
+function matcherEvalCtx(
+  ctx: MatcherContext,
+  chain: ResolveChainEntry[],
+  flags: MatcherFlag[],
+): MatcherContext {
+  return { ...ctx, _resolveChain: chain, _matcherFlags: flags };
+}
+
+function evalFlagMatcher(
+  rule: Record<string, unknown> | undefined,
+  rctx: ResolveContext,
+  flagResolveType: string,
+  variantIndex: number,
+): boolean {
+  const chain: ResolveChainEntry[] = [
+    ...(rctx.resolveChain ?? []),
+    { type: "resolvable", value: flagResolveType },
+    { type: "prop", value: "variants" },
+    { type: "prop", value: String(variantIndex) },
+    { type: "prop", value: "rule" },
+  ];
+  return evaluateMatcher(rule, matcherEvalCtx(rctx.matcherCtx, chain, rctx.matcherFlags ?? []));
+}
+
 export function evaluateMatcher(
   rule: Record<string, unknown> | undefined,
   ctx: MatcherContext,
@@ -482,20 +519,39 @@ export function evaluateMatcher(
   const resolveType = rule.__resolveType as string | undefined;
   if (!resolveType) return true;
 
+  const chain = ctx._resolveChain ?? [];
+  const flags = ctx._matcherFlags ?? [];
+
   const blocks = loadBlocks();
 
   if (blocks[resolveType]) {
     const resolvedRule = blocks[resolveType] as Record<string, unknown>;
+    const blockChain: ResolveChainEntry[] = [
+      ...chain,
+      { type: "resolvable", value: resolveType },
+    ];
     return evaluateMatcher(
-      { ...resolvedRule, ...rule, __resolveType: resolvedRule.__resolveType as string },
-      ctx,
+      {
+        ...resolvedRule,
+        ...rule,
+        __resolveType: resolvedRule.__resolveType as string,
+      },
+      matcherEvalCtx(ctx, blockChain, flags),
     );
   }
 
   const matcher = customMatchers[resolveType];
   if (matcher) {
     try {
-      return matcher(rule, ctx);
+      return evaluateWithStickiness(
+        resolveType,
+        rule,
+        chain,
+        ctx.cookies ?? {},
+        ctx.request,
+        () => matcher(rule, ctx),
+        flags,
+      );
     } catch {
       return false;
     }
@@ -595,9 +651,26 @@ async function internalResolve(value: unknown, rctx: ResolveContext): Promise<un
     const variants = obj.variants as Array<{ value: unknown; rule?: unknown }> | undefined;
     if (!variants || variants.length === 0) return null;
 
-    for (const variant of variants) {
+    const flagChain: ResolveChainEntry[] = [
+      ...(rctx.resolveChain ?? []),
+      { type: "resolvable", value: resolveType },
+    ];
+
+    for (let i = 0; i < variants.length; i++) {
+      const variant = variants[i];
       const rule = variant.rule as Record<string, unknown> | undefined;
-      if (evaluateMatcher(rule, rctx.matcherCtx)) {
+      const ruleChain: ResolveChainEntry[] = [
+        ...flagChain,
+        { type: "prop", value: "variants" },
+        { type: "prop", value: String(i) },
+        { type: "prop", value: "rule" },
+      ];
+      if (
+        evaluateMatcher(
+          rule,
+          matcherEvalCtx(rctx.matcherCtx, ruleChain, rctx.matcherFlags ?? []),
+        )
+      ) {
         return internalResolve(variant.value, childCtx);
       }
     }
@@ -745,8 +818,11 @@ export async function resolveValue(
     matcherCtx: matcherCtx ?? {},
     memo: new Map(),
     depth: 0,
+    resolveChain: [],
+    matcherFlags: [],
   };
   const result = await internalResolve(value, rctx);
+  applyDecoSegmentCookie(rctx.matcherCtx.cookies ?? {}, rctx.matcherFlags);
   return options?.select ? applySelect(result, options.select) : result;
 }
 
@@ -878,9 +954,10 @@ export async function resolvePageSeoBlock(
       const variants = current.variants as Array<{ value: unknown; rule?: unknown }> | undefined;
       if (!variants?.length) return null;
       let matched: unknown = null;
-      for (const variant of variants) {
+      for (let i = 0; i < variants.length; i++) {
+        const variant = variants[i];
         const rule = variant.rule as Record<string, unknown> | undefined;
-        if (evaluateMatcher(rule, rctx.matcherCtx)) {
+        if (evalFlagMatcher(rule, rctx, rt, i)) {
           matched = variant.value;
           break;
         }
@@ -1216,9 +1293,21 @@ export async function resolveSectionsList(
   // (CMS admin wraps ALL sections in a variant object with { variants: [...] })
   if (!rt && Array.isArray(obj.variants)) {
     const variants = obj.variants as Array<{ value: unknown; rule?: unknown }>;
-    for (const variant of variants) {
+    for (let i = 0; i < variants.length; i++) {
+      const variant = variants[i];
       const rule = variant.rule as Record<string, unknown> | undefined;
-      if (evaluateMatcher(rule, rctx.matcherCtx)) {
+      const chain: ResolveChainEntry[] = [
+        ...(rctx.resolveChain ?? []),
+        { type: "prop", value: "variants" },
+        { type: "prop", value: String(i) },
+        { type: "prop", value: "rule" },
+      ];
+      if (
+        evaluateMatcher(
+          rule,
+          matcherEvalCtx(rctx.matcherCtx, chain, rctx.matcherFlags ?? []),
+        )
+      ) {
         return resolveSectionsList(variant.value, rctx, depth + 1);
       }
     }
@@ -1231,9 +1320,10 @@ export async function resolveSectionsList(
   if (rt === WELL_KNOWN_TYPES.MULTIVARIATE || rt === WELL_KNOWN_TYPES.MULTIVARIATE_SECTION) {
     const variants = obj.variants as Array<{ value: unknown; rule?: unknown }> | undefined;
     if (!variants?.length) return [];
-    for (const variant of variants) {
+    for (let i = 0; i < variants.length; i++) {
+      const variant = variants[i];
       const rule = variant.rule as Record<string, unknown> | undefined;
-      if (evaluateMatcher(rule, rctx.matcherCtx)) {
+      if (evalFlagMatcher(rule, rctx, rt, i)) {
         return resolveSectionsList(variant.value, rctx, depth + 1);
       }
     }
@@ -1387,8 +1477,16 @@ async function resolveDecoPageImpl(
   }
 
   const { page, params, blockKey } = match;
-  const ctx: MatcherContext = { ...matcherCtx, path: targetPath };
-  const rctx: ResolveContext = { routeParams: params, matcherCtx: ctx, memo: new Map(), depth: 0 };
+  const matcherFlags: MatcherFlag[] = [];
+  const ctx: MatcherContext = { ...matcherCtx, path: targetPath, _matcherFlags: matcherFlags };
+  const rctx: ResolveContext = {
+    routeParams: params,
+    matcherCtx: ctx,
+    memo: new Map(),
+    depth: 0,
+    resolveChain: [{ type: "resolvable", value: blockKey }],
+    matcherFlags,
+  };
 
   let rawSections: unknown[];
   if (Array.isArray(page.sections)) {
@@ -1526,6 +1624,8 @@ async function resolveDecoPageImpl(
     }
   }
 
+  applyDecoSegmentCookie(ctx.cookies ?? {}, rctx.matcherFlags);
+
   return {
     name: page.name,
     path: page.path || targetPath,
@@ -1556,7 +1656,13 @@ export async function resolvePageSections(
   ensureInitialized();
 
   const ctx: MatcherContext = matcherCtx ?? {};
-  const rctx: ResolveContext = { matcherCtx: ctx, memo: new Map(), depth: 0 };
+  const rctx: ResolveContext = {
+    matcherCtx: ctx,
+    memo: new Map(),
+    depth: 0,
+    resolveChain: [],
+    matcherFlags: [],
+  };
 
   let rawSections: unknown[];
   if (Array.isArray(rawSectionsInput)) {
@@ -1601,6 +1707,7 @@ export async function resolvePageSections(
   }
 
   const allResults = await Promise.all(eagerResults);
+  applyDecoSegmentCookie(ctx.cookies ?? {}, rctx.matcherFlags);
   return allResults.flat();
 }
 
@@ -1626,11 +1733,15 @@ export async function resolveDeferredSection(
   // Recover routeParams from the page match so nested `requestToParam`
   // resolvers (e.g. `:slug` on PDPs) return the right value.
   const match = findPageByPath(pagePath);
+  const matcherFlags: MatcherFlag[] = [];
+  ctx._matcherFlags = matcherFlags;
   const rctx: ResolveContext = {
     routeParams: match?.params,
     matcherCtx: ctx,
     memo: new Map(),
     depth: 0,
+    resolveChain: [],
+    matcherFlags,
   };
 
   // onBeforeResolveProps: let sections transform raw props before resolution.
@@ -1638,6 +1749,8 @@ export async function resolveDeferredSection(
 
   const resolvedProps = await resolveProps(propsToResolve, rctx);
   const normalizedProps = normalizeNestedSections(resolvedProps) as Record<string, unknown>;
+
+  applyDecoSegmentCookie(ctx.cookies ?? {}, rctx.matcherFlags);
 
   return {
     component,
@@ -1699,7 +1812,13 @@ export async function reExtractRawProps(
   if (Array.isArray(page.sections)) {
     rawSections = page.sections;
   } else {
-    const rctx: ResolveContext = { matcherCtx: ctx, memo: new Map(), depth: 0 };
+    const rctx: ResolveContext = {
+      matcherCtx: ctx,
+      memo: new Map(),
+      depth: 0,
+      resolveChain: [],
+      matcherFlags: [],
+    };
     rawSections = await resolveSectionsList(page.sections, rctx);
   }
 

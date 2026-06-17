@@ -65,6 +65,12 @@ export {
   setResolveErrorHandler,
   WELL_KNOWN_TYPES,
 } from "./resolve";
+export {
+  DECO_MATCHER_PREFIX,
+  DECO_SEGMENT,
+  isFrameworkCookieName,
+  type MatcherFlag,
+} from "./matcherStickiness";
 export type { SectionLoaderFn } from "./sectionLoaders";
 export {
   isLayoutSection,

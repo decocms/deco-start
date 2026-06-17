@@ -83,6 +83,8 @@ describe("resolveSectionsList", () => {
     matcherCtx,
     memo: new Map(),
     depth: 0,
+    resolveChain: [] as { type: "prop" | "resolvable"; value: string }[],
+    matcherFlags: [] as { name: string; value: boolean; isSegment: boolean; sticky: boolean }[],
   });
 
   it("returns array as-is when value is already an array", async () => {

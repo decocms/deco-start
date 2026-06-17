@@ -49,7 +49,13 @@ import {
 import { _setRequestTraceContext } from "./otel";
 import { setRuntimeEnv } from "./otelAdapters";
 import { parseTraceparent } from "./otelHttpTracer";
-import { RequestContext } from "./requestContext";
+import { isFrameworkCookieName } from "../cms/matcherStickiness";
+import { RequestContext, mergeRequestContextHeaders } from "./requestContext";
+import {
+  buildClientCookieScript,
+  injectScriptIntoHtml,
+  stripFrameworkSetCookies,
+} from "./clientCookies";
 import { cleanPathForCacheKey } from "./urlUtils";
 import { type Device, isMobileUA } from "./useDevice";
 import { getAppMiddleware } from "./setupApps";
@@ -534,6 +540,7 @@ export const DEFAULT_SAFE_COOKIES: string[] = [
   "vtex_is_anonymous",
   "vtex_segment",
   "_deco_bucket",
+  "deco_segment",
 ];
 
 const DEFAULT_STATIC_PATHS = ["/fonts/"];
@@ -565,6 +572,11 @@ function parseCookieNames(response: Response): string[] {
   return names;
 }
 
+function isSafeCookieName(name: string, safeCookieSet: Set<string>): boolean {
+  if (safeCookieSet.has(name)) return true;
+  return isFrameworkCookieName(name);
+}
+
 /**
  * Check if ALL cookies in a response are in the safe list.
  * Returns true if the response has no cookies or only safe cookies.
@@ -573,7 +585,7 @@ function hasOnlySafeCookies(response: Response, safeCookieSet: Set<string>): boo
   if (!response.headers.has("set-cookie")) return true;
   const names = parseCookieNames(response);
   if (names.length === 0) return true;
-  return names.every((name) => safeCookieSet.has(name));
+  return names.every((name) => isSafeCookieName(name, safeCookieSet));
 }
 
 /**
@@ -591,11 +603,28 @@ function stripSafeCookiesForCache(response: Response, safeCookieSet: Set<string>
   for (const sc of setCookies) {
     const eqIdx = sc.indexOf("=");
     const name = eqIdx > 0 ? sc.slice(0, eqIdx).trim() : "";
-    if (name && !safeCookieSet.has(name)) {
+    if (name && !isSafeCookieName(name, safeCookieSet)) {
       clone.headers.append("set-cookie", sc);
     }
   }
   return clone;
+}
+
+/**
+ * Mirror framework Set-Cookies into inline `<script>` for CDN cache
+ * compatibility, then strip the redundant headers so edge cache works.
+ */
+async function applyFrameworkCookieInjection(resp: Response): Promise<Response> {
+  const ct = resp.headers.get("content-type") ?? "";
+  if (resp.status !== 200 || !ct.includes("text/html")) return resp;
+
+  const script = buildClientCookieScript(resp.headers);
+  if (!script) return resp;
+
+  const html = await resp.text();
+  const headers = new Headers(resp.headers);
+  stripFrameworkSetCookies(headers);
+  return new Response(injectScriptIntoHtml(html, script), { status: resp.status, headers });
 }
 
 /**
@@ -1130,11 +1159,14 @@ export function createDecoWorkerEntry(
         );
       });
 
+      mergeRequestContextHeaders(response);
+      const withFrameworkCookies = await applyFrameworkCookieInjection(response);
+
       // Deduplicate Set-Cookie headers — multiple layers (VTEX middleware,
       // invoke handlers, etc.) may independently append the same cookie.
-      deduplicateSetCookies(response);
+      deduplicateSetCookies(withFrameworkCookies);
 
-      let finalResponse = applySecurityHeaders(response);
+      let finalResponse = applySecurityHeaders(withFrameworkCookies);
 
       // Echo request.id + trace.id back to the client / tail worker.
       // The CF tail worker reads these headers off the response to
