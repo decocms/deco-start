@@ -191,7 +191,12 @@ export async function handleRender(request: Request): Promise<Response> {
     try {
       props = JSON.parse(decodeURIComponent(propsParam));
     } catch {
-      // props parsing failed
+      // Try base64-encoded props (admin uses btoa(encodeURIComponent(json)))
+      try {
+        props = JSON.parse(decodeURIComponent(atob(propsParam)));
+      } catch {
+        // props parsing failed
+      }
     }
   }
 
