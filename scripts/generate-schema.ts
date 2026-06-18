@@ -209,10 +209,12 @@ const SECTION_REF_DEF_KEY = "__SECTION_REF__";
 const RESOLVABLE_KEY = "Resolvable";
 
 // Only truly React-internal props that are never user-defined.
-// Do NOT include "children", "type", or "props" — those are commonly used
-// as legitimate section property names.
+// Do NOT include "children", "type", "props", or "key" — those are commonly
+// used as legitimate property names in data interfaces (e.g. SelectedFacet
+// uses { key: string; value: string }).
+// Note: React's JSX `key` is a special attribute, not a TypeScript interface
+// property — it never appears in Props/data interfaces and must not be filtered.
 const REACT_INTERNAL_PROPS = new Set([
-  "key",
   "ref",
   "then",
   "catch",
