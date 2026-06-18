@@ -271,3 +271,25 @@ export const RequestContext = {
     return ctx?.bag.get(`app:${appName}:state`) as T | undefined;
   },
 };
+
+/**
+ * Copy headers handlers wrote to `RequestContext.responseHeaders` onto
+ * an outgoing Response. Uses `getSetCookie()` so multiple Set-Cookie
+ * values are not collapsed into one comma-joined header.
+ */
+export function mergeRequestContextHeaders(response: Response): void {
+  const ctx = storage.getStore();
+  if (!ctx) return;
+  const cookies =
+    typeof ctx.responseHeaders.getSetCookie === "function"
+      ? ctx.responseHeaders.getSetCookie()
+      : [];
+  for (const cookie of cookies) {
+    response.headers.append("set-cookie", cookie);
+  }
+  ctx.responseHeaders.forEach((value, key) => {
+    if (key.toLowerCase() !== "set-cookie") {
+      response.headers.append(key, value);
+    }
+  });
+}
