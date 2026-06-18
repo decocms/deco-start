@@ -407,8 +407,9 @@ function typeToJsonSchema(type: Type, visited = new Set<string>(), ctx?: Generat
         if (ctx?.outputTypeToLoaderKeys) {
           const typeSym = propType.getSymbol() ?? propType.getAliasSymbol();
           const outputTypeName = typeSym?.getName() ?? baseHint;
-          const matchingLoaders = ctx.outputTypeToLoaderKeys.get(outputTypeName)
-            ?? (outputTypeName !== baseHint ? ctx.outputTypeToLoaderKeys.get(baseHint) : undefined);
+          const matchingLoaders =
+            ctx.outputTypeToLoaderKeys.get(outputTypeName) ??
+            (outputTypeName !== baseHint ? ctx.outputTypeToLoaderKeys.get(baseHint) : undefined);
           if (matchingLoaders?.length) {
             const blockRefSchema: any = {
               anyOf: [
@@ -721,7 +722,10 @@ function generateMeta(): MetaResponse {
         },
       };
 
-      loaderBlocks[loaderKey] = { $ref: `#/definitions/${loaderDefKey}`, namespace: SITE_NAMESPACE };
+      loaderBlocks[loaderKey] = {
+        $ref: `#/definitions/${loaderDefKey}`,
+        namespace: SITE_NAMESPACE,
+      };
       loaderRootAnyOf.push({ $ref: `#/definitions/${loaderDefKey}` });
 
       // Extract return type name for block-ref detection in sections (Bug #3)
@@ -733,13 +737,70 @@ function generateMeta(): MetaResponse {
       }
 
       const propCount = Object.keys(propsSchema.properties || {}).length;
-      console.log(`  ✓ loader ${loaderKey} (${propCount} props${outputTypeName ? ` → ${outputTypeName}` : ""})`);
+      console.log(
+        `  ✓ loader ${loaderKey} (${propCount} props${outputTypeName ? ` → ${outputTypeName}` : ""})`,
+      );
     } catch (e) {
       console.warn(`  ✗ loader ${loaderKey}: ${(e as Error).message}`);
     }
   }
 
   const ctx: GenerationContext = { outputTypeToLoaderKeys };
+
+  // ---------------------------------------------------------------------------
+  // Commerce "extension wrapper" loaders (deco-cx parity).
+  //
+  // deco-cx/apps ships `commerce/loaders/product/extensions/{listingPage,detailsPage}.ts`
+  // which wrap a base loader: `{ data: <PLP/PDP loader>, extensions: ExtensionOf<T>[] }`.
+  // These wrappers live in @decocms/apps (node_modules), so they are never scanned
+  // from `src/loaders/` — without emitting their schema the admin renders an empty
+  // config for any page whose `page` prop uses the wrapper. We emit them here using
+  // the output-type → loader map so `data` becomes a picker of the site's matching
+  // loaders (e.g. DeliveryPromiseProductListingPage), exactly like the old admin
+  // ("Extend your product" → "Data" → "The data Extensions").
+  const COMMERCE_EXTENSION_WRAPPERS = [
+    {
+      key: "commerce/loaders/product/extensions/listingPage.ts",
+      outputType: "ProductListingPage",
+    },
+    {
+      key: "commerce/loaders/product/extensions/detailsPage.ts",
+      outputType: "ProductDetailsPage",
+    },
+  ];
+  for (const wrapper of COMMERCE_EXTENSION_WRAPPERS) {
+    const matchingLoaders = outputTypeToLoaderKeys.get(wrapper.outputType) ?? [];
+    const wrapperDefKey = toBase64(wrapper.key);
+    definitions[wrapperDefKey] = {
+      title: wrapper.key,
+      type: "object",
+      required: ["__resolveType"],
+      properties: {
+        __resolveType: { type: "string", enum: [wrapper.key], default: wrapper.key },
+        data: {
+          title: "Data",
+          description: "Here comes your products or anything that can be extensible.",
+          anyOf: [
+            { $ref: `#/definitions/${RESOLVABLE_KEY}` },
+            ...matchingLoaders.map((k) => ({ $ref: `#/definitions/${toBase64(k)}` })),
+          ],
+        },
+        extensions: {
+          type: "array",
+          title: "The data Extensions",
+          items: { anyOf: [{ $ref: `#/definitions/${RESOLVABLE_KEY}` }] },
+        },
+      },
+    };
+    loaderBlocks[wrapper.key] = {
+      $ref: `#/definitions/${wrapperDefKey}`,
+      namespace: "commerce",
+    };
+    loaderRootAnyOf.push({ $ref: `#/definitions/${wrapperDefKey}` });
+    console.log(
+      `  ✓ commerce extension wrapper ${wrapper.key} (data → ${matchingLoaders.length} loader(s))`,
+    );
+  }
 
   // ---------------------------------------------------------------------------
   // Second pass: scan sections
