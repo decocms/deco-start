@@ -132,14 +132,14 @@ function buildActionDefinitions() {
     definitions[defKey] = {
       title: action.key,
       type: "object",
-      required: ["__resolveType"],
+      required: ["__resolveType", ...(action.propsSchema?.required || [])],
       properties: {
         __resolveType: {
           type: "string",
           enum: [action.key],
           default: action.key,
         },
-        props: action.propsSchema,
+        ...(action.propsSchema?.properties || {}),
       },
     };
 
@@ -432,14 +432,14 @@ function buildLoaderDefinitions() {
     definitions[defKey] = {
       title: loader.key,
       type: "object",
-      required: ["__resolveType"],
+      required: ["__resolveType", ...(loader.propsSchema?.required || [])],
       properties: {
         __resolveType: {
           type: "string",
           enum: [loader.key],
           default: loader.key,
         },
-        props: loader.propsSchema,
+        ...(loader.propsSchema?.properties || {}),
       },
     };
 
@@ -857,14 +857,17 @@ export function composeMeta(siteMeta: MetaResponse): MetaResponse {
 
   const resolvableDef = buildResolvableDefinition();
 
-  // Merge all definitions
+  // Merge all definitions.
+  // Priority (last wins): auto-registered empty schemas → framework sections/pages →
+  // site-generated schemas (meta.gen.json, with full loader props) → framework-critical keys.
+  // This ensures detailed site-generated schemas always win over auto-registered stubs.
   const allDefinitions: Record<string, any> = {
-    ...(siteMeta.schema?.definitions || {}),
-    ...fwSections.definitions,
-    ...page.definitions,
     ...loaders.definitions,
     ...actions.definitions,
     ...matchers.definitions,
+    ...fwSections.definitions,
+    ...page.definitions,
+    ...(siteMeta.schema?.definitions || {}),
     [SECTION_REF_DEF_KEY]: sectionRefDef,
     [RESOLVABLE_LITERAL_KEY]: resolvableDef,
     [RESOLVABLE_B64_KEY]: resolvableDef,

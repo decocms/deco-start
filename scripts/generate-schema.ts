@@ -41,6 +41,7 @@ const SITE_NAMESPACE = arg("namespace", "site");
 const SITE_NAME = arg("site", "storefront");
 const FRAMEWORK_VERSION = arg("version", "1.0.0");
 const SECTIONS_REL = arg("sections", "src/sections");
+const LOADERS_REL = arg("loaders", "src/loaders");
 const OUT_REL = arg("out", "src/server/admin/meta.gen.json");
 const PLATFORM = arg("platform", "cloudflare");
 
@@ -204,6 +205,8 @@ function applyWidgetFormat(schema: any, typeHint: string): void {
 
 // Well-known definition key for Section type references resolved by composeMeta
 const SECTION_REF_DEF_KEY = "__SECTION_REF__";
+// Well-known definition key for Resolvable (saved blocks picker)
+const RESOLVABLE_KEY = "Resolvable";
 
 // Only truly React-internal props that are never user-defined.
 // Do NOT include "children", "type", or "props" — those are commonly used
@@ -219,7 +222,32 @@ const REACT_INTERNAL_PROPS = new Set([
   "_store",
 ]);
 
-function typeToJsonSchema(type: Type, visited = new Set<string>()): any {
+interface GenerationContext {
+  outputTypeToLoaderKeys: Map<string, string[]>;
+}
+
+/**
+ * Extract the return type name of a loader's default export.
+ * Unwraps Promise<T> and T | null wrappers.
+ */
+function extractLoaderOutputTypeName(sourceFile: SourceFile): string | null {
+  const sym = sourceFile.getDefaultExportSymbol();
+  if (!sym) return null;
+  const callSigs = sym.getTypeAtLocation(sourceFile).getCallSignatures();
+  if (!callSigs.length) return null;
+  let ret = callSigs[0].getReturnType();
+  if (ret.getSymbol()?.getName() === "Promise") {
+    const args = ret.getTypeArguments();
+    if (args.length) ret = args[0];
+  }
+  if (ret.isUnion()) {
+    const nonNull = ret.getUnionTypes().filter((t) => !t.isNull() && !t.isUndefined());
+    if (nonNull.length === 1) ret = nonNull[0];
+  }
+  return ret.getSymbol()?.getName() ?? ret.getAliasSymbol()?.getName() ?? null;
+}
+
+function typeToJsonSchema(type: Type, visited = new Set<string>(), ctx?: GenerationContext): any {
   const typeText = type.getText();
   if (visited.has(typeText)) return { type: "object" };
   visited.add(typeText);
@@ -249,7 +277,7 @@ function typeToJsonSchema(type: Type, visited = new Set<string>()): any {
     if (type.isArray()) {
       const el = type.getArrayElementType();
       return el
-        ? { type: "array", items: typeToJsonSchema(el, new Set(visited)) }
+        ? { type: "array", items: typeToJsonSchema(el, new Set(visited), ctx) }
         : { type: "array" };
     }
 
@@ -259,7 +287,7 @@ function typeToJsonSchema(type: Type, visited = new Set<string>()): any {
       const isNullable = nonNull.length < parts.length;
 
       if (nonNull.length === 1) {
-        const inner = typeToJsonSchema(nonNull[0], new Set(visited));
+        const inner = typeToJsonSchema(nonNull[0], new Set(visited), ctx);
         return isNullable ? { ...inner, nullable: true } : inner;
       }
 
@@ -285,7 +313,7 @@ function typeToJsonSchema(type: Type, visited = new Set<string>()): any {
 
       // General anyOf — try to add title to each variant for discriminated unions
       const anyOf = nonNull.map((t) => {
-        const schema = typeToJsonSchema(t, new Set(visited));
+        const schema = typeToJsonSchema(t, new Set(visited), ctx);
         if (!schema.title && schema.type === "object") {
           const sym = t.getAliasSymbol() ?? t.getSymbol();
           const symName = sym?.getName();
@@ -372,7 +400,32 @@ function typeToJsonSchema(type: Type, visited = new Set<string>()): any {
           continue;
         }
 
-        const schema = typeToJsonSchema(propType, new Set(visited));
+        // Loader output type → block-ref: emit anyOf [Resolvable, ...matchingLoaders]
+        // baseHint strips "| null | undefined" so "ProductListingPage | null" → "ProductListingPage"
+        if (ctx?.outputTypeToLoaderKeys) {
+          const typeSym = propType.getSymbol() ?? propType.getAliasSymbol();
+          const outputTypeName = typeSym?.getName() ?? baseHint;
+          const matchingLoaders = ctx.outputTypeToLoaderKeys.get(outputTypeName)
+            ?? (outputTypeName !== baseHint ? ctx.outputTypeToLoaderKeys.get(baseHint) : undefined);
+          if (matchingLoaders?.length) {
+            const blockRefSchema: any = {
+              anyOf: [
+                { $ref: `#/definitions/${RESOLVABLE_KEY}` },
+                ...matchingLoaders.map((k) => ({ $ref: `#/definitions/${toBase64(k)}` })),
+              ],
+              title: name.charAt(0).toUpperCase() + name.slice(1),
+            };
+            if (prop.isOptional() || typeHint.includes("null") || typeHint.includes("undefined")) {
+              blockRefSchema.nullable = true;
+            }
+            applyJsDocToSchema(blockRefSchema, tags);
+            properties[name] = blockRefSchema;
+            if (!prop.isOptional()) required.push(name);
+            continue;
+          }
+        }
+
+        const schema = typeToJsonSchema(propType, new Set(visited), ctx);
 
         applyJsDocToSchema(schema, tags);
         applyWidgetFormat(schema, typeHint);
@@ -501,6 +554,7 @@ function resolvePropsViaReExport(
   sourceFileCache: SourceFileCache,
   moduleResolutionCache: ModuleResolutionCache,
   propsSchemaCache: PropsSchemaCache,
+  ctx?: GenerationContext,
 ): any | null {
   if (maxDepth <= 0) return null;
 
@@ -530,14 +584,14 @@ function resolvePropsViaReExport(
 
       const targetProps = targetFile.getInterface("Props");
       if (targetProps) {
-        const schema = typeToJsonSchema(targetProps.getType());
+        const schema = typeToJsonSchema(targetProps.getType(), undefined, ctx);
         propsSchemaCache.set(targetPath, schema);
         return schema;
       }
 
       const targetAlias = targetFile.getTypeAlias("Props");
       if (targetAlias) {
-        const schema = typeToJsonSchema(targetAlias.getType());
+        const schema = typeToJsonSchema(targetAlias.getType(), undefined, ctx);
         propsSchemaCache.set(targetPath, schema);
         return schema;
       }
@@ -545,7 +599,7 @@ function resolvePropsViaReExport(
       // Type-checker approach: extract from default export call signature
       const propsType = extractDefaultExportPropsType(targetFile);
       if (propsType) {
-        const schema = typeToJsonSchema(propsType);
+        const schema = typeToJsonSchema(propsType, undefined, ctx);
         propsSchemaCache.set(targetPath, schema);
         return schema;
       }
@@ -560,6 +614,7 @@ function resolvePropsViaReExport(
         sourceFileCache,
         moduleResolutionCache,
         propsSchemaCache,
+        ctx,
       );
       if (deeper) {
         propsSchemaCache.set(targetPath, deeper);
@@ -589,6 +644,7 @@ function findTsxFiles(dir: string): string[] {
 function generateMeta(): MetaResponse {
   const root = process.cwd();
   const sectionsDir = path.resolve(root, SECTIONS_REL);
+  const loadersDir = path.resolve(root, LOADERS_REL);
   const srcDir = path.join(root, "src");
 
   const project = new Project({
@@ -598,14 +654,16 @@ function generateMeta(): MetaResponse {
 
   const definitions: Record<string, any> = {};
   const sectionBlocks: Record<string, any> = {};
+  const loaderBlocks: Record<string, any> = {};
   const sectionRootAnyOf: any[] = [];
+  const loaderRootAnyOf: any[] = [{ $ref: `#/definitions/${RESOLVABLE_KEY}` }];
+  const outputTypeToLoaderKeys = new Map<string, string[]>();
   const sourceFileCache: SourceFileCache = new Map();
   const moduleResolutionCache: ModuleResolutionCache = new Map();
   const propsSchemaCache: PropsSchemaCache = new Map();
 
   // Resolvable: the admin's deRefUntil expects the LITERAL key "Resolvable",
   // not a base64-encoded version. We store both for compatibility.
-  const RESOLVABLE_KEY = "Resolvable";
   const resolvableB64Key = toBase64("Resolvable");
   const resolvableDef = {
     title: "Select from saved",
@@ -617,6 +675,73 @@ function generateMeta(): MetaResponse {
   definitions[RESOLVABLE_KEY] = resolvableDef;
   definitions[resolvableB64Key] = resolvableDef;
   sectionRootAnyOf.push({ $ref: `#/definitions/${RESOLVABLE_KEY}` });
+
+  // ---------------------------------------------------------------------------
+  // First pass: scan loaders — build input schemas + outputTypeToLoaderKeys map
+  // ---------------------------------------------------------------------------
+  const loaderFiles = fs.existsSync(loadersDir) ? findTsxFiles(loadersDir) : [];
+  console.log(`Found ${loaderFiles.length} loader files`);
+  for (const filePath of loaderFiles) {
+    getSourceFile(project, filePath, sourceFileCache);
+  }
+
+  for (const filePath of loaderFiles) {
+    const relativePath = path.relative(srcDir, filePath);
+    const loaderKey = `${SITE_NAMESPACE}/${relativePath}`;
+
+    try {
+      const sourceFile = getSourceFile(project, filePath, sourceFileCache);
+
+      // Extract Props (input schema)
+      let propsSchema: any = null;
+      const propsInterface = sourceFile.getInterface("Props");
+      if (propsInterface) propsSchema = typeToJsonSchema(propsInterface.getType());
+
+      const propsTypeAlias = sourceFile.getTypeAlias("Props");
+      if (!propsSchema && propsTypeAlias) propsSchema = typeToJsonSchema(propsTypeAlias.getType());
+
+      if (!propsSchema) {
+        const localPropsType = extractDefaultExportPropsType(sourceFile);
+        if (localPropsType) propsSchema = typeToJsonSchema(localPropsType);
+      }
+
+      if (!propsSchema) propsSchema = { type: "object", properties: {} };
+
+      // Register flat loader definition (Bug #2: spread props, not nested under "props:")
+      const loaderDefKey = toBase64(loaderKey);
+      definitions[loaderDefKey] = {
+        title: loaderKey,
+        type: "object",
+        required: ["__resolveType", ...(propsSchema?.required || [])],
+        properties: {
+          __resolveType: { type: "string", enum: [loaderKey], default: loaderKey },
+          ...(propsSchema?.properties || {}),
+        },
+      };
+
+      loaderBlocks[loaderKey] = { $ref: `#/definitions/${loaderDefKey}`, namespace: SITE_NAMESPACE };
+      loaderRootAnyOf.push({ $ref: `#/definitions/${loaderDefKey}` });
+
+      // Extract return type name for block-ref detection in sections (Bug #3)
+      const outputTypeName = extractLoaderOutputTypeName(sourceFile);
+      if (outputTypeName) {
+        const existing = outputTypeToLoaderKeys.get(outputTypeName) ?? [];
+        existing.push(loaderKey);
+        outputTypeToLoaderKeys.set(outputTypeName, existing);
+      }
+
+      const propCount = Object.keys(propsSchema.properties || {}).length;
+      console.log(`  ✓ loader ${loaderKey} (${propCount} props${outputTypeName ? ` → ${outputTypeName}` : ""})`);
+    } catch (e) {
+      console.warn(`  ✗ loader ${loaderKey}: ${(e as Error).message}`);
+    }
+  }
+
+  const ctx: GenerationContext = { outputTypeToLoaderKeys };
+
+  // ---------------------------------------------------------------------------
+  // Second pass: scan sections
+  // ---------------------------------------------------------------------------
 
   if (!fs.existsSync(sectionsDir)) {
     console.error(`Sections directory not found: ${sectionsDir}`);
@@ -640,10 +765,11 @@ function generateMeta(): MetaResponse {
 
       // Strategy 1: Local Props interface/type alias in the section file
       const propsInterface = sourceFile.getInterface("Props");
-      if (propsInterface) propsSchema = typeToJsonSchema(propsInterface.getType());
+      if (propsInterface) propsSchema = typeToJsonSchema(propsInterface.getType(), undefined, ctx);
 
       const propsTypeAlias = sourceFile.getTypeAlias("Props");
-      if (!propsSchema && propsTypeAlias) propsSchema = typeToJsonSchema(propsTypeAlias.getType());
+      if (!propsSchema && propsTypeAlias)
+        propsSchema = typeToJsonSchema(propsTypeAlias.getType(), undefined, ctx);
 
       // Strategy 2: Follow re-exports recursively (up to 3 hops)
       // Handles: section → island → component chains
@@ -657,6 +783,7 @@ function generateMeta(): MetaResponse {
           sourceFileCache,
           moduleResolutionCache,
           propsSchemaCache,
+          ctx,
         );
       }
 
@@ -664,7 +791,7 @@ function generateMeta(): MetaResponse {
       if (!propsSchema) {
         const localPropsType = extractDefaultExportPropsType(sourceFile);
         if (localPropsType) {
-          propsSchema = typeToJsonSchema(localPropsType);
+          propsSchema = typeToJsonSchema(localPropsType, undefined, ctx);
         }
       }
 
@@ -701,20 +828,20 @@ function generateMeta(): MetaResponse {
     }
   }
 
-  // Pages, loaders, matchers, etc. are injected at runtime by composeMeta()
-  // in src/admin/schema.ts -- the generator only handles site sections.
+  // Pages, matchers, etc. are injected at runtime by composeMeta() in src/admin/schema.ts.
+  // Site-level loaders are generated here (first pass above).
   const emptyAnyOf = { anyOf: [] as any[] };
   return {
     major: 1,
     version: FRAMEWORK_VERSION,
     namespace: SITE_NAMESPACE,
     site: SITE_NAME,
-    manifest: { blocks: { sections: sectionBlocks } },
+    manifest: { blocks: { sections: sectionBlocks, loaders: loaderBlocks } },
     schema: {
       definitions,
       root: {
         sections: { anyOf: sectionRootAnyOf },
-        loaders: emptyAnyOf,
+        loaders: { anyOf: loaderRootAnyOf },
         actions: emptyAnyOf,
         pages: emptyAnyOf,
         handlers: emptyAnyOf,
@@ -736,6 +863,7 @@ fs.writeFileSync(outPath, JSON.stringify(meta, null, 2));
 
 const defCount = Object.keys(meta.schema.definitions).length;
 const secCount = Object.keys(meta.manifest.blocks.sections || {}).length;
+const ldrCount = Object.keys(meta.manifest.blocks.loaders || {}).length;
 console.log(
-  `\nGenerated schema: ${defCount} definitions, ${secCount} sections → ${path.relative(process.cwd(), outPath)}`,
+  `\nGenerated schema: ${defCount} definitions, ${secCount} sections, ${ldrCount} loaders → ${path.relative(process.cwd(), outPath)}`,
 );
