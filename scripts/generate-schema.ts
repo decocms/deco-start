@@ -4,9 +4,9 @@ import path from "node:path";
 /**
  * Schema Generator for deco admin compatibility.
  *
- * Scans src/sections/ for .tsx files, parses their Props interfaces,
- * and generates JSON Schema 7 definitions in the format expected by
- * the deco admin (/deco/meta endpoint).
+ * Scans src/sections/, src/loaders/, and src/apps/ for TypeScript files, parses
+ * their Props interfaces, and generates JSON Schema 7 definitions in the format
+ * expected by the deco admin (/deco/meta endpoint).
  *
  * Usage (from site root):
  *   npx tsx node_modules/@decocms/start/scripts/generate-schema.ts [options]
@@ -16,6 +16,9 @@ import path from "node:path";
  *   --site        Site name          (default: "storefront")
  *   --version     Framework version  (default: "1.0.0")
  *   --sections    Sections directory (default: "src/sections")
+ *   --loaders     Loaders directory  (default: "src/loaders")
+ *   --apps        Apps directory     (default: "src/apps")
+ *   --skip-apps   Skip app schema generation
  *   --out         Output file        (default: "src/server/admin/meta.gen.json")
  *   --platform    Platform name      (default: "cloudflare")
  */
@@ -42,6 +45,8 @@ const SITE_NAME = arg("site", "storefront");
 const FRAMEWORK_VERSION = arg("version", "1.0.0");
 const SECTIONS_REL = arg("sections", "src/sections");
 const LOADERS_REL = arg("loaders", "src/loaders");
+const APPS_REL = arg("apps", "src/apps");
+const SKIP_APPS = argv.includes("--skip-apps");
 const OUT_REL = arg("out", "src/server/admin/meta.gen.json");
 const PLATFORM = arg("platform", "cloudflare");
 
@@ -830,6 +835,98 @@ function generateMeta(): MetaResponse {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Third pass: scan installed app bridges (src/apps/)
+  // ---------------------------------------------------------------------------
+  const appBlocks: Record<string, any> = {};
+  const appRootAnyOf: any[] = [];
+  if (!SKIP_APPS) {
+    const appsDir = path.resolve(root, APPS_REL);
+    const appFiles = fs.existsSync(appsDir) ? findTsxFiles(appsDir) : [];
+    console.log(`Found ${appFiles.length} app files`);
+    for (const filePath of appFiles) {
+      getSourceFile(project, filePath, sourceFileCache);
+    }
+
+    for (const filePath of appFiles) {
+      const relativePath = path.relative(srcDir, filePath);
+      const blockKey = `${SITE_NAMESPACE}/${relativePath}`;
+
+      if (
+        !blockKey.startsWith(`${SITE_NAMESPACE}/apps/`) ||
+        !blockKey.endsWith(".ts") ||
+        blockKey.includes("/_")
+      ) {
+        continue;
+      }
+
+      try {
+        const sourceFile = getSourceFile(project, filePath, sourceFileCache);
+
+        let propsSchema: any = null;
+
+        const propsInterface = sourceFile.getInterface("Props");
+        if (propsInterface) propsSchema = typeToJsonSchema(propsInterface.getType(), undefined, ctx);
+
+        const propsTypeAlias = sourceFile.getTypeAlias("Props");
+        if (!propsSchema && propsTypeAlias)
+          propsSchema = typeToJsonSchema(propsTypeAlias.getType(), undefined, ctx);
+
+        if (!propsSchema) {
+          propsSchema = resolvePropsViaReExport(
+            project,
+            sourceFile,
+            filePath,
+            root,
+            3,
+            sourceFileCache,
+            moduleResolutionCache,
+            propsSchemaCache,
+            ctx,
+          );
+        }
+
+        if (!propsSchema) {
+          const localPropsType = extractDefaultExportPropsType(sourceFile);
+          if (localPropsType) {
+            propsSchema = typeToJsonSchema(localPropsType, undefined, ctx);
+          }
+        }
+
+        if (!propsSchema) propsSchema = { type: "object", properties: {} };
+
+        const propCount = Object.keys(propsSchema.properties || {}).length;
+
+        const propsDefKey = toBase64(`file:///${filePath}`) + "@Props";
+        definitions[propsDefKey] = propsSchema;
+
+        const appDefKey = toBase64(blockKey);
+        definitions[appDefKey] = {
+          title: blockKey,
+          type: "object",
+          allOf: [{ $ref: `#/definitions/${propsDefKey}` }],
+          required: ["__resolveType"],
+          properties: {
+            __resolveType: { type: "string", enum: [blockKey], default: blockKey },
+          },
+        };
+
+        appBlocks[blockKey] = {
+          $ref: `#/definitions/${appDefKey}`,
+          namespace: SITE_NAMESPACE,
+        };
+        appRootAnyOf.push({
+          $ref: `#/definitions/${appDefKey}`,
+          inputSchema: `#/definitions/${propsDefKey}`,
+        });
+
+        console.log(`  ${propCount > 0 ? "✓" : "○"} ${blockKey} (${propCount} props)`);
+      } catch (e) {
+        console.warn(`  ✗ ${blockKey}: ${(e as Error).message}`);
+      }
+    }
+  }
+
   // Pages, matchers, etc. are injected at runtime by composeMeta() in src/admin/schema.ts.
   // Site-level loaders are generated here (first pass above).
   const emptyAnyOf = { anyOf: [] as any[] };
@@ -838,7 +935,7 @@ function generateMeta(): MetaResponse {
     version: FRAMEWORK_VERSION,
     namespace: SITE_NAMESPACE,
     site: SITE_NAME,
-    manifest: { blocks: { sections: sectionBlocks, loaders: loaderBlocks } },
+    manifest: { blocks: { sections: sectionBlocks, loaders: loaderBlocks, apps: appBlocks } },
     schema: {
       definitions,
       root: {
@@ -850,7 +947,7 @@ function generateMeta(): MetaResponse {
         matchers: emptyAnyOf,
         flags: emptyAnyOf,
         functions: emptyAnyOf,
-        apps: emptyAnyOf,
+        apps: { anyOf: appRootAnyOf },
       },
     },
     platform: PLATFORM,
@@ -866,6 +963,7 @@ fs.writeFileSync(outPath, JSON.stringify(meta, null, 2));
 const defCount = Object.keys(meta.schema.definitions).length;
 const secCount = Object.keys(meta.manifest.blocks.sections || {}).length;
 const ldrCount = Object.keys(meta.manifest.blocks.loaders || {}).length;
+const appCount = Object.keys(meta.manifest.blocks.apps || {}).length;
 console.log(
-  `\nGenerated schema: ${defCount} definitions, ${secCount} sections, ${ldrCount} loaders → ${path.relative(process.cwd(), outPath)}`,
+  `\nGenerated schema: ${defCount} definitions, ${secCount} sections, ${ldrCount} loaders, ${appCount} apps → ${path.relative(process.cwd(), outPath)}`,
 );
