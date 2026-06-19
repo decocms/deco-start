@@ -437,6 +437,10 @@ function typeToJsonSchema(type: Type, visited = new Set<string>(), ctx?: Generat
 
         applyJsDocToSchema(schema, tags);
         applyWidgetFormat(schema, typeHint);
+        if (typeHint.includes("Secret")) {
+          schema.type = schema.type ?? "string";
+          schema.format = "password";
+        }
 
         if (!schema.title) schema.title = name.charAt(0).toUpperCase() + name.slice(1);
 
@@ -446,6 +450,13 @@ function typeToJsonSchema(type: Type, visited = new Set<string>(), ctx?: Generat
 
       const result: any = { type: "object", properties };
       if (required.length > 0) result.required = required;
+
+      const ifaceSym = type.getAliasSymbol() ?? type.getSymbol();
+      if (ifaceSym) {
+        const ifaceTags = getJsDocTags(ifaceSym);
+        applyJsDocToSchema(result, ifaceTags);
+      }
+
       return result;
     }
 
