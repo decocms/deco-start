@@ -28,7 +28,7 @@
 import { getRenderShellConfig } from "../admin/setup";
 import { loadBlocks } from "../cms/loader";
 import type { MatcherContext } from "../cms/resolve";
-import { resolveDecoPage } from "../cms/resolve";
+import { isBot, resolveDecoPage } from "../cms/resolve";
 import { runSectionLoaders, runSingleSectionLoader } from "../cms/sectionLoaders";
 import {
   type CacheProfileName,
@@ -834,6 +834,18 @@ export function createDecoWorkerEntry(
       }
     }
 
+    // Bots render every section eagerly (shouldDeferSection short-circuits in
+    // resolve.ts), producing a ~10x larger HTML payload (all eager-section
+    // props serialized into the SSR hydration blob). Key bots into a SEPARATE
+    // bucket so a crawler / Lighthouse / PageSpeed request can never poison the
+    // shared human cache entry (and vice-versa). This MUST use the same `isBot`
+    // predicate that gates shouldDeferSection — keying off a different bot
+    // regex (e.g. requestContext's BOT_RE, which misses Lighthouse/Semrush)
+    // would let the key and render decisions diverge and re-introduce poisoning.
+    if (isBot(request.headers.get("user-agent") ?? undefined)) {
+      url.searchParams.set("__bot", "1");
+    }
+
     if (buildSegment) {
       const segment = buildSegment(request);
       url.searchParams.set("__seg", hashSegment(segment));
@@ -915,26 +927,35 @@ export function createDecoWorkerEntry(
 
     const geoKeys: (string | null)[] = [null, ...geoVariants];
 
+    // Bots are keyed into a separate `__bot=1` bucket (see buildCacheKey), so
+    // purge both the human and bot variants. The param-set order below MUST
+    // mirror buildCacheKey exactly (__v, __cf_geo, __bot, then __seg/__cf_device)
+    // so the purge key byte-matches the stored key.
+    const botVariants = [false, true] as const;
+
     for (const p of paths) {
       if (buildSegment) {
         const segments = buildPurgeSegments(body);
         for (const seg of segments) {
           for (const cc of geoKeys) {
-            const url = new URL(p, baseUrl);
-            const purgeVersion = getBuildHash(env);
-            if (purgeVersion) url.searchParams.set("__v", purgeVersion);
-            url.searchParams.set("__seg", hashSegment(seg));
-            if (cc) url.searchParams.set("__cf_geo", cc);
-            const key = new Request(url.toString(), { method: "GET" });
-            try {
-              if (await cache.delete(key)) {
-                const label = cc
-                  ? `${p} (${hashSegment(seg)}, ${cc})`
-                  : `${p} (${hashSegment(seg)})`;
-                purged.push(label);
+            for (const bot of botVariants) {
+              const url = new URL(p, baseUrl);
+              const purgeVersion = getBuildHash(env);
+              if (purgeVersion) url.searchParams.set("__v", purgeVersion);
+              if (cc) url.searchParams.set("__cf_geo", cc);
+              if (bot) url.searchParams.set("__bot", "1");
+              url.searchParams.set("__seg", hashSegment(seg));
+              const key = new Request(url.toString(), { method: "GET" });
+              try {
+                if (await cache.delete(key)) {
+                  const tags = [hashSegment(seg), cc, bot ? "bot" : null]
+                    .filter(Boolean)
+                    .join(", ");
+                  purged.push(`${p} (${tags})`);
+                }
+              } catch {
+                /* ignore */
               }
-            } catch {
-              /* ignore */
             }
           }
         }
@@ -943,19 +964,22 @@ export function createDecoWorkerEntry(
 
         for (const device of devices) {
           for (const cc of geoKeys) {
-            const url = new URL(p, baseUrl);
-            const purgeVersion = getBuildHash(env);
-            if (purgeVersion) url.searchParams.set("__v", purgeVersion);
-            if (device) url.searchParams.set("__cf_device", device);
-            if (cc) url.searchParams.set("__cf_geo", cc);
-            const key = new Request(url.toString(), { method: "GET" });
-            try {
-              if (await cache.delete(key)) {
-                const parts = [device, cc].filter(Boolean).join(", ");
-                purged.push(parts ? `${p} (${parts})` : p);
+            for (const bot of botVariants) {
+              const url = new URL(p, baseUrl);
+              const purgeVersion = getBuildHash(env);
+              if (purgeVersion) url.searchParams.set("__v", purgeVersion);
+              if (cc) url.searchParams.set("__cf_geo", cc);
+              if (bot) url.searchParams.set("__bot", "1");
+              if (device) url.searchParams.set("__cf_device", device);
+              const key = new Request(url.toString(), { method: "GET" });
+              try {
+                if (await cache.delete(key)) {
+                  const parts = [device, cc, bot ? "bot" : null].filter(Boolean).join(", ");
+                  purged.push(parts ? `${p} (${parts})` : p);
+                }
+              } catch {
+                /* ignore */
               }
-            } catch {
-              /* ignore */
             }
           }
         }

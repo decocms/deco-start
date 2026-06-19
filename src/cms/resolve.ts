@@ -107,16 +107,29 @@ export interface AsyncRenderingConfig {
    */
   respectCmsLazy: boolean;
   /**
-   * Fallback threshold: sections at or above this index are rendered
-   * eagerly regardless. Only applies to sections NOT wrapped in Lazy.
+   * Fold threshold: sections at or above this flat index are DEFERRED
+   * (rendered as a skeleton and loaded on scroll), so their resolved props are
+   * not serialized into the SSR hydration payload. Sections below it stay
+   * eager. Only applies to sections NOT wrapped in a CMS Lazy wrapper.
    * Set to `Infinity` to disable threshold-based deferral entirely
    * (rely only on CMS Lazy wrappers).
-   * @default Infinity
+   * @default {@link DEFAULT_FOLD_THRESHOLD}
    */
   foldThreshold: number;
   /** Section component keys that must always be rendered eagerly. */
   alwaysEager: Set<string>;
 }
+
+/**
+ * Default fold threshold applied when a site enables async rendering without
+ * specifying `foldThreshold`. Sections at or above this flat index are
+ * deferred (loaded on scroll), so their resolved props are NOT serialized into
+ * the SSR hydration payload — keeping above-the-fold content eager for LCP/SEO
+ * while below-the-fold commerce shelves stop bloating the HTML. Override
+ * per-site via `setAsyncRenderingConfig({ foldThreshold })`, or set `Infinity`
+ * to defer only CMS Lazy-wrapped sections (the previous default).
+ */
+export const DEFAULT_FOLD_THRESHOLD = 3;
 
 // Always read from globalThis so split-module copies see updates
 function getAsyncConfig(): AsyncRenderingConfig | null {
@@ -126,12 +139,12 @@ function getAsyncConfig(): AsyncRenderingConfig | null {
 /**
  * Enable async section rendering.
  *
- * By default, respects the CMS Lazy wrapper (`website/sections/Rendering/Lazy.tsx`)
- * as the source of truth — sections the editor marked as Lazy are deferred,
- * everything else is eager.
- *
- * Optionally, `foldThreshold` can be used as a fallback for sections NOT
- * wrapped in Lazy (e.g. defer everything below index 3).
+ * Respects the CMS Lazy wrapper (`website/sections/Rendering/Lazy.tsx`) — any
+ * section the editor marked as Lazy is deferred. In addition, sections at or
+ * above `foldThreshold` (default {@link DEFAULT_FOLD_THRESHOLD}) are deferred so
+ * their props are not serialized into the SSR hydration payload; sections below
+ * the threshold stay eager (above-the-fold content for LCP/SEO). Pass
+ * `foldThreshold: Infinity` to defer only Lazy-wrapped sections.
  *
  * When not called, all sections are resolved eagerly (backward compatible).
  */
@@ -144,7 +157,7 @@ export function setAsyncRenderingConfig(config?: {
   const merged = new Set([...(existing?.alwaysEager ?? []), ...(config?.alwaysEager ?? [])]);
   G.__deco.asyncConfig = {
     respectCmsLazy: config?.respectCmsLazy ?? existing?.respectCmsLazy ?? true,
-    foldThreshold: config?.foldThreshold ?? existing?.foldThreshold ?? Infinity,
+    foldThreshold: config?.foldThreshold ?? existing?.foldThreshold ?? DEFAULT_FOLD_THRESHOLD,
     alwaysEager: merged,
   };
 }
@@ -228,7 +241,7 @@ export function registerBotPattern(pattern: RegExp): void {
   botPatterns.push(pattern);
 }
 
-function isBot(userAgent?: string): boolean {
+export function isBot(userAgent?: string): boolean {
   if (!userAgent) return false;
   return botPatterns.some((re) => re.test(userAgent));
 }

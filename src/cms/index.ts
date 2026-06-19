@@ -44,6 +44,7 @@ export {
   cacheDeferredRawProps,
   getAsyncRenderingConfig,
   getDeferredRawProps,
+  isBot,
   isSeoSection,
   onBeforeResolve,
   registerBotPattern,
