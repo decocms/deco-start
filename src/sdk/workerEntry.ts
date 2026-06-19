@@ -1226,7 +1226,7 @@ export function createDecoWorkerEntry(
         /* swallow — observability must never fail the request */
       }
       try {
-        logRequest(request, finalResponse.status, durationMs, {
+        logRequest(request, finalResponse.status, {
           ...(identity.requestId ? { "request.id": identity.requestId } : {}),
           ...(identity.traceId ? { "trace.id": identity.traceId } : {}),
         });

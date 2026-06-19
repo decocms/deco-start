@@ -593,7 +593,6 @@ const isDev =
 export function logRequest(
   request: Request,
   status: number,
-  durationMs: number,
   extra?: Record<string, unknown>,
 ) {
   const url = new URL(request.url);
@@ -608,7 +607,6 @@ export function logRequest(
     [ATTR_HTTP_REQUEST_METHOD]: request.method,
     [ATTR_URL_PATH]: url.pathname,
     [ATTR_HTTP_RESPONSE_STATUS_CODE]: status,
-    "duration_ms": Math.round(durationMs),
     ...extra,
   });
 }
