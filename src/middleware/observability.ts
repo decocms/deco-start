@@ -34,6 +34,9 @@
 
 import * as asyncHooks from "node:async_hooks";
 import {
+  ATTR_HTTP_REQUEST_METHOD,
+  ATTR_HTTP_RESPONSE_STATUS_CODE,
+  ATTR_URL_PATH,
   METRIC_HTTP_CLIENT_REQUEST_DURATION,
   METRIC_HTTP_SERVER_REQUEST_DURATION,
 } from "@opentelemetry/semantic-conventions";
@@ -602,9 +605,9 @@ export function logRequest(
   // logger floor automatically (no need to attach manually here).
   const level = status >= 500 ? "error" : "info";
   logger[level]("request handled", {
-    "http.request.method": request.method,
-    "url.path": url.pathname,
-    "http.response.status_code": status,
+    [ATTR_HTTP_REQUEST_METHOD]: request.method,
+    [ATTR_URL_PATH]: url.pathname,
+    [ATTR_HTTP_RESPONSE_STATUS_CODE]: status,
     "duration_ms": Math.round(durationMs),
     ...extra,
   });
