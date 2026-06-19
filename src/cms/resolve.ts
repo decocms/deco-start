@@ -1473,10 +1473,14 @@ async function resolveDecoPageImpl(
         // Shallow resolution failed — fall back to eager resolution
         const idx = currentFlatIndex;
         eagerResults.push(
-          resolveRawSection(section, rctx).then((sections) => {
-            for (const s of sections) s.index = idx;
-            return sections;
-          }),
+          // Clone the wrappers before stamping `index` — layout sections may
+          // be backed by the shared resolved-layout cache, and mutating
+          // `s.index` in place would corrupt that shared object across
+          // concurrent requests (causing sections to sort into the wrong
+          // position, e.g. the footer jumping above other sections).
+          resolveRawSection(section, rctx).then((sections) =>
+            sections.map((s) => ({ ...s, index: idx })),
+          ),
         );
       }
       flatIndex++;
@@ -1513,10 +1517,12 @@ async function resolveDecoPageImpl(
 
       const idx = currentFlatIndex;
       eagerResults.push(
-        promise.then((sections) => {
-          for (const s of sections) s.index = idx;
-          return sections;
-        }),
+        // Clone the wrappers before stamping `index`. `promise` may resolve to
+        // the shared resolved-layout cache array (line ~1491 `return cached`)
+        // or the shared in-flight array; mutating `s.index` in place would
+        // corrupt that shared object across concurrent requests, scrambling
+        // section order (e.g. the footer swapping position with top sections).
+        promise.then((sections) => sections.map((s) => ({ ...s, index: idx }))),
       );
       flatIndex++;
     }
