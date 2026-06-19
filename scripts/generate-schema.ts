@@ -504,6 +504,46 @@ function extractDefaultExportPropsType(sourceFile: import("ts-morph").SourceFile
 }
 
 /**
+ * Extract the first parameter type of an exported `loader` function.
+ * When a section file co-exports a loader, the loader's input type defines
+ * the CMS schema (what the user configures), NOT the component's Props.
+ */
+function extractLoaderInputType(sourceFile: import("ts-morph").SourceFile): Type | null {
+  // Check for `export const loader = ...` or `export function loader(...)`
+  for (const sym of sourceFile.getExportSymbols()) {
+    if (sym.getName() !== "loader") continue;
+
+    const decls = sym.getDeclarations();
+    for (const decl of decls) {
+      let loaderType: Type | null = null;
+
+      if (Node.isVariableDeclaration(decl)) {
+        loaderType = decl.getType();
+      } else if (Node.isFunctionDeclaration(decl)) {
+        loaderType = decl.getType();
+      } else if (Node.isExportSpecifier(decl)) {
+        // Re-exported: `export { loader } from "..."`
+        loaderType = decl.getType();
+      }
+
+      if (!loaderType) continue;
+
+      const callSigs = loaderType.getCallSignatures();
+      if (callSigs.length === 0) continue;
+
+      const params = callSigs[0].getParameters();
+      if (params.length === 0) continue;
+
+      const paramType = params[0].getTypeAtLocation(sourceFile);
+      if (paramType.isAny() || paramType.getText() === "{}") continue;
+
+      return paramType;
+    }
+  }
+  return null;
+}
+
+/**
  * Resolve a module specifier to an absolute file path.
  */
 function resolveModulePath(
@@ -600,6 +640,16 @@ function resolvePropsViaReExport(
 
     try {
       const targetFile = getSourceFile(project, targetPath, sourceFileCache);
+
+      // When the target file exports a loader, the loader's first parameter
+      // type defines the CMS input schema. This takes priority over a named
+      // Props interface, which may be a sub-type used internally.
+      const loaderInputType = extractLoaderInputType(targetFile);
+      if (loaderInputType) {
+        const schema = typeToJsonSchema(loaderInputType, undefined, ctx);
+        propsSchemaCache.set(targetPath, schema);
+        return schema;
+      }
 
       const targetProps = targetFile.getInterface("Props");
       if (targetProps) {
@@ -842,9 +892,18 @@ function generateMeta(): MetaResponse {
 
       let propsSchema: any = null;
 
+      // Strategy 0: If the section file exports a loader (directly or via
+      // re-export), the loader's first parameter type defines the CMS input.
+      // This takes priority over a named Props interface which may be a
+      // sub-type used internally by the component.
+      const loaderInputType = extractLoaderInputType(sourceFile);
+      if (loaderInputType) {
+        propsSchema = typeToJsonSchema(loaderInputType, undefined, ctx);
+      }
+
       // Strategy 1: Local Props interface/type alias in the section file
       const propsInterface = sourceFile.getInterface("Props");
-      if (propsInterface) propsSchema = typeToJsonSchema(propsInterface.getType(), undefined, ctx);
+      if (!propsSchema && propsInterface) propsSchema = typeToJsonSchema(propsInterface.getType(), undefined, ctx);
 
       const propsTypeAlias = sourceFile.getTypeAlias("Props");
       if (!propsSchema && propsTypeAlias)
