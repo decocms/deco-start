@@ -1,7 +1,7 @@
 /**
  * Framework-level schema definitions and runtime meta composition.
  *
- * The schema generator (scripts/generate-schema.ts) only produces section
+ * The schema generator (scripts/generate-schema.ts) produces section and app
  * schemas from site TypeScript files. Framework-managed block types -- pages,
  * loaders, matchers, flags -- have their schemas defined here and injected
  * at runtime via composeMeta().
