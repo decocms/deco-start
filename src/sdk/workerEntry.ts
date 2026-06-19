@@ -1136,10 +1136,14 @@ export function createDecoWorkerEntry(
             // Run app middleware (injects app state into RequestContext.bag,
             // runs registered middleware like VTEX cookie forwarding).
             const appMw = getAppMiddleware();
-            if (appMw) {
-              return appMw(request, () => handleRequest(request, env, ctx));
-            }
-            return handleRequest(request, env, ctx);
+            const response = await (appMw
+              ? appMw(request, () => handleRequest(request, env, ctx))
+              : handleRequest(request, env, ctx));
+            // Stamp the response status on the root span so the span status
+            // promotion in otelHttpTracer/otel.ts fires correctly — without
+            // this, deco.http.request spans for 5xx responses are always Unset.
+            setSpanAttribute("http.status_code", response.status);
+            return response;
           },
           {
             "http.method": method,
@@ -1222,7 +1226,7 @@ export function createDecoWorkerEntry(
         /* swallow — observability must never fail the request */
       }
       try {
-        logRequest(request, finalResponse.status, durationMs, {
+        logRequest(request, finalResponse.status, {
           ...(identity.requestId ? { "request.id": identity.requestId } : {}),
           ...(identity.traceId ? { "trace.id": identity.traceId } : {}),
         });
