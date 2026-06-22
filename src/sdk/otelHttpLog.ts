@@ -89,7 +89,7 @@ export interface OtlpHttpLogOptions {
    * Test seam — override getActiveSpan. Production code uses the
    * framework's AsyncLocalStorage-backed getActiveSpan automatically.
    */
-  getActiveSpanFn?: () => { spanContext?: () => { traceFlags?: number } } | undefined | null;
+  getActiveSpanFn?: () => { spanContext?: () => { traceId?: string; spanId?: string; traceFlags?: number } } | undefined | null;
   /** Optional sink for transport / rate-limit / overflow errors. */
   onError?: (kind: "flush" | "overflow" | "rate-limit", err: unknown) => void;
 }
@@ -113,6 +113,9 @@ interface PendingRecord {
   severityText: string;
   body: string;
   attributes: Record<string, unknown>;
+  traceId: string;
+  spanId: string;
+  traceFlags: number;
 }
 
 // OTel SeverityNumber values, OTel spec. See
@@ -200,6 +203,7 @@ export function createOtlpHttpLogAdapter(options: OtlpHttpLogOptions): OtlpHttpL
         return;
       }
 
+      const spanCtx = getSpan()?.spanContext?.();
       const t = msToNs(now());
       buffer.push({
         timeUnixNano: t,
@@ -208,6 +212,9 @@ export function createOtlpHttpLogAdapter(options: OtlpHttpLogOptions): OtlpHttpL
         severityText: level,
         body: msg,
         attributes: attrs ? { ...attrs } : {},
+        traceId: spanCtx?.traceId ?? "",
+        spanId: spanCtx?.spanId ?? "",
+        traceFlags: spanCtx?.traceFlags ?? 0,
       });
     },
   };
@@ -375,6 +382,9 @@ function serializeOtlp(records: PendingRecord[], opts: SerializeOpts): { resourc
     attributes: Object.entries(r.attributes)
       .filter(([_, v]) => v !== undefined && v !== null)
       .map(([k, v]) => ({ key: k, value: attrToOtlpValue(v) })),
+    ...(r.traceId ? { traceId: r.traceId } : {}),
+    ...(r.spanId  ? { spanId:  r.spanId  } : {}),
+    ...(r.traceFlags ? { flags: r.traceFlags } : {}),
   }));
 
   const resourceAttrs = Object.entries(opts.resourceAttributes)
