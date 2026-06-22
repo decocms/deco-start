@@ -12,7 +12,7 @@
  *    `/v1/logs` — when `env.DECO_OTEL_LOGS_ENDPOINT` is set. Carries
  *    `logger.error(...)` calls at 100% capture (rate-limited per
  *    isolate) so head-sampled CF Destinations don't drop them.
- *    See `otelHttpErrorLog.ts` for the rate limiter + flush model.
+ *    See `otelHttpLog.ts` for the rate limiter + flush model.
  *  - Bridges framework-internal `withTracing()` calls onto the global
  *    `@opentelemetry/api` tracer, stamping `deco.*` attributes on every span
  *    so they survive Cloudflare's platform-managed trace export
@@ -86,7 +86,7 @@ import { configureLogger, defaultLoggerAdapter, logger, setLoggerAttributeFloor,
 import { METRIC_METADATA } from "../middleware/observability";
 import { configureMeter, configureTracer, getActiveSpan } from "./observability";
 import { createAnalyticsEngineMeterAdapter } from "./otelAdapters";
-import { createOtlpHttpErrorLogAdapter, type OtlpHttpErrorLog } from "./otelHttpErrorLog";
+import { createOtlpHttpLogAdapter, type OtlpHttpLog } from "./otelHttpLog";
 import { createOtlpHttpMeterAdapter, type OtlpHttpMeter } from "./otelHttpMeter";
 import {
   createOtlpHttpTracerAdapter,
@@ -249,7 +249,7 @@ type OrigConsole = Pick<typeof console, "log" | "info" | "warn" | "error" | "deb
 interface BootState {
   booted: boolean;
   otlpMeter: OtlpHttpMeter | null;
-  otlpErrorLog: OtlpHttpErrorLog | null;
+  otlpLog: OtlpHttpLog | null;
   otlpTracer: OtlpHttpTracer | null;
   spanAttributeFloor: Record<string, string>;
   origConsole: OrigConsole | null;
@@ -263,7 +263,7 @@ function getBootState(): BootState {
     g[BOOT_STATE_KEY] = {
       booted: false,
       otlpMeter: null,
-      otlpErrorLog: null,
+      otlpLog: null,
       otlpTracer: null,
       spanAttributeFloor: {},
       origConsole: null,
@@ -356,9 +356,9 @@ export function instrumentWorker(
             /* ctx.waitUntil throwing is benign — never block the response */
           }
         }
-        if (state.otlpErrorLog) {
+        if (state.otlpLog) {
           try {
-            ctx.waitUntil(state.otlpErrorLog.flush());
+            ctx.waitUntil(state.otlpLog.flush());
           } catch {
             /* swallow */
           }
@@ -605,11 +605,11 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
   //    Workers Logs captures this and CF Destinations forwards a
   //    `logs.head_sampling_rate` fraction to `deco-otel-ingest/v1/logs`.
   //    Carries debug / info / warn / error.
-  //  - `otlpErrorLog.adapter`: direct POST to `/v1/logs` for level=error
+  //  - `otlpLog.adapter`: direct POST to `/v1/logs` for level=error
   //    only, rate-limited (default 100/min, burst 20), buffered, flushed
   //    via `ctx.waitUntil` at request end. Guarantees ≥99% error capture
   //    regardless of the CF Destinations sampling rate. See
-  //    `otelHttpErrorLog.ts` for the aggregation + rate-limit details.
+  //    `otelHttpLog.ts` for the aggregation + rate-limit details.
   //
   // The two paths land in the SAME `default.otel_logs` table, so the
   // ingestor's existing PII redaction applies uniformly and dashboards
@@ -635,7 +635,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
       ? (otlpLogsMinLevelFromEnv as LogLevel)
       : opts.otlpLogsMinLevel ?? "warn";
   if (otlpLogsEnabled) {
-    state.otlpErrorLog = createOtlpHttpErrorLogAdapter({
+    state.otlpLog = createOtlpHttpLogAdapter({
       endpoint: otlpLogsEndpoint,
       resourceAttributes: floor,
       scopeVersion: decoRuntimeVersion,
@@ -660,7 +660,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
       },
     });
   } else {
-    state.otlpErrorLog = null;
+    state.otlpLog = null;
   }
 
   if (otlpLogsEnabled) {
@@ -671,7 +671,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
     // framework logs (which would make them visible to the tail worker a
     // second time — the tail worker only needs to see what the worker
     // itself cannot capture: exceededCpu / exceededMemory / isolate crashes).
-    configureLogger(createCompositeLogger([state.otlpErrorLog!.adapter]));
+    configureLogger(createCompositeLogger([state.otlpLog!.adapter]));
   } else {
     // No OTLP endpoint — dev mode. Keep writing to console so wrangler dev /
     // wrangler tail show output normally. No monkey-patch applied.
@@ -823,7 +823,7 @@ export function _resetBootStateForTests(): void {
   state.booted = false;
   state.spanAttributeFloor = {};
   state.otlpMeter = null;
-  state.otlpErrorLog = null;
+  state.otlpLog = null;
   state.otlpTracer = null;
   if (state.origConsole) {
     console.log   = state.origConsole.log;

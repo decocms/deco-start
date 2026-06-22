@@ -596,7 +596,7 @@ export function logRequest(
   const url = new URL(request.url);
   // Route through the framework logger so the access log fans out to every
   // configured adapter — local stdout via `defaultLoggerAdapter`, OTLP direct-
-  // POST via `otlpErrorLog.adapter` when configured (subject to its
+  // POST via `otlpLog.adapter` when configured (subject to its
   // `DECO_OTEL_LOGS_MIN_LEVEL` threshold). 5xx upgrades to `error`; 4xx and
   // 2xx land on `info`. `request.id` and `trace_id` are stamped by the
   // logger floor automatically (no need to attach manually here).

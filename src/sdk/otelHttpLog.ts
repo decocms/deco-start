@@ -45,7 +45,7 @@ import type { LoggerAdapter, LogLevel } from "./logger";
 // Types
 // ---------------------------------------------------------------------------
 
-export interface OtlpHttpErrorLogOptions {
+export interface OtlpHttpLogOptions {
   /** Full OTLP/HTTP JSON logs endpoint, e.g. `https://.../v1/logs`. */
   endpoint: string;
   /** Resource attributes stamped on every payload (service.name etc.). */
@@ -86,7 +86,7 @@ export interface OtlpHttpErrorLogOptions {
   onError?: (kind: "flush" | "overflow" | "rate-limit", err: unknown) => void;
 }
 
-export interface OtlpHttpErrorLog {
+export interface OtlpHttpLog {
   adapter: LoggerAdapter;
   /** Force a flush, subject to the per-isolate cooldown. */
   flush(): Promise<void>;
@@ -120,7 +120,7 @@ const SEVERITY_NUMBER: Record<LogLevel, number> = {
 // Factory
 // ---------------------------------------------------------------------------
 
-export function createOtlpHttpErrorLogAdapter(options: OtlpHttpErrorLogOptions): OtlpHttpErrorLog {
+export function createOtlpHttpLogAdapter(options: OtlpHttpLogOptions): OtlpHttpLog {
   const endpoint = options.endpoint;
   const resourceAttributes = options.resourceAttributes;
   const scopeName = options.scopeName ?? "@decocms/start";

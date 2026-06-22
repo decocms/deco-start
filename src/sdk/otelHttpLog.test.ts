@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createOtlpHttpErrorLogAdapter } from "./otelHttpErrorLog";
+import { createOtlpHttpLogAdapter } from "./otelHttpLog";
 
 interface OtlpLogsPayload {
   resourceLogs: Array<{
@@ -39,7 +39,7 @@ function buildAdapter(
     onError?: (kind: "flush" | "overflow" | "rate-limit", err: unknown) => void;
   } = {},
 ) {
-  return createOtlpHttpErrorLogAdapter({
+  return createOtlpHttpLogAdapter({
     endpoint: "https://ingest.test/v1/logs",
     resourceAttributes: {
       "service.name": "smoke-site",
@@ -56,7 +56,7 @@ function buildAdapter(
   });
 }
 
-describe("createOtlpHttpErrorLogAdapter — level filter + OTLP shape", () => {
+describe("createOtlpHttpLogAdapter — level filter + OTLP shape", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-18T16:00:00.000Z"));
@@ -136,7 +136,7 @@ describe("createOtlpHttpErrorLogAdapter — level filter + OTLP shape", () => {
   });
 });
 
-describe("createOtlpHttpErrorLogAdapter — rate limiting + overflow", () => {
+describe("createOtlpHttpLogAdapter — rate limiting + overflow", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-18T16:00:00.000Z"));
@@ -194,7 +194,7 @@ describe("createOtlpHttpErrorLogAdapter — rate limiting + overflow", () => {
   });
 });
 
-describe("createOtlpHttpErrorLogAdapter — flush semantics", () => {
+describe("createOtlpHttpLogAdapter — flush semantics", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("flush drains the buffer and resets length to 0 on success", async () => {

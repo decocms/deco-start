@@ -1,16 +1,16 @@
 /**
  * One-shot smoke: emit an error log record through
- * `createOtlpHttpErrorLogAdapter` and POST it to the deployed
+ * `createOtlpHttpLogAdapter` and POST it to the deployed
  * `deco-otel-ingest` `/v1/logs`. Verifies the wire format end-to-end.
  *
  * Run with: `npx tsx scripts/smoke-otlp-errorlog.ts`
  * Expected output: `{"inserted":1}` echoed by the ingestor.
  */
 
-import { createOtlpHttpErrorLogAdapter } from "../src/sdk/otelHttpErrorLog";
+import { createOtlpHttpLogAdapter } from "../src/sdk/otelHttpLog";
 
 async function main() {
-  const sink = createOtlpHttpErrorLogAdapter({
+  const sink = createOtlpHttpLogAdapter({
     endpoint: "https://deco-otel-ingest.deco-cx.workers.dev/v1/logs",
     resourceAttributes: {
       "service.name": "smoke-otlp-errorlog",
@@ -27,7 +27,7 @@ async function main() {
     },
   });
 
-  sink.adapter.log("error", "smoke error from otelHttpErrorLog exporter", {
+  sink.adapter.log("error", "smoke error from otelHttpLog exporter", {
     stage: "smoke",
     reason: "wire-format-validation",
     durationMs: 27,
