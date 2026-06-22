@@ -46,7 +46,7 @@ import {
   setSpanAttribute,
   withTracing,
 } from "./observability";
-import { _setRequestTraceContext, instrumentWorker, type OtelOptions } from "./otel";
+import { _setDebugSampled, _setRequestTraceContext, instrumentWorker, type OtelOptions } from "./otel";
 import { setRuntimeEnv } from "./otelAdapters";
 import { parseTraceparent } from "./otelHttpTracer";
 import { RequestContext } from "./requestContext";
@@ -1109,6 +1109,11 @@ export function createDecoWorkerEntry(
         const incomingTraceparent = request.headers.get("traceparent");
         const remoteTrace = parseTraceparent(incomingTraceparent);
         if (remoteTrace) _setRequestTraceContext(remoteTrace);
+
+        // Debug sampling: ?__d=<any> forces this request to be fully sampled
+        // regardless of headSamplingRate. Lets operators trace a specific
+        // production request without changing global sampling rates.
+        if (new URL(request.url).searchParams.has("__d")) _setDebugSampled();
 
         // Wrap inner handler in a single root span carrying our normalized
         // path/method attributes. The framework span flows BOTH ways:

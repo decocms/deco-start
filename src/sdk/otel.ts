@@ -280,9 +280,14 @@ function getBootState(): BootState {
  * concurrent requests in the same isolate don't trample each other.
  */
 const TRACE_CTX_BAG_KEY = "deco.observability.traceContext.v1";
+const DEBUG_SAMPLED_BAG_KEY = "deco.observability.debugSampled.v1";
 
 function getRequestTraceContext(): TraceContext | null {
   return RequestContext.getBag<TraceContext>(TRACE_CTX_BAG_KEY) ?? null;
+}
+
+function getDebugSampled(): boolean {
+  return RequestContext.getBag<boolean>(DEBUG_SAMPLED_BAG_KEY) ?? false;
 }
 
 /**
@@ -293,6 +298,16 @@ function getRequestTraceContext(): TraceContext | null {
  */
 export function _setRequestTraceContext(ctx: TraceContext | null): void {
   if (ctx) RequestContext.setBag(TRACE_CTX_BAG_KEY, ctx);
+}
+
+/**
+ * Called by `workerEntry.ts` when the inbound URL contains `?__d=<any>`.
+ * Forces trace sampling for the current request regardless of `headSamplingRate`.
+ * Useful for debugging individual requests in production without changing
+ * the global sampling rate.
+ */
+export function _setDebugSampled(): void {
+  RequestContext.setBag(DEBUG_SAMPLED_BAG_KEY, true);
 }
 
 /**
@@ -764,6 +779,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
       fetchImpl: opts.otlpTracesFetchImpl,
       getActiveSpanForParent: () => getActiveSpan(),
       getRequestTraceContext,
+      getForceSampled: getDebugSampled,
       onError: (kind, err) => {
         try {
           warnDirect(

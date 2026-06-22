@@ -63,10 +63,12 @@ export interface OtlpHttpLogOptions {
   flushTimeoutMs?: number;
   /**
    * Token-bucket parameters. The bucket holds up to `burstCapacity`
-   * tokens and refills at `refillPerMinute` per minute. Each error
-   * consumed costs one token. When the bucket is empty, errors are
-   * dropped (with `onError("rate-limit", ...)`) until refill resumes.
-   * Defaults: 20 burst, 100/min.
+   * tokens and refills at `refillPerMinute` per minute. Each log record
+   * costs one token. When the bucket is empty, records are dropped (with
+   * `onError("rate-limit", ...)`) until refill resumes.
+   * Defaults: 500 burst, 1000/min — sized for console monkey-patch, which
+   * routes ALL console.* (including third-party libs at boot) through this
+   * adapter. The old 20/100 defaults were sized for error-only traffic.
    */
   rateLimitBurstCapacity?: number;
   rateLimitRefillPerMinute?: number;
@@ -134,8 +136,8 @@ export function createOtlpHttpLogAdapter(options: OtlpHttpLogOptions): OtlpHttpL
   const maxBuffer = options.maxBufferRecords ?? 500;
   const minFlushIntervalMs = options.minFlushIntervalMs ?? 5000;
   const flushTimeoutMs = options.flushTimeoutMs ?? 5000;
-  const burstCapacity = options.rateLimitBurstCapacity ?? 20;
-  const refillPerMinute = options.rateLimitRefillPerMinute ?? 100;
+  const burstCapacity = options.rateLimitBurstCapacity ?? 500;
+  const refillPerMinute = options.rateLimitRefillPerMinute ?? 1000;
   const minSeverity = SEVERITY_NUMBER[options.minLevel ?? "warn"];
   const fetchImpl = options.fetchImpl ?? fetch;
   const now = options.nowMs ?? (() => Date.now());

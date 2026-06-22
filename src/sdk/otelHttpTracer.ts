@@ -210,6 +210,13 @@ export interface OtlpHttpTracerOptions {
    * parents and the `sampled` flag.
    */
   getRequestTraceContext?: () => TraceContext | null;
+  /**
+   * When this returns `true`, the sampling decision is forced to sampled
+   * regardless of `headSamplingRate` or parent context. Used to implement
+   * debug sampling via the `?__d=` query parameter — lets an operator force
+   * a full trace on a specific production request without changing global rates.
+   */
+  getForceSampled?: () => boolean;
 }
 
 export interface OtlpHttpTracer extends TracerAdapter {
@@ -237,6 +244,7 @@ export function createOtlpHttpTracerAdapter(options: OtlpHttpTracerOptions): Otl
   const onError = options.onError;
   const getActiveSpanForParent = options.getActiveSpanForParent;
   const getRequestTraceContext = options.getRequestTraceContext;
+  const getForceSampled = options.getForceSampled;
 
   // Buffer of completed spans waiting to ship. Sampling decision is taken
   // at span-end (not span-start) so attribute mutations during the span
@@ -265,16 +273,19 @@ export function createOtlpHttpTracerAdapter(options: OtlpHttpTracerOptions): Otl
     // use it for trace-based log sampling.
     //
     // Priority:
-    //  1. Remote parent sampled=true  → always sample (join external traces)
-    //  2. Remote parent sampled=false → don't sample (honor external decision)
-    //  3. In-process parent → inherit its traceFlags (consistent per-trace)
-    //  4. Root span, no parent → FNV-1a hash of traceId vs headSamplingRate
+    //  1. ?__d= debug param present → always sample (operator override)
+    //  2. Remote parent sampled=true  → always sample (join external traces)
+    //  3. Remote parent sampled=false → don't sample (honor external decision)
+    //  4. In-process parent → inherit its traceFlags (consistent per-trace)
+    //  5. Root span, no parent → FNV-1a hash of traceId vs headSamplingRate
     const sampled: boolean =
-      remoteCtx !== null
-        ? remoteCtx.sampled
-        : parentCtx != null
-          ? (parentCtx.traceFlags & 0x01) === 0x01
-          : shouldSampleTrace(traceId, headSamplingRate);
+      (getForceSampled?.() === true)
+        ? true
+        : remoteCtx !== null
+          ? remoteCtx.sampled
+          : parentCtx != null
+            ? (parentCtx.traceFlags & 0x01) === 0x01
+            : shouldSampleTrace(traceId, headSamplingRate);
     const traceFlags = sampled ? 0x01 : 0x00;
 
     const spanId = newSpanId();
