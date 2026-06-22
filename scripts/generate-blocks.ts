@@ -31,6 +31,7 @@ import {
   type Candidate,
   decodeBlockNameWithPasses,
   mergeCandidates,
+  singleDecodeBlockName,
 } from "./lib/blocks-dedupe";
 
 const TS_STUB = [
@@ -122,9 +123,13 @@ export async function generateBlocks(
     console.warn("    stale file(s) listed under 'ignore' to silence this warning.");
   }
 
+  // Use single-decoded stem of the winning file as the decofile key.
+  // This matches the Deno runtime's `parseBlockId` (one decodeURIComponent)
+  // so that studio's `encodeURIComponent(blockKey)` round-trips back to the
+  // exact filename on disk.
   const blocks: Record<string, unknown> = {};
-  for (const [name, c] of Object.entries(winners)) {
-    blocks[name] = c.parsed;
+  for (const [_name, c] of Object.entries(winners)) {
+    blocks[singleDecodeBlockName(c.file)] = c.parsed;
   }
 
   fs.mkdirSync(path.dirname(outFile), { recursive: true });

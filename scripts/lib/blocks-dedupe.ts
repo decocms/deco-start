@@ -60,6 +60,20 @@ export function decodeBlockName(filename: string): string {
 }
 
 /**
+ * Decode the filename stem exactly once — matches the Deno runtime's
+ * `parseBlockId`. Use this for the decofile key so that the CMS editor's
+ * `encodeURIComponent(blockKey)` round-trips back to the original filename.
+ */
+export function singleDecodeBlockName(filename: string): string {
+  const stem = filename.replace(/\.json$/, "");
+  try {
+    return decodeURIComponent(stem);
+  } catch {
+    return stem;
+  }
+}
+
+/**
  * Tie-break two candidates that decode to the same key. Priority:
  *   1. Block has a non-null `path`     — beats zombie/orphan entries.
  *   2. More decode passes              — bot's "encode raw prod key"
