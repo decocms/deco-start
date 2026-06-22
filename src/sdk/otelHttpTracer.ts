@@ -249,16 +249,6 @@ export function createOtlpHttpTracerAdapter(options: OtlpHttpTracerOptions): Otl
     return spans.length;
   }
 
-  /**
-   * Decide whether to export a finished span. Honors:
-   *  1. Remote parent's `sampled` flag (always wins — joins external traces).
-   *  2. Trace-ID hash vs `headSamplingRate` (consistent per trace).
-   */
-  function shouldExportSpan(traceId: string, remoteSampled: boolean | null): boolean {
-    if (remoteSampled === true) return true;
-    return shouldSampleTrace(traceId, headSamplingRate);
-  }
-
   function startSpan(name: string, attributes?: Labels): Span {
     const parent = getActiveSpanForParent();
     const parentCtx = parent?.spanContext?.();
@@ -268,11 +258,24 @@ export function createOtlpHttpTracerAdapter(options: OtlpHttpTracerOptions): Otl
     const remoteCtx = parentCtx ? null : (getRequestTraceContext?.() ?? null);
     const traceId = parentCtx?.traceId ?? remoteCtx?.traceId ?? newTraceId();
     const parentSpanId = parentCtx?.spanId ?? remoteCtx?.parentSpanId ?? "";
-    // traceFlags propagated unchanged — if the inbound traceparent said
-    // sampled, downstream services that join via our `traceparent` header
-    // (see `injectTraceContext`) see the same flag.
-    const traceFlags = remoteCtx?.sampled ? 0x01 : (parentCtx?.traceFlags ?? 0x00);
-    const remoteSampled = remoteCtx?.sampled ?? null;
+
+    // Sampling decision at startSpan() — OTel-spec-compliant. Setting
+    // traceFlags here (not at end()) means spanContext().traceFlags is
+    // correct during the entire span lifetime, which lets the log adapter
+    // use it for trace-based log sampling.
+    //
+    // Priority:
+    //  1. Remote parent sampled=true  → always sample (join external traces)
+    //  2. Remote parent sampled=false → don't sample (honor external decision)
+    //  3. In-process parent → inherit its traceFlags (consistent per-trace)
+    //  4. Root span, no parent → FNV-1a hash of traceId vs headSamplingRate
+    const sampled: boolean =
+      remoteCtx !== null
+        ? remoteCtx.sampled
+        : parentCtx != null
+          ? (parentCtx.traceFlags & 0x01) === 0x01
+          : shouldSampleTrace(traceId, headSamplingRate);
+    const traceFlags = sampled ? 0x01 : 0x00;
 
     const spanId = newSpanId();
     const startTimeNs = msToNs(now());
@@ -296,10 +299,10 @@ export function createOtlpHttpTracerAdapter(options: OtlpHttpTracerOptions): Otl
         ended = true;
         record.endTimeUnixNano = msToNs(now());
 
-        // Sample at the END so attribute mutations during the span are
-        // captured in the kept record. The decision is consistent across
-        // every span in the trace because it hashes `traceId`.
-        if (!shouldExportSpan(traceId, remoteSampled)) return;
+        // Sampling decision was already made at startSpan() — traceFlags
+        // carries the result. Child spans inherit it from their parent so
+        // the entire trace is kept or dropped consistently.
+        if (!sampled) return;
 
         if (spans.length >= maxBuffer) {
           onError?.("overflow", new Error(`trace buffer at cap (${maxBuffer}) — dropping span`));
