@@ -422,45 +422,6 @@ export type AppContext = {
   device: "mobile" | "desktop" | "tablet";
   platform: Platform;${secretTypes ? `\n${secretTypes}` : ""}${ctx.platform === "vtex" ? `\n  account: string;` : ""}
 };
-
-/** CMS-editable site configuration (rendered in Studio > Content > Site). */
-export interface Props {
-  /** @title SEO */
-  seo?: {
-    /** @title Title */
-    title?: string;
-    description?: string;
-    /** @format image-uri */
-    favicon?: string;
-    /** @format image-uri */
-    image?: string;
-    titleTemplate?: string;
-    noIndexing?: boolean;
-  };
-  /**
-   * @title GitHub
-   * @description GitHub repository settings — used for team access management.
-   */
-  github?: {
-    /** @title Organization / owner */
-    owner?: string;
-    /** @title Repository */
-    repo?: string;
-    /** @title Default branch */
-    branch?: string;
-    /** @title GitHub team slug */
-    team?: string;
-  };
-  /**
-   * @title Active Commerce Platform
-   * @default ${ctx.platform}
-   */
-  platform?: Platform;
-}
-
-export default function Site(_props: Props) {
-  return { state: _props };
-}
 `;
 }
 
