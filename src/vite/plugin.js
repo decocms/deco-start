@@ -32,7 +32,7 @@
  * ```
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 /**
@@ -299,33 +299,28 @@ export function decoVitePlugin() {
       server.watcher.on("change", handleBlocksDirEvent);
       server.watcher.on("unlink", handleBlocksDirEvent);
 
-      // Cold-start bootstrap: regenerate once if the artifact is missing or
-      // older than the newest source file. Skips work on a clean build where
-      // `npm run build` already produced a current artifact.
-      try {
-        const needsBootstrap = (() => {
-          if (!existsSync(jsonFile)) return existsSync(blocksDir);
-          if (!existsSync(blocksDir)) return false;
-          const artifactMtime = statSync(jsonFile).mtimeMs;
-          for (const entry of readdirSync(blocksDir)) {
-            if (!entry.endsWith(".json")) continue;
-            try {
-              if (statSync(path.join(blocksDir, entry)).mtimeMs > artifactMtime) {
-                return true;
-              }
-            } catch {
-              // skip unreadable entries
+      // Cold-start bootstrap: always regenerate `blocks.gen.json` from source
+      // on dev startup. We deliberately do NOT gate this on mtime. A fresh git
+      // checkout/clone (e.g. Studio's preview sandbox) rewrites every file's
+      // mtime to the checkout time, so the committed artifact can be CONTENT-
+      // stale yet mtime-"fresh" — the old `source.mtime > artifact.mtime` gate
+      // then skipped regen and served the stale snapshot (the double-render
+      // bug in branch previews). Regen is cheap (tens of ms for a typical
+      // decofile) and fire-and-forget, so it never blocks startup. No POST
+      // /.decofile here — the SSR runtime isn't listening yet, and `setup.ts`
+      // reads the freshly-written .json via the load() hook on the first
+      // request (the watch-driven path above handles live edits, with reload).
+      if (existsSync(blocksDir)) {
+        loadGenerator()
+          .then((fn) => fn({ blocksDir, outFile, silent: true }))
+          .then((result) => {
+            if (!result.empty) {
+              console.log(`[deco] bootstrapped ${result.count} blocks from .deco/blocks`);
             }
-          }
-          return false;
-        })();
-        if (needsBootstrap) {
-          // Fire and forget — the next request that touches blocks.gen.ts
-          // will see the fresh artifact thanks to the change listener above.
-          runRegen();
-        }
-      } catch (err) {
-        console.warn("[deco] blocks bootstrap check failed:", err?.message ?? err);
+          })
+          .catch((err) => {
+            console.warn("[deco] blocks bootstrap failed:", err?.message ?? err);
+          });
       }
 
       // Tunnel + daemon: connect local dev to admin.deco.cx
