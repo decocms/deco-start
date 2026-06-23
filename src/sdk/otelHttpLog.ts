@@ -184,15 +184,10 @@ export function createOtlpHttpLogAdapter(options: OtlpHttpLogOptions): OtlpHttpL
       // Filter by severity threshold. Levels below minLevel are dropped.
       if (SEVERITY_NUMBER[level] < minSeverity) return;
 
-      // Trace-based sampling for info/debug: only forward when the current
-      // request's trace is sampled (W3C traceFlags bit 0x01). This keeps
-      // log-trace correlation intact — if you have the trace you have the
-      // logs; if the trace was dropped, the info/debug logs have no context
-      // and are dropped too. Errors and warnings always pass regardless.
-      if (level === "info" || level === "debug") {
-        const flags = getSpan()?.spanContext?.()?.traceFlags;
-        if (!((flags ?? 0) & 0x01)) return;
-      }
+      // No SDK-level sampling for info/debug. Volume is controlled by
+      // minLevel (severity threshold) here, and by the probabilistic
+      // sampler in the otel-ingest collector — keeping log and trace
+      // sampling pipelines fully independent per OTel spec.
 
       if (!tryConsumeToken()) {
         onError?.(
