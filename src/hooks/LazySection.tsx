@@ -101,9 +101,11 @@ export function LazySection({
  * Used by DecoPageRenderer to auto-wrap distant sections.
  *
  * @param index - Zero-based section index on the page
- * @param foldThreshold - Sections at or above this index render eagerly
- * @default foldThreshold = 3
+ * @param foldThreshold - Sections at or above this index are below the fold.
+ *   Defaults to `Infinity` (nothing below the fold), matching the framework
+ *   default where the admin ⚡ toggle — not position — drives deferral.
+ * @default foldThreshold = Infinity
  */
-export function isBelowFold(index: number, foldThreshold = 3): boolean {
+export function isBelowFold(index: number, foldThreshold = Infinity): boolean {
   return index >= foldThreshold;
 }
