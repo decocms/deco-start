@@ -251,6 +251,14 @@ function extractLoaderOutputTypeName(sourceFile: SourceFile): string | null {
     const nonNull = ret.getUnionTypes().filter((t) => !t.isNull() && !t.isUndefined());
     if (nonNull.length === 1) ret = nonNull[0];
   }
+  // Unwrap array element type — Product[] → "Product[]" (keyed as array)
+  if (ret.isArray()) {
+    const elType = ret.getArrayElementType();
+    if (elType) {
+      const elName = elType.getSymbol()?.getName() ?? elType.getAliasSymbol()?.getName() ?? null;
+      if (elName) return `${elName}[]`;
+    }
+  }
   return ret.getSymbol()?.getName() ?? ret.getAliasSymbol()?.getName() ?? null;
 }
 
@@ -415,9 +423,25 @@ function typeToJsonSchema(type: Type, visited = new Set<string>(), ctx?: Generat
         if (ctx?.outputTypeToLoaderKeys) {
           const typeSym = propType.getSymbol() ?? propType.getAliasSymbol();
           const outputTypeName = typeSym?.getName() ?? baseHint;
-          const matchingLoaders =
+          let matchingLoaders =
             ctx.outputTypeToLoaderKeys.get(outputTypeName) ??
             (outputTypeName !== baseHint ? ctx.outputTypeToLoaderKeys.get(baseHint) : undefined);
+          // If no match yet and the prop type is an array, try element type name + "[]"
+          if (!matchingLoaders?.length) {
+            let arrayElementType = propType.isArray() ? propType.getArrayElementType() : null;
+            if (!arrayElementType && propType.isUnion()) {
+              const nonNull = propType.getUnionTypes().filter((t) => !t.isNull() && !t.isUndefined());
+              if (nonNull.length === 1 && nonNull[0].isArray()) {
+                arrayElementType = nonNull[0].getArrayElementType();
+              }
+            }
+            if (arrayElementType) {
+              const elName = arrayElementType.getSymbol()?.getName() ?? arrayElementType.getAliasSymbol()?.getName();
+              if (elName) {
+                matchingLoaders = ctx.outputTypeToLoaderKeys.get(`${elName}[]`);
+              }
+            }
+          }
           if (matchingLoaders?.length) {
             const blockRefSchema: any = {
               anyOf: [
