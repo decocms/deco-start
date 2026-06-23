@@ -365,7 +365,10 @@ function typeToJsonSchema(type: Type, visited = new Set<string>(), ctx?: Generat
         if (name.startsWith("_") || name.startsWith("$") || name === "@type") continue;
         if (REACT_INTERNAL_PROPS.has(name)) continue;
 
-        const decl = prop.getValueDeclaration();
+        // getValueDeclaration() returns undefined for computed/mapped-type
+        // properties (e.g. `Omit<Props, "isMobile">`). Fall back to the first
+        // available declaration, or skip if none exists at all.
+        const decl = prop.getValueDeclaration() ?? prop.getDeclarations()[0];
         if (!decl) continue;
         const propType = prop.getTypeAtLocation(decl);
 
@@ -375,8 +378,8 @@ function typeToJsonSchema(type: Type, visited = new Set<string>(), ctx?: Generat
         // Get AST type-annotation text before resolving
         let typeHint = propType.getText();
         const typeNode =
-          decl.getChildrenOfKind(SyntaxKind.TypeReference)[0] ??
-          decl.getChildAtIndex(decl.getChildCount() - 1);
+          decl.getChildrenOfKind?.(SyntaxKind.TypeReference)?.[0] ??
+          decl.getChildAtIndex?.(decl.getChildCount?.() - 1);
         if (typeNode && Node.isTypeReference(typeNode)) {
           typeHint = typeNode.getText();
         } else if (Node.isPropertySignature(decl) || Node.isPropertyDeclaration(decl)) {
