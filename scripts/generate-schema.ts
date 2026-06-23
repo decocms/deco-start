@@ -755,7 +755,7 @@ function generateMeta(): MetaResponse {
   }
 
   for (const filePath of loaderFiles) {
-    const relativePath = path.relative(srcDir, filePath);
+    const relativePath = path.relative(srcDir, filePath).replaceAll("\\", "/");
     const loaderKey = `${SITE_NAMESPACE}/${relativePath}`;
 
     try {
@@ -884,7 +884,7 @@ function generateMeta(): MetaResponse {
   }
 
   for (const filePath of sectionFiles) {
-    const relativePath = path.relative(srcDir, filePath);
+    const relativePath = path.relative(srcDir, filePath).replaceAll("\\", "/");
     const blockKey = `${SITE_NAMESPACE}/${relativePath}`;
 
     try {
@@ -937,7 +937,7 @@ function generateMeta(): MetaResponse {
 
       const propCount = Object.keys(propsSchema.properties || {}).length;
 
-      const propsDefKey = toBase64(`file:///${filePath}`) + "@Props";
+      const propsDefKey = toBase64(`file:///${filePath.replaceAll("\\", "/")}`) + "@Props";
       definitions[propsDefKey] = propsSchema;
 
       const sectionDefKey = toBase64(blockKey);
@@ -980,7 +980,7 @@ function generateMeta(): MetaResponse {
     }
 
     for (const filePath of appFiles) {
-      const relativePath = path.relative(srcDir, filePath);
+      const relativePath = path.relative(srcDir, filePath).replaceAll("\\", "/");
       const blockKey = `${SITE_NAMESPACE}/${relativePath}`;
 
       if (
@@ -1028,7 +1028,7 @@ function generateMeta(): MetaResponse {
 
         const propCount = Object.keys(propsSchema.properties || {}).length;
 
-        const propsDefKey = toBase64(`file:///${filePath}`) + "@Props";
+        const propsDefKey = toBase64(`file:///${filePath.replaceAll("\\", "/")}`) + "@Props";
         definitions[propsDefKey] = propsSchema;
 
         const appDefKey = toBase64(blockKey);
