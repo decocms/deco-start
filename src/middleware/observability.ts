@@ -594,6 +594,10 @@ export function logRequest(
   extra?: Record<string, unknown>,
 ) {
   const url = new URL(request.url);
+  // Truncate long paths (e.g. /_serverFn/ base64 payloads) so log messages
+  // remain readable. Full path is preserved in the `path` attribute.
+  const rawPath = url.pathname;
+  const displayPath = rawPath.length > 80 ? `${rawPath.slice(0, 80)}…` : rawPath;
   // Route through the framework logger so the access log fans out to every
   // configured adapter — local stdout via `defaultLoggerAdapter`, OTLP direct-
   // POST via `otlpLog.adapter` when configured (subject to its
@@ -601,9 +605,9 @@ export function logRequest(
   // 2xx land on `info`. `request.id` and `trace_id` are stamped by the
   // logger floor automatically (no need to attach manually here).
   const level = status >= 500 ? "error" : "info";
-  logger[level]("request handled", {
+  logger[level](`${request.method} ${displayPath} ${status}`, {
     method: request.method,
-    path: url.pathname,
+    path: rawPath,
     status,
     duration_ms: Math.round(durationMs),
     ...extra,

@@ -1165,10 +1165,25 @@ export function createDecoWorkerEntry(
             // Run app middleware (injects app state into RequestContext.bag,
             // runs registered middleware like VTEX cookie forwarding).
             const appMw = getAppMiddleware();
-            if (appMw) {
-              return appMw(request, () => handleRequest(request, env, ctx));
+            const innerResponse = appMw
+              ? await appMw(request, () => handleRequest(request, env, ctx))
+              : await handleRequest(request, env, ctx);
+
+            // logRequest must run inside the span so getSpan() returns the
+            // active root span and the trace-sampling gate in otelHttpLog.ts
+            // (traceFlags & 0x01) correctly reflects whether this trace was
+            // sampled. Outside the span getSpan() is null → gate always drops
+            // INFO logs even at 100% sampling rate.
+            try {
+              logRequest(request, innerResponse.status, performance.now() - startedAt, {
+                ...(identity.requestId ? { "request.id": identity.requestId } : {}),
+                ...(identity.traceId ? { "trace.id": identity.traceId } : {}),
+              });
+            } catch {
+              /* swallow — observability must never fail the request */
             }
-            return handleRequest(request, env, ctx);
+
+            return innerResponse;
           },
           {
             "http.method": method,
@@ -1250,15 +1265,6 @@ export function createDecoWorkerEntry(
       } catch {
         /* swallow — observability must never fail the request */
       }
-      try {
-        logRequest(request, finalResponse.status, durationMs, {
-          ...(identity.requestId ? { "request.id": identity.requestId } : {}),
-          ...(identity.traceId ? { "trace.id": identity.traceId } : {}),
-        });
-      } catch {
-        /* swallow */
-      }
-
       return finalResponse;
     },
   };
