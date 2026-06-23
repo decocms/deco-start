@@ -21,14 +21,21 @@ vi.mock("./registry", () => ({
 
 import {
   clearCommerceLoaders,
+  DEFAULT_FOLD_THRESHOLD,
+  getAsyncRenderingConfig,
   registerCommerceLoader,
+  registerEagerSections,
+  registerNeverDeferSections,
   resolveDeferredSectionFull,
   resolveSectionsList,
   resolveValue,
+  setAsyncRenderingConfig,
+  shouldDeferSection,
+  WELL_KNOWN_TYPES,
 } from "./resolve";
 import { runSingleSectionLoader } from "./sectionLoaders";
 import { normalizeUrlsInObject } from "../sdk/normalizeUrls";
-import type { DeferredSection } from "./resolve";
+import type { AsyncRenderingConfig, DeferredSection } from "./resolve";
 
 describe("resolveDeferredSectionFull", () => {
   it("resolves a deferred section and preserves index", async () => {
@@ -294,5 +301,92 @@ describe("commerce loader auto-injects URL search params as props", () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Async rendering: the admin (CMS Lazy ⚡ toggle) is the source of truth
+// ---------------------------------------------------------------------------
+//
+// Regression guard for issue #266: the framework must NOT defer a section by
+// position, and must NOT let code-level flags (`export const eager/neverDefer`)
+// override the editor's ⚡ choice. A section is deferred iff the editor wrapped
+// it in CMS Lazy/Deferred in the admin. The position threshold + code flags are
+// an explicit per-site opt-in that is OFF by default (foldThreshold = Infinity)
+// and never overrides the admin.
+
+describe("async rendering config defaults", () => {
+  beforeEach(() => {
+    // Reset the globalThis-backed config so each assertion is order-independent.
+    (globalThis as any).__deco.asyncConfig = null;
+  });
+
+  it("DEFAULT_FOLD_THRESHOLD is Infinity (position-based deferral off)", () => {
+    expect(DEFAULT_FOLD_THRESHOLD).toBe(Infinity);
+  });
+
+  it("setAsyncRenderingConfig() defaults to foldThreshold=Infinity, respectCmsLazy=true", () => {
+    setAsyncRenderingConfig();
+    const cfg = getAsyncRenderingConfig();
+    expect(cfg).not.toBeNull();
+    expect(cfg!.foldThreshold).toBe(Infinity);
+    expect(cfg!.respectCmsLazy).toBe(true);
+  });
+
+  it("preserves an explicit finite foldThreshold (opt-in)", () => {
+    setAsyncRenderingConfig({ foldThreshold: 3 });
+    expect(getAsyncRenderingConfig()!.foldThreshold).toBe(3);
+  });
+});
+
+describe("shouldDeferSection — admin is the source of truth", () => {
+  const mkCfg = (over: Partial<AsyncRenderingConfig> = {}): AsyncRenderingConfig => ({
+    respectCmsLazy: true,
+    foldThreshold: Infinity,
+    alwaysEager: new Set(),
+    ...over,
+  });
+
+  const lazyWrap = (inner: object) => ({
+    __resolveType: WELL_KNOWN_TYPES.LAZY,
+    section: inner,
+  });
+
+  it("defers a section the editor marked ⚡ (wrapped in CMS Lazy)", () => {
+    const section = lazyWrap({ __resolveType: "site/sections/Hero.tsx" });
+    expect(shouldDeferSection(section, 0, mkCfg(), false)).toBe(true);
+  });
+
+  it("renders a non-⚡ section eagerly regardless of position (default Infinity)", () => {
+    const section = { __resolveType: "site/sections/SeoText.tsx" };
+    // Position 5 used to auto-defer with the old foldThreshold=3 — now SSR.
+    expect(shouldDeferSection(section, 5, mkCfg(), false)).toBe(false);
+  });
+
+  it("admin ⚡ overrides `export const eager` (code flag ignored)", () => {
+    const key = "site/sections/EagerButLazy.tsx";
+    registerEagerSections([key]);
+    const section = lazyWrap({ __resolveType: key });
+    // Even with a finite threshold where the eager flag would otherwise apply,
+    // the editor's ⚡ wins → deferred.
+    expect(shouldDeferSection(section, 0, mkCfg({ foldThreshold: 3 }), false)).toBe(true);
+  });
+
+  it("admin ⚡ overrides `export const neverDefer` (code flag ignored)", () => {
+    const key = "site/sections/NeverDeferButLazy.tsx";
+    registerNeverDeferSections([key]);
+    const section = lazyWrap({ __resolveType: key });
+    expect(shouldDeferSection(section, 0, mkCfg(), false)).toBe(true);
+  });
+
+  it("bots always get SSR, even for ⚡ sections (SEO)", () => {
+    const section = lazyWrap({ __resolveType: "site/sections/Hero.tsx" });
+    expect(shouldDeferSection(section, 0, mkCfg(), true)).toBe(false);
+  });
+
+  it("opt-in finite foldThreshold defers UNMARKED sections by position", () => {
+    const section = { __resolveType: "site/sections/Shelf.tsx" };
+    expect(shouldDeferSection(section, 5, mkCfg({ foldThreshold: 3 }), false)).toBe(true);
+    expect(shouldDeferSection(section, 1, mkCfg({ foldThreshold: 3 }), false)).toBe(false);
   });
 });

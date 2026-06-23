@@ -8,6 +8,38 @@ merges to `main`; this file is the human-curated breaking-change ledger.
 For per-release auto-generated notes (every commit, every fix), see
 [GitHub Releases](https://github.com/decocms/deco-start/releases).
 
+## Unreleased — Admin async (⚡) toggle is the source of truth for deferral
+
+### Behavior change — position-based auto-deferral is off by default
+
+Fixes [#266](https://github.com/decocms/deco-start/issues/266). A section is now
+deferred (rendered client-side on scroll) **if and only if** the editor marked
+it async ⚡ in the admin (wrapped in `website/sections/Rendering/Lazy.tsx` /
+`Deferred.tsx`). The framework no longer overrides that decision:
+
+- **`DEFAULT_FOLD_THRESHOLD` changed from `3` to `Infinity`.** Sections are no
+  longer auto-deferred by their position on the page. A section the editor left
+  ⚡-off renders SSR regardless of its index — fixing SEO copy (e.g. PLP text
+  heroes) that was silently moved client-side.
+- **The admin ⚡ check now runs first in `shouldDeferSection`,** so it overrides
+  the code-level `export const eager` / `neverDefer` / `alwaysEager` flags. A
+  section marked ⚡ is always deferred even if its code declares `eager`.
+- **`foldThreshold` and the code-level eager flags are now an explicit opt-in.**
+  They take effect only when a site sets a finite threshold and only for
+  sections the editor did *not* mark ⚡.
+- Bots/crawlers still always receive the full SSR page (SEO guarantee), now
+  including ⚡-marked sections.
+
+**Migration.** Sites that relied on the implicit `foldThreshold = 3` to keep
+HTML small (without marking sections ⚡) have two options:
+
+1. Mark heavy below-the-fold sections (shelves, etc.) async ⚡ in the admin —
+   the recommended path; the editor controls SSR vs deferred.
+2. Restore the old position-based behavior explicitly in `setup.ts`:
+   ```ts
+   setAsyncRenderingConfig({ foldThreshold: 3 });
+   ```
+
 ## 5.0.0 — Drop in-Worker OTLP, converge on Cloudflare-native observability
 
 ### Breaking — Observability transport rewritten

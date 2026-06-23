@@ -91,11 +91,11 @@ export function applySectionConventions(input: ApplySectionConventionsInput): vo
     registerNeverDeferSections(neverDeferSections);
   }
 
-  // Always initialize asyncConfig so the default foldThreshold takes effect
-  // even when no section declares `export const eager = true`. Without this,
-  // asyncConfig stays null and ALL sections render eagerly — serializing their
-  // full resolved props into the SSR hydration blob (measured: 8.6 MB HTML on
-  // a PLP with 40 products).
+  // Always initialize asyncConfig so CMS Lazy deferral (`respectCmsLazy`) is
+  // active — this is what makes the admin ⚡ toggle the source of truth. Without
+  // it, asyncConfig stays null, `useAsync` is false in resolveDecoPage, and
+  // even editor-marked ⚡ sections render eagerly. (The default foldThreshold is
+  // Infinity, so position-based deferral stays off unless a site opts in.)
   const existing: Partial<AsyncRenderingConfig> =
     getAsyncRenderingConfig() ?? {};
   setAsyncRenderingConfig({

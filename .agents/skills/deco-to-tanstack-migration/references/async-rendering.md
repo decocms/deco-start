@@ -64,7 +64,7 @@ The previous `foldThreshold` approach deferred sections by index position, ignor
 
 Now editors control deferral by wrapping sections in `Lazy.tsx` in the CMS admin, and the framework respects that.
 
-#### `isCmsLazyWrapped(section)` in `resolve.ts`
+#### `isCmsDeferralWrapped(section)` in `resolve.ts`
 
 Detects whether a section is wrapped in `website/sections/Rendering/Lazy.tsx`, either:
 - Directly: `section.__resolveType === "website/sections/Rendering/Lazy.tsx"`
@@ -72,17 +72,19 @@ Detects whether a section is wrapped in `website/sections/Rendering/Lazy.tsx`, e
 
 #### `shouldDeferSection(section, flatIndex, cfg, isBotReq)`
 
-Updated decision logic:
+Decision logic — the admin ⚡ (CMS Lazy/Deferred wrapper) is checked FIRST and
+overrides every code-level flag:
 
 ```
-1. Bot request? → EAGER (SEO safety)
+1. Bot request? → EAGER (SEO safety — full SSR even for ⚡ sections)
 2. No __resolveType? → EAGER (can't classify)
-3. Is multivariate flag? → EAGER (requires runtime evaluation)
-4. resolveFinalSectionKey() → walk block refs + Lazy wrappers to find final component
-5. In alwaysEager set? → EAGER
-6. isLayoutSection()? → EAGER
-7. respectCmsLazy && isCmsLazyWrapped(section)? → DEFER
-8. flatIndex >= foldThreshold? → DEFER (fallback, only if not wrapped)
+3. resolveFinalSectionKey() → walk block refs + Lazy wrappers + flags
+4. respectCmsLazy && isCmsDeferralWrapped(section)? → DEFER  ← source of truth
+── below: opt-in only; never overrides the admin; inert when foldThreshold = Infinity ──
+5. isLayoutSection()? → EAGER
+6. isNeverDeferSection()? → EAGER
+7. flatIndex < foldThreshold && (isEagerSection() || alwaysEager.has())? → EAGER
+8. flatIndex >= foldThreshold? → DEFER (off by default; Infinity)
 9. Otherwise → EAGER
 ```
 
@@ -220,10 +222,10 @@ interface DeferredSection {
 ### Edge Cases and Gotchas
 
 #### 1. CMS Lazy.tsx is the source of truth
-Editors wrap sections in `website/sections/Rendering/Lazy.tsx` in the CMS admin. The framework detects this via `isCmsLazyWrapped()` and defers those sections. Sections NOT wrapped are eager (with `foldThreshold: Infinity`).
+Editors wrap sections in `website/sections/Rendering/Lazy.tsx` in the CMS admin. The framework detects this via `isCmsDeferralWrapped()` and defers those sections. Sections NOT wrapped are eager (with `foldThreshold: Infinity`).
 
 #### 2. Block references to Lazy
-A section may reference a named block (e.g., `"Footer - 01"`) whose underlying definition is `Lazy.tsx`. `isCmsLazyWrapped` resolves one level of block reference to detect this.
+A section may reference a named block (e.g., `"Footer - 01"`) whose underlying definition is `Lazy.tsx`. `isCmsDeferralWrapped` resolves one level of block reference to detect this.
 
 #### 3. alwaysEager overrides Lazy wrapping
 If `Footer.tsx` is in `alwaysEager` but wrapped in Lazy in the CMS, it stays eager. This is intentional — layout sections must always be in the initial HTML.

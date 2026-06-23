@@ -110,9 +110,14 @@ export interface AsyncRenderingConfig {
    * Fold threshold: sections at or above this flat index are DEFERRED
    * (rendered as a skeleton and loaded on scroll), so their resolved props are
    * not serialized into the SSR hydration payload. Sections below it stay
-   * eager. Only applies to sections NOT wrapped in a CMS Lazy wrapper.
-   * Set to `Infinity` to disable threshold-based deferral entirely
-   * (rely only on CMS Lazy wrappers).
+   * eager. This is an explicit, position-based opt-in that applies ONLY to
+   * sections the editor did NOT mark async (⚡) in the admin — it never
+   * overrides a CMS Lazy/Deferred wrapper.
+   *
+   * Defaults to {@link DEFAULT_FOLD_THRESHOLD} (`Infinity`), which disables
+   * position-based deferral entirely so the admin ⚡ toggle is the sole source
+   * of truth. Set a finite value per-site to also defer unmarked sections by
+   * position.
    * @default {@link DEFAULT_FOLD_THRESHOLD}
    */
   foldThreshold: number;
@@ -121,15 +126,19 @@ export interface AsyncRenderingConfig {
 }
 
 /**
- * Default fold threshold applied when a site enables async rendering without
- * specifying `foldThreshold`. Sections at or above this flat index are
- * deferred (loaded on scroll), so their resolved props are NOT serialized into
- * the SSR hydration payload — keeping above-the-fold content eager for LCP/SEO
- * while below-the-fold commerce shelves stop bloating the HTML. Override
- * per-site via `setAsyncRenderingConfig({ foldThreshold })`, or set `Infinity`
- * to defer only CMS Lazy-wrapped sections (the previous default).
+ * Default fold threshold. `Infinity` disables position-based deferral entirely:
+ * sections are deferred if and only if the editor marked them async (⚡) in the
+ * admin (wrapped in CMS `Lazy.tsx`/`Deferred.tsx`). The admin is the source of
+ * truth; a section's position on the page never drives the SSR-vs-deferred
+ * decision by default.
+ *
+ * Sites that want to additionally defer unmarked sections by position can opt
+ * in explicitly via `setAsyncRenderingConfig({ foldThreshold: N })` — keeping
+ * the first N sections eager (above-the-fold LCP/SEO) and deferring the rest to
+ * trim the SSR hydration payload. Even then, the threshold only affects
+ * sections NOT marked ⚡; it never overrides the editor's choice.
  */
-export const DEFAULT_FOLD_THRESHOLD = 3;
+export const DEFAULT_FOLD_THRESHOLD = Infinity;
 
 // Always read from globalThis so split-module copies see updates
 function getAsyncConfig(): AsyncRenderingConfig | null {
@@ -139,12 +148,14 @@ function getAsyncConfig(): AsyncRenderingConfig | null {
 /**
  * Enable async section rendering.
  *
- * Respects the CMS Lazy wrapper (`website/sections/Rendering/Lazy.tsx`) — any
- * section the editor marked as Lazy is deferred. In addition, sections at or
- * above `foldThreshold` (default {@link DEFAULT_FOLD_THRESHOLD}) are deferred so
- * their props are not serialized into the SSR hydration payload; sections below
- * the threshold stay eager (above-the-fold content for LCP/SEO). Pass
- * `foldThreshold: Infinity` to defer only Lazy-wrapped sections.
+ * The admin is the source of truth: any section the editor marked async ⚡
+ * (wrapped in `website/sections/Rendering/Lazy.tsx` or `Deferred.tsx`) is
+ * deferred and loaded on scroll; every other section is rendered eagerly (SSR),
+ * regardless of its position. `foldThreshold` defaults to
+ * {@link DEFAULT_FOLD_THRESHOLD} (`Infinity`), so position-based deferral is
+ * OFF by default. Pass a finite `foldThreshold: N` to additionally defer
+ * UNMARKED sections from index N onward (an opt-in optimization that never
+ * overrides the editor's ⚡ choice).
  *
  * When not called, all sections are resolved eagerly (backward compatible).
  */
@@ -1111,13 +1122,34 @@ function isCmsDeferralWrapped(section: unknown, matcherCtx?: MatcherContext): bo
   return false;
 }
 
-function shouldDeferSection(
+/**
+ * Decide whether a section is deferred (rendered client-side on scroll) or
+ * rendered eagerly (SSR).
+ *
+ * The admin is the source of truth: a section the editor marked async ⚡
+ * (wrapped in CMS `Lazy.tsx`/`Deferred.tsx`) is ALWAYS deferred, and a section
+ * the editor left unmarked is ALWAYS eager — independent of its position on the
+ * page and of any `export const eager`/`neverDefer`/`alwaysEager` flag in the
+ * section code. The admin ⚡ check runs first and overrides every code flag.
+ *
+ * The position threshold and code-level eager flags are an explicit per-site
+ * opt-in: they only take effect when a site sets a finite `foldThreshold`
+ * (default {@link DEFAULT_FOLD_THRESHOLD} = `Infinity`, i.e. disabled), and even
+ * then they can only force a NON-⚡ section eager — they never override the
+ * editor's ⚡ choice.
+ *
+ * Exported for unit testing.
+ */
+export function shouldDeferSection(
   section: unknown,
   flatIndex: number,
   cfg: AsyncRenderingConfig,
   isBotReq: boolean,
   matcherCtx?: MatcherContext,
 ): boolean {
+  // Crawlers always get the full page server-rendered — deferral would hide
+  // content from indexing. This is an SEO guarantee, not a code override of
+  // editorial intent: it makes ⚡ content MORE visible to bots.
   if (isBotReq) return false;
 
   if (!section || typeof section !== "object") return false;
@@ -1128,30 +1160,34 @@ function shouldDeferSection(
   const finalKey = resolveFinalSectionKey(section, matcherCtx);
   if (!finalKey) return false;
 
-  // Layout sections (Header, Footer, Theme) are ALWAYS eager — they're shared
-  // across pages and their resolved output is cached, so serialization cost is
-  // amortized. Deferring them would flash a skeleton on every navigation.
+  // ── ADMIN IS THE SOURCE OF TRUTH ──────────────────────────────────────────
+  // If the editor marked the section ⚡ (wrapped in CMS Lazy/Deferred at any
+  // nesting level, including multivariate flags), it is deferred —
+  // unconditionally, overriding every code-level flag below. This is the only
+  // thing that drives deferral in the default configuration.
+  if (cfg.respectCmsLazy && isCmsDeferralWrapped(section, matcherCtx)) return true;
+
+  // ── Everything below is OPT-IN ONLY ───────────────────────────────────────
+  // These checks never override the admin (handled above). They are inert with
+  // the default `foldThreshold = Infinity` and only matter when a site
+  // explicitly opts into a finite threshold — where they protect specific
+  // NON-⚡ sections from position-based deferral.
+
+  // Layout sections (Header, Footer, Theme) are shared across pages and their
+  // resolved output is cached; deferring them would flash a skeleton on every
+  // navigation.
   if (isLayoutSection(finalKey)) return false;
 
-  // `export const neverDefer = true` — unconditionally eager, ignores fold
-  // threshold. Use for interactive components that need their props on the
-  // client during hydration (search filters, configurators, etc.).
+  // `export const neverDefer = true` — keep eager regardless of threshold.
   if (isNeverDeferSection(finalKey)) return false;
 
-  // `export const eager = true` keeps sections eager only WITHIN the fold
-  // threshold. Past the threshold, defer even eager sections — their resolved
-  // props (often full product arrays) dominate the SSR hydration blob and
-  // deferral strips them. Bots still get full eager (line above: isBotReq).
+  // `export const eager = true` / alwaysEager — keep eager within the fold.
   if (flatIndex < cfg.foldThreshold) {
     if (isEagerSection(finalKey)) return false;
     if (cfg.alwaysEager.has(finalKey)) return false;
   }
 
-  // Walk the full wrapper chain (including multivariate flags) to detect
-  // Lazy.tsx or Deferred.tsx wrappers at any nesting level.
-  if (cfg.respectCmsLazy && isCmsDeferralWrapped(section, matcherCtx)) return true;
-
-  // Fallback: threshold-based deferral for non-Lazy sections
+  // Position-based fallback — disabled by default (foldThreshold = Infinity).
   if (flatIndex >= cfg.foldThreshold) return true;
 
   return false;
