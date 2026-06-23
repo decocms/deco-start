@@ -838,6 +838,144 @@ function generateMeta(): MetaResponse {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // App loaders pass: walk @decocms/apps/*/loaders/ directories and register
+  // each .ts file as a CMS loader. CMS keys are derived from the file path
+  // (e.g. "vtex/loaders/intelligentSearch/productList.ts").
+  //
+  // Only apps installed in src/apps/ are scanned. An app bridge file that
+  // re-exports from "@decocms/apps/{namespace}/mod" signals the namespace.
+  // ---------------------------------------------------------------------------
+  const appsPkgDir = path.resolve(root, "node_modules/@decocms/apps");
+
+  /** Detect installed app namespaces from src/apps/ bridge files. */
+  function detectInstalledAppNamespaces(): Set<string> {
+    const namespaces = new Set<string>();
+    const siteAppsDir = path.resolve(root, APPS_REL);
+    if (!fs.existsSync(siteAppsDir)) return namespaces;
+
+    const appFiles = findTsxFiles(siteAppsDir);
+    const re = /["']@decocms\/apps\/([^/]+)\/mod["']/;
+    for (const filePath of appFiles) {
+      try {
+        const content = fs.readFileSync(filePath, "utf-8");
+        const match = content.match(re);
+        if (match) namespaces.add(match[1]);
+      } catch { /* skip unreadable files */ }
+    }
+    return namespaces;
+  }
+
+  // Discover app loader files via filesystem walk (scoped to installed apps)
+  function discoverAppLoaders(): Array<{ cmsKey: string; sourceFile: string; namespace: string }> {
+    const result: Array<{ cmsKey: string; sourceFile: string; namespace: string }> = [];
+    if (!fs.existsSync(appsPkgDir)) return result;
+
+    const installed = detectInstalledAppNamespaces();
+    if (installed.size === 0) return result;
+
+    for (const namespace of installed) {
+      const loadersDir = path.join(appsPkgDir, namespace, "loaders");
+      if (!fs.existsSync(loadersDir)) continue;
+
+      const files = fs.readdirSync(loadersDir, { recursive: true }) as string[];
+      for (const relFile of files) {
+        const rel = String(relFile);
+        if (!rel.endsWith(".ts") && !rel.endsWith(".tsx")) continue;
+        // Skip index/barrel files, tests, and internal files
+        const basename = path.basename(rel);
+        if (basename === "index.ts" || basename.startsWith("_")) continue;
+        if (rel.includes("__tests__") || rel.includes("__test__") || rel.endsWith(".test.ts")) continue;
+
+        const cmsKey = `${namespace}/loaders/${rel.replace(/\\/g, "/")}`;
+        const sourceFile = `${namespace}/loaders/${rel.replace(/\\/g, "/")}`;
+        result.push({ cmsKey, sourceFile, namespace });
+      }
+    }
+
+    return result.sort((a, b) => a.cmsKey.localeCompare(b.cmsKey));
+  }
+
+  const appLoaders = discoverAppLoaders();
+
+  // De-duplicate: when re-export files point to the same source, parse once
+  const appLoaderCache = new Map<string, {
+    propsSchema: any;
+    outputTypeName: string | null;
+  }>();
+
+  const installedNs = detectInstalledAppNamespaces();
+  console.log(`Installed app namespaces: ${[...installedNs].join(", ") || "(none)"}`);
+  console.log(`Scanning app loaders from @decocms/apps (${appLoaders.length} files)...`);
+  for (const appLoader of appLoaders) {
+    const absSourceFile = path.resolve(appsPkgDir, appLoader.sourceFile);
+
+    try {
+      // Resolve the real path to de-duplicate re-exports pointing to the same file
+      const realPath = fs.realpathSync(absSourceFile);
+      let cached = appLoaderCache.get(realPath);
+      if (!cached) {
+        const sourceFile = getSourceFile(project, absSourceFile, sourceFileCache);
+
+        // Skip files without a default export (barrel files, utility modules)
+        const hasDefaultExport = sourceFile.getDefaultExportSymbol() != null;
+        if (!hasDefaultExport) continue;
+
+        // Extract Props (input schema)
+        let propsSchema: any = null;
+        const propsInterface = sourceFile.getInterface("Props");
+        if (propsInterface) propsSchema = typeToJsonSchema(propsInterface.getType());
+
+        const propsTypeAlias = sourceFile.getTypeAlias("Props");
+        if (!propsSchema && propsTypeAlias) propsSchema = typeToJsonSchema(propsTypeAlias.getType());
+
+        if (!propsSchema) {
+          const localPropsType = extractDefaultExportPropsType(sourceFile);
+          if (localPropsType) propsSchema = typeToJsonSchema(localPropsType);
+        }
+
+        if (!propsSchema) propsSchema = { type: "object", properties: {} };
+
+        const outputTypeName = extractLoaderOutputTypeName(sourceFile);
+        cached = { propsSchema, outputTypeName };
+        appLoaderCache.set(realPath, cached);
+      }
+
+      const { propsSchema, outputTypeName } = cached;
+      const loaderDefKey = toBase64(appLoader.cmsKey);
+
+      definitions[loaderDefKey] = {
+        title: appLoader.cmsKey,
+        type: "object",
+        required: ["__resolveType", ...(propsSchema?.required || [])],
+        properties: {
+          __resolveType: { type: "string", enum: [appLoader.cmsKey], default: appLoader.cmsKey },
+          ...(propsSchema?.properties || {}),
+        },
+      };
+
+      loaderBlocks[appLoader.cmsKey] = {
+        $ref: `#/definitions/${loaderDefKey}`,
+        namespace: appLoader.namespace,
+      };
+      loaderRootAnyOf.push({ $ref: `#/definitions/${loaderDefKey}` });
+
+      // Register output type for block-ref resolution in sections
+      if (outputTypeName) {
+        const existing = outputTypeToLoaderKeys.get(outputTypeName) ?? [];
+        existing.push(appLoader.cmsKey);
+        outputTypeToLoaderKeys.set(outputTypeName, existing);
+      }
+
+      const propCount = Object.keys(propsSchema.properties || {}).length;
+      console.log(
+        `  ✓ app loader ${appLoader.cmsKey} (${propCount} props${outputTypeName ? ` → ${outputTypeName}` : ""})`,
+      );
+    } catch (e) {
+      console.warn(`  ✗ app loader ${appLoader.cmsKey}: ${(e as Error).message}`);
+    }
+  }
+
   const ctx: GenerationContext = { outputTypeToLoaderKeys };
 
   // ---------------------------------------------------------------------------
