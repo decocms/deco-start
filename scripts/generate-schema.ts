@@ -838,6 +838,119 @@ function generateMeta(): MetaResponse {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // App loaders pass: scan @decocms/apps inline-loaders and register them
+  // under CMS keys that match the runtime routing (e.g.
+  // "vtex/loaders/intelligentSearch/productList.ts").
+  // ---------------------------------------------------------------------------
+  const APP_LOADERS: Array<{
+    cmsKey: string;
+    sourceFile: string;
+    namespace: string;
+  }> = [
+    // Intelligent Search loaders
+    { cmsKey: "vtex/loaders/intelligentSearch/productList.ts",
+      sourceFile: "vtex/inline-loaders/productListShelf.ts",
+      namespace: "vtex" },
+    { cmsKey: "vtex/loaders/intelligentSearch/productListingPage.ts",
+      sourceFile: "vtex/inline-loaders/productListingPage.ts",
+      namespace: "vtex" },
+    { cmsKey: "vtex/loaders/intelligentSearch/productDetailsPage.ts",
+      sourceFile: "vtex/inline-loaders/productDetailsPage.ts",
+      namespace: "vtex" },
+    // Legacy aliases (same source files)
+    { cmsKey: "vtex/loaders/legacy/productList.ts",
+      sourceFile: "vtex/inline-loaders/productListShelf.ts",
+      namespace: "vtex" },
+    { cmsKey: "vtex/loaders/legacy/productDetailsPage.ts",
+      sourceFile: "vtex/inline-loaders/productDetailsPage.ts",
+      namespace: "vtex" },
+    // Top-level aliases
+    { cmsKey: "vtex/loaders/ProductList.ts",
+      sourceFile: "vtex/inline-loaders/productListShelf.ts",
+      namespace: "vtex" },
+    { cmsKey: "vtex/loaders/ProductListingPage.ts",
+      sourceFile: "vtex/inline-loaders/productListingPage.ts",
+      namespace: "vtex" },
+    { cmsKey: "vtex/loaders/ProductDetailsPage.ts",
+      sourceFile: "vtex/inline-loaders/productDetailsPage.ts",
+      namespace: "vtex" },
+  ];
+
+  // De-duplicate: parse each source file once and reuse schema + output type
+  const appLoaderCache = new Map<string, {
+    propsSchema: any;
+    outputTypeName: string | null;
+  }>();
+
+  console.log(`Scanning app loaders from @decocms/apps...`);
+  for (const appLoader of APP_LOADERS) {
+    const absSourceFile = path.resolve(root, "node_modules/@decocms/apps", appLoader.sourceFile);
+    if (!fs.existsSync(absSourceFile)) {
+      console.warn(`  ✗ app loader ${appLoader.cmsKey}: source not found (${appLoader.sourceFile})`);
+      continue;
+    }
+
+    try {
+      let cached = appLoaderCache.get(absSourceFile);
+      if (!cached) {
+        const sourceFile = getSourceFile(project, absSourceFile, sourceFileCache);
+
+        // Extract Props (input schema)
+        let propsSchema: any = null;
+        const propsInterface = sourceFile.getInterface("Props");
+        if (propsInterface) propsSchema = typeToJsonSchema(propsInterface.getType());
+
+        const propsTypeAlias = sourceFile.getTypeAlias("Props");
+        if (!propsSchema && propsTypeAlias) propsSchema = typeToJsonSchema(propsTypeAlias.getType());
+
+        if (!propsSchema) {
+          const localPropsType = extractDefaultExportPropsType(sourceFile);
+          if (localPropsType) propsSchema = typeToJsonSchema(localPropsType);
+        }
+
+        if (!propsSchema) propsSchema = { type: "object", properties: {} };
+
+        const outputTypeName = extractLoaderOutputTypeName(sourceFile);
+        cached = { propsSchema, outputTypeName };
+        appLoaderCache.set(absSourceFile, cached);
+      }
+
+      const { propsSchema, outputTypeName } = cached;
+      const loaderDefKey = toBase64(appLoader.cmsKey);
+
+      definitions[loaderDefKey] = {
+        title: appLoader.cmsKey,
+        type: "object",
+        required: ["__resolveType", ...(propsSchema?.required || [])],
+        properties: {
+          __resolveType: { type: "string", enum: [appLoader.cmsKey], default: appLoader.cmsKey },
+          ...(propsSchema?.properties || {}),
+        },
+      };
+
+      loaderBlocks[appLoader.cmsKey] = {
+        $ref: `#/definitions/${loaderDefKey}`,
+        namespace: appLoader.namespace,
+      };
+      loaderRootAnyOf.push({ $ref: `#/definitions/${loaderDefKey}` });
+
+      // Register output type for block-ref resolution in sections
+      if (outputTypeName) {
+        const existing = outputTypeToLoaderKeys.get(outputTypeName) ?? [];
+        existing.push(appLoader.cmsKey);
+        outputTypeToLoaderKeys.set(outputTypeName, existing);
+      }
+
+      const propCount = Object.keys(propsSchema.properties || {}).length;
+      console.log(
+        `  ✓ app loader ${appLoader.cmsKey} (${propCount} props${outputTypeName ? ` → ${outputTypeName}` : ""})`,
+      );
+    } catch (e) {
+      console.warn(`  ✗ app loader ${appLoader.cmsKey}: ${(e as Error).message}`);
+    }
+  }
+
   const ctx: GenerationContext = { outputTypeToLoaderKeys };
 
   // ---------------------------------------------------------------------------
