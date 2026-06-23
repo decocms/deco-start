@@ -182,6 +182,14 @@ export interface OtlpHttpTracerOptions {
    * `deco.http.request` root for the same trace is sampled.
    */
   headSamplingRate?: number;
+  /**
+   * Sampling rate for error-promoted traces, 0.0..1.0. Default `0.1`
+   * (promote 10% of error traces). Lower values reduce ClickHouse volume when
+   * errors are frequent — uses the same FNV-1a hash as head sampling so
+   * the decision is consistent per trace. Only applies when `promoteTrace`
+   * is called (i.e. `DECO_OTEL_ERROR_PROMOTION=true`).
+   */
+  errorPromotionRate?: number;
   /** Hard cap on pending spans. Default: 2000. */
   maxBufferSpans?: number;
   /** Cooldown between successful flushes (ms). Default: 5000. */
@@ -224,6 +232,12 @@ export interface OtlpHttpTracer extends TracerAdapter {
   flush(): Promise<void>;
   /** For tests + the audit channel. */
   pendingSpanCount(): number;
+  /**
+   * Mark a trace for export even when it was not selected by head sampling.
+   * Called when an error is logged mid-request so the root span and any
+   * spans that end after the error are still shipped to ClickHouse.
+   */
+  promoteTrace(traceId: string): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -250,11 +264,21 @@ export function createOtlpHttpTracerAdapter(options: OtlpHttpTracerOptions): Otl
   // at span-end (not span-start) so attribute mutations during the span
   // lifetime are captured in the record we drop or keep.
   const spans: SpanRecord[] = [];
+  // Traces promoted by an error log — spans for these traces export even
+  // when head sampling did not select them.
+  const promotedTraces = new Set<string>();
+  const errorPromotionRate = options.errorPromotionRate ?? 0.1;
   let lastFlushAt = 0;
   let inflight: Promise<void> | null = null;
 
   function pendingSpanCount(): number {
     return spans.length;
+  }
+
+  function promoteTrace(traceId: string): void {
+    if (shouldSampleTrace(traceId, errorPromotionRate)) {
+      promotedTraces.add(traceId);
+    }
   }
 
   function startSpan(name: string, attributes?: Labels): Span {
@@ -313,7 +337,9 @@ export function createOtlpHttpTracerAdapter(options: OtlpHttpTracerOptions): Otl
         // Sampling decision was already made at startSpan() — traceFlags
         // carries the result. Child spans inherit it from their parent so
         // the entire trace is kept or dropped consistently.
-        if (!sampled) return;
+        // Exception: if an error was logged for this trace (promoteTrace was
+        // called), export anyway so the error has a trace in ClickHouse.
+        if (!sampled && !promotedTraces.has(traceId)) return;
 
         if (spans.length >= maxBuffer) {
           onError?.("overflow", new Error(`trace buffer at cap (${maxBuffer}) — dropping span`));
@@ -417,6 +443,7 @@ export function createOtlpHttpTracerAdapter(options: OtlpHttpTracerOptions): Otl
     startSpan,
     flush,
     pendingSpanCount,
+    promoteTrace,
   };
 }
 

@@ -92,6 +92,12 @@ export interface OtlpHttpLogOptions {
   getActiveSpanFn?: () => { spanContext?: () => { traceId?: string; spanId?: string; traceFlags?: number } } | undefined | null;
   /** Optional sink for transport / rate-limit / overflow errors. */
   onError?: (kind: "flush" | "overflow" | "rate-limit", err: unknown) => void;
+  /**
+   * Called when an `error`-level log fires with an active trace context.
+   * Used by the caller to promote unsampled traces so their spans are
+   * exported regardless of head-sampling decisions.
+   */
+  promoteTrace?: (traceId: string) => void;
 }
 
 export interface OtlpHttpLog {
@@ -145,6 +151,7 @@ export function createOtlpHttpLogAdapter(options: OtlpHttpLogOptions): OtlpHttpL
   const fetchImpl = options.fetchImpl ?? fetch;
   const now = options.nowMs ?? (() => Date.now());
   const onError = options.onError;
+  const promoteTrace = options.promoteTrace;
   const getSpan = options.getActiveSpanFn ?? getActiveSpan;
 
   const buffer: PendingRecord[] = [];
@@ -216,6 +223,10 @@ export function createOtlpHttpLogAdapter(options: OtlpHttpLogOptions): OtlpHttpL
         spanId: spanCtx?.spanId ?? "",
         traceFlags: spanCtx?.traceFlags ?? 0,
       });
+
+      if (level === "error" && spanCtx?.traceId) {
+        promoteTrace?.(spanCtx.traceId);
+      }
     },
   };
 
