@@ -184,6 +184,23 @@ export interface OtelOptions {
    * `otlpTracesSamplingRate` then `0.01`).
    */
   otlpTracesSamplingRateEnvVar?: string;
+  /**
+   * When `true` (or when `DECO_OTEL_ERROR_PROMOTION=true` is set), any
+   * `logger.error()` call with an active trace context marks that trace for
+   * export even if head sampling did not select it. Useful for ensuring
+   * errors always have a trace in ClickHouse without raising the global
+   * sampling rate.
+   *
+   * Disabled by default — enable via env var or this option once validated
+   * in production. Precedence: env var (`otlpTracesErrorPromotionEnvVar`,
+   * default `DECO_OTEL_ERROR_PROMOTION`) > this option > `false`.
+   */
+  otlpTracesErrorPromotion?: boolean;
+  /**
+   * Env var name to read the error promotion flag from. Defaults to
+   * `"DECO_OTEL_ERROR_PROMOTION"`. Value must be `"true"` to enable.
+   */
+  otlpTracesErrorPromotionEnvVar?: string;
   /** Test seam — replace the global `fetch` used by the traces exporter. */
   otlpTracesFetchImpl?: typeof fetch;
   /**
@@ -649,6 +666,12 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
     (validLogLevels as readonly string[]).includes(otlpLogsMinLevelFromEnv)
       ? (otlpLogsMinLevelFromEnv as LogLevel)
       : opts.otlpLogsMinLevel ?? "info";
+  const errorPromotionEnvVar =
+    opts.otlpTracesErrorPromotionEnvVar ?? "DECO_OTEL_ERROR_PROMOTION";
+  const errorPromotionEnabled =
+    (env[errorPromotionEnvVar] as string | undefined) === "true" ||
+    (opts.otlpTracesErrorPromotion ?? false);
+
   if (otlpLogsEnabled) {
     state.otlpLog = createOtlpHttpLogAdapter({
       endpoint: otlpLogsEndpoint,
@@ -656,7 +679,9 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
       scopeVersion: decoRuntimeVersion,
       minLevel: otlpLogsMinLevel,
       fetchImpl: opts.otlpLogsFetchImpl,
-      promoteTrace: (traceId) => state.otlpTracer?.promoteTrace(traceId),
+      promoteTrace: errorPromotionEnabled
+        ? (traceId) => state.otlpTracer?.promoteTrace(traceId)
+        : undefined,
       onError: (kind, err) => {
         // Use warnDirect (pre-patch console.warn) to avoid routing this
         // warning back through the OTLP adapter that is currently failing.
