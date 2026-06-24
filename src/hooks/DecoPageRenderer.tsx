@@ -19,7 +19,7 @@ import {
   setResolvedComponent,
 } from "../cms/registry";
 import type { DeferredSection, ResolvedSection } from "../cms/resolve";
-import { DeviceProvider } from "../sdk/useDevice";
+import { type Device, DeviceProvider } from "../sdk/useDevice";
 
 import { SectionErrorBoundary } from "./SectionErrorFallback";
 
@@ -484,6 +484,13 @@ interface Props {
   pagePath?: string;
   /** Original page URL (with query params) — forwarded to deferred section loaders. */
   pageUrl?: string;
+  /**
+   * Server-resolved device, serialized into the page loader data. When set, it
+   * seeds `DeviceProvider` so client hydration reads the exact value the server
+   * used — making `useDevice()` hydration-stable. Omit to fall back to runtime
+   * resolution (backward compatible).
+   */
+  device?: Device;
   loadingFallback?: ReactNode;
   errorFallback?: ReactNode;
   /** @deprecated Use deferredPromises instead (TanStack native streaming). */
@@ -502,6 +509,7 @@ export function DecoPageRenderer({
   deferredPromises,
   pagePath = "/",
   pageUrl,
+  device,
   loadingFallback,
   errorFallback,
   loadDeferredSectionFn,
@@ -509,12 +517,16 @@ export function DecoPageRenderer({
   const items = mergeSections(sections ?? [], deferredSections ?? []);
   const hasDeferred = deferredSections && deferredSections.length > 0;
 
-  // DeviceProvider resolves the device once here (where ALS is reliable on
-  // both server and client) and propagates via React context, so descendants
-  // inside Suspense boundaries don't re-read ALS and risk falling back to a
-  // stale "desktop" value that contaminates the edge cache. See #231.
+  // Seed DeviceProvider with the server-resolved `device` from the page loader
+  // (serialized into the hydration payload). Both the SSR render and client
+  // hydration then read the SAME value, instead of the client re-resolving via
+  // navigator.userAgent and descendants re-reading AsyncLocalStorage — which is
+  // lost across streaming-SSR Suspense boundaries and silently falls back to
+  // "desktop", causing React #418 hydration mismatches (#278, #231). When
+  // `device` is absent (custom roots), DeviceProvider falls back to runtime
+  // resolution.
   return (
-    <DeviceProvider>
+    <DeviceProvider value={device}>
       {hasDeferred && <FadeInStyle />}
       {items.map((item, index) => {
         if (item.type === "deferred") {

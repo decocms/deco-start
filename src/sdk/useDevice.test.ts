@@ -1,5 +1,7 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { detectDevice, isMobileUA, useDevice } from "./useDevice";
+import { DeviceProvider, detectDevice, isMobileUA, useDevice } from "./useDevice";
 
 describe("detectDevice", () => {
   it("detects iPhone as mobile", () => {
@@ -100,5 +102,29 @@ describe("useDevice (isomorphic)", () => {
     const clientResult = useDevice();
     const directResult = detectDevice(navigator.userAgent);
     expect(clientResult).toBe(directResult);
+  });
+});
+
+describe("DeviceProvider seeds useDevice() with the serialized value (#278)", () => {
+  function Probe() {
+    // Inside a render, useDevice() reads DeviceContext — this is the path that
+    // makes hydration stable when the value comes from the page loader.
+    return createElement("span", null, useDevice());
+  }
+
+  it("useDevice() returns the provider value, overriding runtime detection", () => {
+    // jsdom's navigator is desktop-like, so a "tablet" result can only come
+    // from the provider value (the server-resolved device), not runtime.
+    const html = renderToStaticMarkup(
+      createElement(DeviceProvider, { value: "tablet", children: createElement(Probe) }),
+    );
+    expect(html).toBe("<span>tablet</span>");
+  });
+
+  it("falls back to runtime resolution when no value is provided", () => {
+    const html = renderToStaticMarkup(
+      createElement(DeviceProvider, { children: createElement(Probe) }),
+    );
+    expect(html).toBe(`<span>${detectDevice(navigator.userAgent)}</span>`);
   });
 });

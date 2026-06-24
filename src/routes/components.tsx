@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import type { DeferredSection, ResolvedSection } from "../cms/resolve";
 import { DecoPageRenderer } from "../hooks/DecoPageRenderer";
+import type { Device } from "../sdk/useDevice";
 
 /**
  * Default CMS page component. Renders all resolved sections.
@@ -12,12 +13,15 @@ export function CmsPage({
   deferredPromises,
   pagePath,
   pageUrl,
+  device,
 }: {
   sections: ResolvedSection[];
   deferredSections?: DeferredSection[];
   deferredPromises?: Record<string, Promise<ResolvedSection | null>>;
   pagePath?: string;
   pageUrl?: string;
+  /** Server-resolved device from the page loader — keeps useDevice() hydration-stable. */
+  device?: Device;
 }) {
   return (
     <div>
@@ -27,6 +31,7 @@ export function CmsPage({
         deferredPromises={deferredPromises}
         pagePath={pagePath}
         pageUrl={pageUrl}
+        device={device}
       />
     </div>
   );
