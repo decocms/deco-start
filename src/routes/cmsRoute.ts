@@ -52,6 +52,7 @@ import {
 } from "../sdk/cacheHeaders";
 import { normalizeUrlsInObject } from "../sdk/normalizeUrls";
 import { type Device, detectDevice } from "../sdk/useDevice";
+import { derivePageUrl } from "./pageUrl";
 import { dedupeGlobals, resolveSiteGlobals } from "./withSiteGlobals";
 
 const isServer = typeof document === "undefined";
@@ -78,17 +79,10 @@ const pageInflight = new Map<string, Promise<PageResult>>();
 
 async function loadCmsPageInternal(fullPath: string) {
   const [basePath] = fullPath.split("?");
-  const serverUrl = getRequestUrl();
-  // Prefer the real server URL when available — it preserves duplicate query
-  // params (e.g. filter.category-1=a&filter.category-1=b) that the TanStack
-  // Router search object (plain Record<string,string>) would collapse.
-  const realUrlPath = serverUrl.pathname + serverUrl.search;
-  const urlWithSearch =
-    realUrlPath.startsWith(basePath) && serverUrl.search
-      ? serverUrl.toString()
-      : fullPath.includes("?")
-        ? new URL(fullPath, serverUrl.origin).toString()
-        : serverUrl.toString();
+  // On client-side navigation getRequestUrl() is the /_serverFn/... endpoint,
+  // not the page being loaded — derivePageUrl rebuilds the real page URL so
+  // matcherCtx.url / __pageUrl stay consistent with __pagePath (#280).
+  const urlWithSearch = derivePageUrl(fullPath, getRequestUrl());
 
   const originRequest = getRequest();
   const matcherCtx: MatcherContext = {
