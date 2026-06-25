@@ -52,7 +52,7 @@ import {
 } from "../sdk/cacheHeaders";
 import { normalizeUrlsInObject } from "../sdk/normalizeUrls";
 import { type Device, detectDevice } from "../sdk/useDevice";
-import { derivePageUrl } from "./pageUrl";
+import { derivePageUrl, isClientNavigation } from "./pageUrl";
 import { dedupeGlobals, resolveSiteGlobals } from "./withSiteGlobals";
 
 const isServer = typeof document === "undefined";
@@ -82,7 +82,8 @@ async function loadCmsPageInternal(fullPath: string) {
   // On client-side navigation getRequestUrl() is the /_serverFn/... endpoint,
   // not the page being loaded — derivePageUrl rebuilds the real page URL so
   // matcherCtx.url / __pageUrl stay consistent with __pagePath (#280).
-  const urlWithSearch = derivePageUrl(fullPath, getRequestUrl());
+  const serverUrl = getRequestUrl();
+  const urlWithSearch = derivePageUrl(fullPath, serverUrl);
 
   const originRequest = getRequest();
   const matcherCtx: MatcherContext = {
@@ -91,6 +92,7 @@ async function loadCmsPageInternal(fullPath: string) {
     path: basePath,
     cookies: getCookies(),
     request: originRequest,
+    isClientNavigation: isClientNavigation(fullPath, serverUrl),
   };
   const page = await resolveDecoPage(basePath, matcherCtx);
   if (!page) return null;
@@ -175,6 +177,7 @@ export const loadCmsHomePage = createServerFn({ method: "GET" }).handler(async (
     path: "/",
     cookies: getCookies(),
     request,
+    isClientNavigation: isClientNavigation("/", serverUrl),
   };
   const page = await resolveDecoPage("/", matcherCtx);
   if (!page) return null;

@@ -29,3 +29,26 @@ export function derivePageUrl(fullPath: string, serverUrl: URL): string {
     ? serverUrl.toString()
     : new URL(fullPath, serverUrl.origin).toString();
 }
+
+/**
+ * True when the page load came from a client-side (SPA) navigation via
+ * TanStack `<Link>`: the CMS server function runs at `/_serverFn/<hash>`, so
+ * `serverUrl.pathname` is NOT the page path. On a real document request (SSR /
+ * full reload, including bots) `serverUrl.pathname === basePath`.
+ *
+ * Section deferral is a streaming-SSR optimization (shrinks the initial HTML /
+ * TTFB). On a client navigation the server fn returns JSON in one shot — there
+ * is no streaming benefit, so deferral only adds a round-trip and a skeleton.
+ * Callers use this to resolve all sections eagerly on SPA navigation.
+ *
+ * Mirrors the `serverUrl.pathname === basePath` comparison `derivePageUrl`
+ * already relies on, so the two stay consistent and we avoid hardcoding the
+ * internal `/_serverFn` path.
+ *
+ * @param fullPath  page path + optional search, e.g. `/c/shoes?q=foo`
+ * @param serverUrl URL returned by `getRequestUrl()`
+ */
+export function isClientNavigation(fullPath: string, serverUrl: URL): boolean {
+  const [basePath] = fullPath.split("?");
+  return serverUrl.pathname !== basePath;
+}

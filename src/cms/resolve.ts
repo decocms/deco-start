@@ -330,6 +330,14 @@ export interface MatcherContext {
   cookies?: Record<string, string>;
   headers?: Record<string, string>;
   request?: Request;
+  /**
+   * Client-side (SPA) navigation via TanStack `<Link>`. Disables section
+   * deferral: deferral is a streaming-SSR optimization, but a client nav
+   * receives the server-fn JSON in one shot, so deferral adds a round-trip +
+   * skeleton with no benefit (and breaks loaders that need per-request app
+   * context — see decocms/deco-start#277). Set by the route loaders.
+   */
+  isClientNavigation?: boolean;
 }
 
 /**
@@ -1598,8 +1606,13 @@ async function resolveDecoPageImpl(
   }
 
   const isBotReq = isEagerRequest(matcherCtx);
+  // SPA navigation (TanStack <Link>) receives the server-fn JSON in one shot —
+  // there is no HTTP streaming, so deferral adds a round-trip + skeleton with
+  // no benefit (and breaks loaders that need per-request app context, #277).
+  // Resolve everything eagerly on client nav; SSR/bots keep deferral.
+  const isClientNav = matcherCtx?.isClientNavigation ?? false;
   const currentAsyncConfig = getAsyncConfig();
-  const useAsync = currentAsyncConfig !== null && !isBotReq;
+  const useAsync = currentAsyncConfig !== null && !isBotReq && !isClientNav;
 
   const eagerResults: (ResolvedSection[] | Promise<ResolvedSection[]>)[] = [];
   const deferredSections: DeferredSection[] = [];

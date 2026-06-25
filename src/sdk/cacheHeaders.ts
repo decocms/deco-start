@@ -320,3 +320,105 @@ export function detectCacheProfile(pathnameOrUrl: string | URL): CacheProfileNam
 
   return "listing";
 }
+
+/**
+ * For a TanStack GET server-fn request (`/_serverFn/<hash>?payload=...`), the
+ * page being loaded is encoded inside the serialized `payload` arg (e.g.
+ * `loadCmsPage`'s `data` string `/product/p`). The request pathname itself is
+ * `/_serverFn/...`, which {@link detectCacheProfile} can only classify as the
+ * generic "listing" profile — so SPA-navigation data requests would cache under
+ * a short TTL and rarely hit, even though the underlying page is a product
+ * (5min) or the homepage (1 day).
+ *
+ * Returns the embedded page path so the data request can inherit the SAME cache
+ * profile as its HTML document. Returns null for non-server-fn URLs or on any
+ * parse miss, so callers fall back to URL-based detection (never worse than the
+ * pre-existing behavior).
+ *
+ * The payload is TanStack's serialized envelope; rather than depend on its
+ * exact shape, we walk the parsed JSON for the first arg-value string that
+ * looks like a route path. `loadCmsPage` encodes exactly one such string.
+ */
+export function serverFnPagePath(url: URL): string | null {
+  if (
+    !url.pathname.startsWith("/_serverFn/") &&
+    !url.pathname.startsWith("/_server/")
+  ) {
+    return null;
+  }
+  const payload = url.searchParams.get("payload");
+  if (!payload) return null;
+  try {
+    let found: string | null = null;
+    const visit = (v: unknown): void => {
+      if (found !== null) return;
+      if (typeof v === "string") {
+        if (v.startsWith("/") && !v.startsWith("//")) found = v;
+        return;
+      }
+      if (Array.isArray(v)) {
+        for (const x of v) visit(x);
+        return;
+      }
+      if (v && typeof v === "object") {
+        for (const x of Object.values(v)) visit(x);
+      }
+    };
+    visit(JSON.parse(payload));
+    return found;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Search params that never change a CMS page's resolved server-fn response and
+ * so must not fragment its edge cache key. `skuId`/`idsku` select a product
+ * variant client-side (mirrors `cmsRouteConfig`'s default
+ * `ignoreSearchParams: ["skuId"]`) — without stripping them, every PDP→PDP
+ * navigation that carries a variant param is a unique key and always MISSes,
+ * re-running the full page resolution (~1-2s) even though the response is
+ * identical to the canonical `/product/p`.
+ */
+export const DEFAULT_SERVERFN_CACHE_IGNORE_PARAMS = ["skuId", "idsku"];
+
+/**
+ * Canonicalize a TanStack GET server-fn `payload` for use in the edge cache
+ * key: re-serialize it (so equivalent requests always produce byte-identical
+ * keys) and strip the given cache-irrelevant search params from any embedded
+ * route path. This makes `/product/p?skuId=148940` and `/product/p` share one
+ * cache entry, since `loadCmsPage` resolves both to the same page.
+ *
+ * Returns the original payload unchanged on any parse failure (fail-safe: the
+ * caller keeps the raw payload, never worse than before).
+ */
+export function canonicalizeServerFnPayloadForCacheKey(
+  payload: string,
+  ignoreParams: string[] = DEFAULT_SERVERFN_CACHE_IGNORE_PARAMS,
+): string {
+  try {
+    const stripQuery = (s: string): string => {
+      if (!s.startsWith("/") || s.startsWith("//")) return s;
+      const qIdx = s.indexOf("?");
+      if (qIdx < 0) return s;
+      const path = s.slice(0, qIdx);
+      const sp = new URLSearchParams(s.slice(qIdx + 1));
+      for (const p of ignoreParams) sp.delete(p);
+      const rest = sp.toString();
+      return rest ? `${path}?${rest}` : path;
+    };
+    const visit = (v: unknown): unknown => {
+      if (typeof v === "string") return stripQuery(v);
+      if (Array.isArray(v)) return v.map(visit);
+      if (v && typeof v === "object") {
+        const out: Record<string, unknown> = {};
+        for (const [k, val] of Object.entries(v)) out[k] = visit(val);
+        return out;
+      }
+      return v;
+    };
+    return JSON.stringify(visit(JSON.parse(payload)));
+  } catch {
+    return payload;
+  }
+}

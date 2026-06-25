@@ -33,9 +33,11 @@ import { runSectionLoaders, runSingleSectionLoader } from "../cms/sectionLoaders
 import {
   type CacheProfileName,
   cacheHeaders,
+  canonicalizeServerFnPayloadForCacheKey,
   detectCacheProfile,
   edgeCacheConfig,
   getCacheProfile,
+  serverFnPagePath,
 } from "./cacheHeaders";
 import { buildHtmlShell } from "./htmlShell";
 import { ensureBlocksHydrated, maybePollRevision } from "./kvHydration";
@@ -772,11 +774,20 @@ export function createDecoWorkerEntry(
   }
 
   function getProfile(url: URL): CacheProfileName {
+    // For TanStack GET server-fn requests, resolve the page path embedded in
+    // the payload so the data request inherits the PAGE's profile (product /
+    // search / static) instead of the generic "listing" derived from the
+    // `/_serverFn/...` pathname. This is what makes SPA-navigation data
+    // requests cache as long as their HTML documents (e.g. PDP 5min) and hit
+    // the edge like full reloads do. Falls back to the request URL when no
+    // embedded path is found.
+    const pagePath = serverFnPagePath(url);
+    const target = pagePath ? new URL(pagePath, url.origin) : url;
     if (customDetect) {
-      const custom = customDetect(url);
+      const custom = customDetect(target);
       if (custom !== null) return custom;
     }
-    return detectCacheProfile(url);
+    return detectCacheProfile(target);
   }
 
   function hashSegment(seg: SegmentKey): string {
@@ -815,6 +826,21 @@ export function createDecoWorkerEntry(
       const cleanPath = cleanPathForCacheKey(url.toString());
       const cleanUrl = new URL(cleanPath, url.origin);
       url.search = cleanUrl.search;
+    }
+
+    // For GET server-fn requests (SPA navigation data), the page being loaded
+    // is encoded in the `payload` arg. Canonicalize it and strip variant params
+    // (skuId/idsku) that the loader ignores — otherwise `/p?skuId=X` and `/p`
+    // get distinct keys and every variant-carrying PDP→PDP nav MISSes, even
+    // though the resolved response is identical. Keeps PLP filter params intact.
+    if (
+      url.pathname.startsWith("/_serverFn/") ||
+      url.pathname.startsWith("/_server/")
+    ) {
+      const payload = url.searchParams.get("payload");
+      if (payload) {
+        url.searchParams.set("payload", canonicalizeServerFnPayloadForCacheKey(payload));
+      }
     }
 
     const version = getBuildHash(env);

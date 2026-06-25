@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { derivePageUrl } from "./pageUrl";
+import { derivePageUrl, isClientNavigation } from "./pageUrl";
 
 describe("derivePageUrl (#280 — client-nav request URL)", () => {
   it("SSR real page without query: rebuilds from fullPath", () => {
@@ -38,5 +38,33 @@ describe("derivePageUrl (#280 — client-nav request URL)", () => {
     // have returned the serverFn URL here.
     const serverUrl = new URL("https://o.com/_serverFn/loadCmsPage?payload=x");
     expect(derivePageUrl("/", serverUrl)).toBe("https://o.com/");
+  });
+});
+
+describe("isClientNavigation (SPA vs SSR detection)", () => {
+  it("SSR real page (path matches): false", () => {
+    expect(
+      isClientNavigation("/c/shoes?q=a", new URL("https://o.com/c/shoes?q=a")),
+    ).toBe(false);
+  });
+
+  it("SSR real page without query (path matches): false", () => {
+    expect(
+      isClientNavigation("/granado/produto", new URL("https://o.com/granado/produto")),
+    ).toBe(false);
+  });
+
+  it("client nav (server fn endpoint): true", () => {
+    const serverUrl = new URL("https://o.com/_serverFn/loadCmsPage?payload=x");
+    expect(isClientNavigation("/c/shoes", serverUrl)).toBe(true);
+  });
+
+  it("home '/' on client nav: true", () => {
+    const serverUrl = new URL("https://o.com/_serverFn/loadCmsPage?payload=x");
+    expect(isClientNavigation("/", serverUrl)).toBe(true);
+  });
+
+  it("home '/' on SSR: false", () => {
+    expect(isClientNavigation("/", new URL("https://o.com/"))).toBe(false);
   });
 });
