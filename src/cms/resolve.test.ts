@@ -23,6 +23,7 @@ import {
   clearCommerceLoaders,
   DEFAULT_FOLD_THRESHOLD,
   getAsyncRenderingConfig,
+  isEagerRequest,
   registerCommerceLoader,
   registerEagerSections,
   registerNeverDeferSections,
@@ -389,6 +390,53 @@ describe("shouldDeferSection — admin is the source of truth", () => {
     const section = { __resolveType: "site/sections/Shelf.tsx" };
     expect(shouldDeferSection(section, 5, mkCfg({ foldThreshold: 3 }), false)).toBe(true);
     expect(shouldDeferSection(section, 1, mkCfg({ foldThreshold: 3 }), false)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isEagerRequest — programmatic (non-navigation) fetches render eagerly
+// ---------------------------------------------------------------------------
+//
+// An AJAX `fetch()` (e.g. the PLP "Ver mais"/load-more pagination) reads the
+// static SSR HTML and never runs the client-side deferred-section resolution,
+// so a ⚡ deferred section would be invisible (skeleton only). Such requests —
+// identified by `Sec-Fetch-Dest: empty` — must render eagerly. Top-level browser
+// navigations (`document`) stay deferred; SPA navigations are excluded so
+// page-SEO commerce loaders stay off for humans (#286).
+describe("isEagerRequest — programmatic fetch detection", () => {
+  const HUMAN_UA =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36";
+  const reqWith = (dest: string) =>
+    new Request("https://store.com/escolar?page=2", {
+      headers: { "user-agent": HUMAN_UA, "sec-fetch-dest": dest },
+    });
+
+  it("programmatic fetch (Sec-Fetch-Dest: empty) is eager", () => {
+    expect(isEagerRequest({ userAgent: HUMAN_UA, request: reqWith("empty") })).toBe(true);
+  });
+
+  it("top-level navigation (Sec-Fetch-Dest: document) is NOT eager", () => {
+    expect(isEagerRequest({ userAgent: HUMAN_UA, request: reqWith("document") })).toBe(false);
+  });
+
+  it("SPA navigation (empty + isClientNavigation) is NOT eager (preserves #286)", () => {
+    expect(
+      isEagerRequest({
+        userAgent: HUMAN_UA,
+        request: reqWith("empty"),
+        isClientNavigation: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("falls back to matcherCtx.headers when no Request is present", () => {
+    expect(
+      isEagerRequest({ userAgent: HUMAN_UA, headers: { "sec-fetch-dest": "empty" } }),
+    ).toBe(true);
+  });
+
+  it("a request with no Sec-Fetch headers stays deferred (no UA bot, no override)", () => {
+    expect(isEagerRequest({ userAgent: HUMAN_UA, url: "https://store.com/escolar" })).toBe(false);
   });
 });
 

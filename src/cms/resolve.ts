@@ -298,12 +298,44 @@ function hasForceEagerParam(ctx?: MatcherContext): boolean {
 }
 
 /**
+ * True for a programmatic, non-navigation request to a page URL — an AJAX
+ * `fetch()`/XHR (e.g. the PLP "Ver mais"/load-more pagination), an embed, or a
+ * server-to-server fetch. These consumers read the static SSR HTML and never
+ * run the client-side deferred-section resolution (IntersectionObserver +
+ * `loadDeferredSection` serverFn), so any `⚡` deferred section is invisible to
+ * them — they only ever see its skeleton. Rendering eagerly puts the real
+ * content in the HTML they actually parse.
+ *
+ * Detected via `Sec-Fetch-Dest: empty`, which a `fetch()`/XHR sends and which a
+ * top-level browser navigation (`document`) and subresource loads
+ * (`image`/`script`/`style`/`font`) do not — navigations stay deferred because
+ * they CAN hydrate and resolve deferred sections. SPA navigations (TanStack
+ * `<Link>` → `/_serverFn`) also send `empty` but set `isClientNavigation`, and
+ * are excluded here so page-SEO commerce loaders stay off for humans
+ * (decocms/deco-start#286); their sections already render eagerly via the
+ * `!isClientNav` branch of the `useAsync` gate.
+ *
+ * Like {@link hasForceEagerParam}, this must stay in lock-step with the edge
+ * cache key: `workerEntry` keys `Sec-Fetch-Dest: empty` page requests into a
+ * separate `__fetch=1` bucket, so the eager response never poisons the
+ * navigation (deferred) entry, and vice-versa.
+ */
+function isProgrammaticFetch(ctx?: MatcherContext): boolean {
+  if (ctx?.isClientNavigation) return false;
+  const dest = ctx?.request?.headers.get("sec-fetch-dest") ??
+    ctx?.headers?.["sec-fetch-dest"];
+  return dest === "empty";
+}
+
+/**
  * True when the request should receive the full eager (crawler) render: real
- * search-engine bots (by User-Agent) OR an explicit `?__deco_ssr=1` override.
- * Used to gate both section deferral and page-SEO commerce resolution.
+ * search-engine bots (by User-Agent), an explicit `?__deco_ssr=1` override, or
+ * a programmatic non-navigation fetch (see {@link isProgrammaticFetch}). Used
+ * to gate both section deferral and page-SEO commerce resolution.
  */
 export function isEagerRequest(ctx?: MatcherContext): boolean {
-  return isBot(ctx?.userAgent) || hasForceEagerParam(ctx);
+  return isBot(ctx?.userAgent) || hasForceEagerParam(ctx) ||
+    isProgrammaticFetch(ctx);
 }
 
 /**

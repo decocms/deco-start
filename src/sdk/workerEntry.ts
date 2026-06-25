@@ -873,6 +873,23 @@ export function createDecoWorkerEntry(
       url.searchParams.set("__bot", "1");
     }
 
+    // Programmatic, non-navigation fetches (the PLP "Ver mais"/load-more AJAX,
+    // embeds, server-to-server) read the static SSR HTML and can't run the
+    // client-side deferred-section resolution, so the origin renders every
+    // section eagerly for them (isProgrammaticFetch in cms/resolve.ts) — the
+    // same ~10x larger payload as bots. Key them into a SEPARATE `__fetch=1`
+    // bucket so a fetch-triggered eager response never poisons the navigation
+    // (deferred) entry, and vice-versa. MUST use the same `Sec-Fetch-Dest:
+    // empty` signal as isProgrammaticFetch so the key and render decisions can't
+    // diverge. `/_serverFn` (SPA-nav data) is excluded: it has its own keying
+    // and stays eager via isClientNavigation, not this bucket.
+    const secFetchDest = request.headers.get("sec-fetch-dest");
+    const isServerFnPath = url.pathname.startsWith("/_serverFn/") ||
+      url.pathname.startsWith("/_server/");
+    if (!isServerFnPath && secFetchDest === "empty") {
+      url.searchParams.set("__fetch", "1");
+    }
+
     if (buildSegment) {
       const segment = buildSegment(request);
       url.searchParams.set("__seg", hashSegment(segment));
@@ -954,11 +971,13 @@ export function createDecoWorkerEntry(
 
     const geoKeys: (string | null)[] = [null, ...geoVariants];
 
-    // Bots are keyed into a separate `__bot=1` bucket (see buildCacheKey), so
-    // purge both the human and bot variants. The param-set order below MUST
-    // mirror buildCacheKey exactly (__v, __cf_geo, __bot, then __seg/__cf_device)
-    // so the purge key byte-matches the stored key.
+    // Bots (`__bot=1`) and programmatic fetches (`__fetch=1`) are each keyed
+    // into a separate bucket (see buildCacheKey), so purge every combination.
+    // The param-set order below MUST mirror buildCacheKey exactly (__v,
+    // __cf_geo, __bot, __fetch, then __seg/__cf_device) so the purge key
+    // byte-matches the stored key.
     const botVariants = [false, true] as const;
+    const fetchVariants = [false, true] as const;
 
     for (const p of paths) {
       if (buildSegment) {
@@ -966,22 +985,30 @@ export function createDecoWorkerEntry(
         for (const seg of segments) {
           for (const cc of geoKeys) {
             for (const bot of botVariants) {
-              const url = new URL(p, baseUrl);
-              const purgeVersion = getBuildHash(env);
-              if (purgeVersion) url.searchParams.set("__v", purgeVersion);
-              if (cc) url.searchParams.set("__cf_geo", cc);
-              if (bot) url.searchParams.set("__bot", "1");
-              url.searchParams.set("__seg", hashSegment(seg));
-              const key = new Request(url.toString(), { method: "GET" });
-              try {
-                if (await cache.delete(key)) {
-                  const tags = [hashSegment(seg), cc, bot ? "bot" : null]
-                    .filter(Boolean)
-                    .join(", ");
-                  purged.push(`${p} (${tags})`);
+              for (const fetchReq of fetchVariants) {
+                const url = new URL(p, baseUrl);
+                const purgeVersion = getBuildHash(env);
+                if (purgeVersion) url.searchParams.set("__v", purgeVersion);
+                if (cc) url.searchParams.set("__cf_geo", cc);
+                if (bot) url.searchParams.set("__bot", "1");
+                if (fetchReq) url.searchParams.set("__fetch", "1");
+                url.searchParams.set("__seg", hashSegment(seg));
+                const key = new Request(url.toString(), { method: "GET" });
+                try {
+                  if (await cache.delete(key)) {
+                    const tags = [
+                      hashSegment(seg),
+                      cc,
+                      bot ? "bot" : null,
+                      fetchReq ? "fetch" : null,
+                    ]
+                      .filter(Boolean)
+                      .join(", ");
+                    purged.push(`${p} (${tags})`);
+                  }
+                } catch {
+                  /* ignore */
                 }
-              } catch {
-                /* ignore */
               }
             }
           }
@@ -992,20 +1019,25 @@ export function createDecoWorkerEntry(
         for (const device of devices) {
           for (const cc of geoKeys) {
             for (const bot of botVariants) {
-              const url = new URL(p, baseUrl);
-              const purgeVersion = getBuildHash(env);
-              if (purgeVersion) url.searchParams.set("__v", purgeVersion);
-              if (cc) url.searchParams.set("__cf_geo", cc);
-              if (bot) url.searchParams.set("__bot", "1");
-              if (device) url.searchParams.set("__cf_device", device);
-              const key = new Request(url.toString(), { method: "GET" });
-              try {
-                if (await cache.delete(key)) {
-                  const parts = [device, cc, bot ? "bot" : null].filter(Boolean).join(", ");
-                  purged.push(parts ? `${p} (${parts})` : p);
+              for (const fetchReq of fetchVariants) {
+                const url = new URL(p, baseUrl);
+                const purgeVersion = getBuildHash(env);
+                if (purgeVersion) url.searchParams.set("__v", purgeVersion);
+                if (cc) url.searchParams.set("__cf_geo", cc);
+                if (bot) url.searchParams.set("__bot", "1");
+                if (fetchReq) url.searchParams.set("__fetch", "1");
+                if (device) url.searchParams.set("__cf_device", device);
+                const key = new Request(url.toString(), { method: "GET" });
+                try {
+                  if (await cache.delete(key)) {
+                    const parts = [device, cc, bot ? "bot" : null, fetchReq ? "fetch" : null]
+                      .filter(Boolean)
+                      .join(", ");
+                    purged.push(parts ? `${p} (${parts})` : p);
+                  }
+                } catch {
+                  /* ignore */
                 }
-              } catch {
-                /* ignore */
               }
             }
           }
