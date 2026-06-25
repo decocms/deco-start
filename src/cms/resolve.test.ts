@@ -333,6 +333,7 @@ describe("async rendering config defaults", () => {
     expect(cfg).not.toBeNull();
     expect(cfg!.foldThreshold).toBe(Infinity);
     expect(cfg!.respectCmsLazy).toBe(true);
+    expect(cfg!.botAwareSeo).toBe(false); // opt-in — off by default
   });
 
   it("preserves an explicit finite foldThreshold (opt-in)", () => {
@@ -346,6 +347,7 @@ describe("shouldDeferSection — admin is the source of truth", () => {
     respectCmsLazy: true,
     foldThreshold: Infinity,
     alwaysEager: new Set(),
+    botAwareSeo: false,
     ...over,
   });
 
@@ -469,8 +471,29 @@ describe("resolvePageSeoBlock — bot-aware commerce SEO", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     }) as any;
 
-  beforeEach(() => clearCommerceLoaders());
-  afterEach(() => clearCommerceLoaders());
+  beforeEach(() => {
+    clearCommerceLoaders();
+    // Bot-aware SEO is opt-in — enable it for these cases.
+    setAsyncRenderingConfig({ botAwareSeo: true });
+  });
+  afterEach(() => {
+    clearCommerceLoaders();
+    setAsyncRenderingConfig({ botAwareSeo: false });
+  });
+
+  it("flag OFF (default): humans still get the full SEO — no regression", async () => {
+    setAsyncRenderingConfig({ botAwareSeo: false });
+    let calls = 0;
+    registerCommerceLoader(KEY, async () => {
+      calls++;
+      return { seo: { title: "Rich SEO title" }, products: [{ id: 1 }] };
+    });
+
+    const res = await resolvePageSeoBlock(seoBlock, rctx(HUMAN_UA));
+
+    expect(calls).toBe(1); // loader runs for everyone when the flag is off
+    expect(res?.props?.jsonLD).toMatchObject({ seo: { title: "Rich SEO title" } });
+  });
 
   it("humans: skips the commerce loader and drops the commerce-backed prop", async () => {
     let calls = 0;

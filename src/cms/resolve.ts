@@ -123,6 +123,21 @@ export interface AsyncRenderingConfig {
   foldThreshold: number;
   /** Section component keys that must always be rendered eagerly. */
   alwaysEager: Set<string>;
+  /**
+   * Bot-aware page SEO. When true, the page-level `seo` block's
+   * commerce-loader-backed props (e.g. `jsonLD: { __resolveType: "PLP Loader" }`)
+   * are SKIPPED for human (non-bot) requests — so SSR doesn't run the heavy
+   * upstream fetch and the product payload never reaches the human HTML. Bots
+   * still get the full SEO (JSON-LD) for indexing.
+   *
+   * OFF by default: the optimization removes the commerce data a human `<title>`
+   * may derive from, so it is only safe once the site provides a lightweight
+   * title fallback (e.g. a cheap category-metadata loader). Sites that just bump
+   * the framework keep the previous behavior (full SEO for everyone) and are not
+   * regressed. Opt in with `setAsyncRenderingConfig({ botAwareSeo: true })`.
+   * @default false
+   */
+  botAwareSeo: boolean;
 }
 
 /**
@@ -163,6 +178,7 @@ export function setAsyncRenderingConfig(config?: {
   foldThreshold?: number;
   alwaysEager?: string[];
   respectCmsLazy?: boolean;
+  botAwareSeo?: boolean;
 }): void {
   const existing = getAsyncConfig();
   const merged = new Set([...(existing?.alwaysEager ?? []), ...(config?.alwaysEager ?? [])]);
@@ -170,6 +186,7 @@ export function setAsyncRenderingConfig(config?: {
     respectCmsLazy: config?.respectCmsLazy ?? existing?.respectCmsLazy ?? true,
     foldThreshold: config?.foldThreshold ?? existing?.foldThreshold ?? DEFAULT_FOLD_THRESHOLD,
     alwaysEager: merged,
+    botAwareSeo: config?.botAwareSeo ?? existing?.botAwareSeo ?? false,
   };
 }
 
@@ -969,13 +986,18 @@ export async function resolvePageSeoBlock(
 ): Promise<ResolvedSection | null> {
   if (!seoBlock || typeof seoBlock !== "object") return null;
 
-  // Crawlers get the SEO block fully resolved (e.g. a ProductListingPage for
-  // JSON-LD ItemList) — that content exists for indexing. Humans get only the
-  // lightweight metadata: SEO props backed by a commerce loader are skipped
-  // (see `stripCommerceLoaderProps`) so SSR doesn't block on the heavy upstream
-  // call and the bulky payload (full product list) is never serialized into the
-  // HTML for a request that never renders it.
-  const seoForBot = isEagerRequest(rctx.matcherCtx);
+  // Bot-aware SEO is OPT-IN (`setAsyncRenderingConfig({ botAwareSeo: true })`).
+  // When disabled (default), resolve the SEO block fully for EVERYONE — the
+  // previous behavior — so sites that bump the framework without a lightweight
+  // title fallback are not regressed to a generic `<title>`.
+  //
+  // When enabled: crawlers get the SEO block fully resolved (e.g. a
+  // ProductListingPage for JSON-LD ItemList) — that content exists for indexing;
+  // humans get only the lightweight metadata — SEO props backed by a commerce
+  // loader are skipped (see `stripCommerceLoaderProps`) so SSR doesn't block on
+  // the heavy upstream call and the bulky payload never reaches the human HTML.
+  const botAwareSeo = getAsyncConfig()?.botAwareSeo ?? false;
+  const seoForBot = !botAwareSeo || isEagerRequest(rctx.matcherCtx);
 
   const blocks = loadBlocks();
   let current = seoBlock;
