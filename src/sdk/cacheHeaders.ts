@@ -320,3 +320,53 @@ export function detectCacheProfile(pathnameOrUrl: string | URL): CacheProfileNam
 
   return "listing";
 }
+
+/**
+ * For a TanStack GET server-fn request (`/_serverFn/<hash>?payload=...`), the
+ * page being loaded is encoded inside the serialized `payload` arg (e.g.
+ * `loadCmsPage`'s `data` string `/product/p`). The request pathname itself is
+ * `/_serverFn/...`, which {@link detectCacheProfile} can only classify as the
+ * generic "listing" profile — so SPA-navigation data requests would cache under
+ * a short TTL and rarely hit, even though the underlying page is a product
+ * (5min) or the homepage (1 day).
+ *
+ * Returns the embedded page path so the data request can inherit the SAME cache
+ * profile as its HTML document. Returns null for non-server-fn URLs or on any
+ * parse miss, so callers fall back to URL-based detection (never worse than the
+ * pre-existing behavior).
+ *
+ * The payload is TanStack's serialized envelope; rather than depend on its
+ * exact shape, we walk the parsed JSON for the first arg-value string that
+ * looks like a route path. `loadCmsPage` encodes exactly one such string.
+ */
+export function serverFnPagePath(url: URL): string | null {
+  if (
+    !url.pathname.startsWith("/_serverFn/") &&
+    !url.pathname.startsWith("/_server/")
+  ) {
+    return null;
+  }
+  const payload = url.searchParams.get("payload");
+  if (!payload) return null;
+  try {
+    let found: string | null = null;
+    const visit = (v: unknown): void => {
+      if (found !== null) return;
+      if (typeof v === "string") {
+        if (v.startsWith("/") && !v.startsWith("//")) found = v;
+        return;
+      }
+      if (Array.isArray(v)) {
+        for (const x of v) visit(x);
+        return;
+      }
+      if (v && typeof v === "object") {
+        for (const x of Object.values(v)) visit(x);
+      }
+    };
+    visit(JSON.parse(payload));
+    return found;
+  } catch {
+    return null;
+  }
+}

@@ -36,6 +36,7 @@ import {
   detectCacheProfile,
   edgeCacheConfig,
   getCacheProfile,
+  serverFnPagePath,
 } from "./cacheHeaders";
 import { buildHtmlShell } from "./htmlShell";
 import { ensureBlocksHydrated, maybePollRevision } from "./kvHydration";
@@ -772,11 +773,20 @@ export function createDecoWorkerEntry(
   }
 
   function getProfile(url: URL): CacheProfileName {
+    // For TanStack GET server-fn requests, resolve the page path embedded in
+    // the payload so the data request inherits the PAGE's profile (product /
+    // search / static) instead of the generic "listing" derived from the
+    // `/_serverFn/...` pathname. This is what makes SPA-navigation data
+    // requests cache as long as their HTML documents (e.g. PDP 5min) and hit
+    // the edge like full reloads do. Falls back to the request URL when no
+    // embedded path is found.
+    const pagePath = serverFnPagePath(url);
+    const target = pagePath ? new URL(pagePath, url.origin) : url;
     if (customDetect) {
-      const custom = customDetect(url);
+      const custom = customDetect(target);
       if (custom !== null) return custom;
     }
-    return detectCacheProfile(url);
+    return detectCacheProfile(target);
   }
 
   function hashSegment(seg: SegmentKey): string {
