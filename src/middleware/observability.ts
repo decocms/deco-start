@@ -260,9 +260,10 @@ export const MetricNames = {
   HTTP_SERVER_REQUEST_DURATION: METRIC_HTTP_SERVER_REQUEST_DURATION,
   HTTP_CLIENT_REQUEST_DURATION: METRIC_HTTP_CLIENT_REQUEST_DURATION,
   // Deco extensions — no canonical OTel metric exists for these concepts.
-  // Single cache counter dimensioned by `deco.cache.result` (unified with the
-  // deco-cx/deco framework — avoids a hits/misses name collision).
-  CACHE_LOOKUPS: "deco.cache.lookups",
+  // Single cache counter dimensioned by `deco.cache.status` — follows the OTel
+  // semconv pattern (cf. nfs.server.repcache.requests + .status). deco-cx/deco
+  // uses the same name so both frameworks aggregate together.
+  CACHE_REQUESTS: "deco.cache.requests",
   RESOLVE_DURATION: "deco.cms.resolve.duration",
   LOADER_DURATION: "deco.loader.duration",
   LOADER_ERRORS: "deco.loader.errors",
@@ -286,8 +287,8 @@ export const METRIC_METADATA: Record<string, { description: string; unit: string
     description: "Duration of outbound HTTP client requests (commerce, generic fetch).",
     unit: "s",
   },
-  [MetricNames.CACHE_LOOKUPS]: {
-    description: "Cache lookups, dimensioned by deco.cache.result (hit/stale/miss/bypass).",
+  [MetricNames.CACHE_REQUESTS]: {
+    description: "Cache lookups, dimensioned by deco.cache.status (hit/stale/miss/bypass).",
     unit: "{request}",
   },
   [MetricNames.RESOLVE_DURATION]: {
@@ -486,23 +487,23 @@ export function recordCacheMetric(
   // meter is a no-op (e.g. on tests, or in dev without DECO_METRICS).
   const active = getActiveSpan();
   if (active) {
-    if (decision) active.setAttribute?.("deco.cache.decision", decision);
+    if (decision) active.setAttribute?.("deco.cache.status", decision);
     if (profile) active.setAttribute?.("deco.cache.profile", profile);
     if (layer) active.setAttribute?.("deco.cache.layer", layer);
   }
 
   const m = getState().meter;
   if (!m) return;
-  // Single counter dimensioned by deco.cache.result — unified with the
-  // deco-cx/deco framework (no hits/misses name collision). result is the
-  // decision when known (HIT/STALE-HIT/STALE-ERROR/MISS/BYPASS), else the
-  // hit boolean. Keys are dotted deco.* to match the span attributes.
+  // Single counter dimensioned by deco.cache.status — unified with deco-cx/deco
+  // (follows the semconv nfs.server.repcache.requests + .status pattern). status
+  // is the decision when known (HIT/STALE-HIT/STALE-ERROR/MISS/BYPASS), else the
+  // hit boolean. Same key on span + metric.
   const labels: Labels = {
-    "deco.cache.result": decision ?? (hit ? "HIT" : "MISS"),
+    "deco.cache.status": decision ?? (hit ? "HIT" : "MISS"),
   };
   if (profile) labels["deco.cache.profile"] = profile;
   if (layer) labels["deco.cache.layer"] = layer;
-  m.counterInc(MetricNames.CACHE_LOOKUPS, 1, labels);
+  m.counterInc(MetricNames.CACHE_REQUESTS, 1, labels);
 }
 
 /**

@@ -154,22 +154,22 @@ describe("recordCacheMetric — cache_layer label", () => {
     recordCacheMetric(true, "product", "HIT", "edge");
 
     expect(counters).toHaveLength(1);
-    expect(counters[0]?.name).toBe(MetricNames.CACHE_LOOKUPS);
+    expect(counters[0]?.name).toBe(MetricNames.CACHE_REQUESTS);
     expect(counters[0]?.labels).toMatchObject({
       "deco.cache.profile": "product",
-      "deco.cache.result": "HIT",
+      "deco.cache.status": "HIT",
       "deco.cache.layer": "edge",
     });
   });
 
-  it("records result=MISS when hit=false", () => {
+  it("records status=MISS when hit=false", () => {
     const { adapter, counters } = captureMeter();
     configureMeter(adapter);
 
     recordCacheMetric(false, "search", "MISS", "edge");
 
-    expect(counters[0]?.name).toBe(MetricNames.CACHE_LOOKUPS);
-    expect(counters[0]?.labels?.["deco.cache.result"]).toBe("MISS");
+    expect(counters[0]?.name).toBe(MetricNames.CACHE_REQUESTS);
+    expect(counters[0]?.labels?.["deco.cache.status"]).toBe("MISS");
   });
 
   it("supports the legacy 3-arg signature for backward compat", () => {
@@ -179,7 +179,7 @@ describe("recordCacheMetric — cache_layer label", () => {
     recordCacheMetric(true, "static");
 
     expect(counters[0]?.labels).toEqual({
-      "deco.cache.result": "HIT",
+      "deco.cache.status": "HIT",
       "deco.cache.profile": "static",
     });
   });
