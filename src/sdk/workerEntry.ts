@@ -1228,16 +1228,50 @@ export function createDecoWorkerEntry(
               ? await appMw(request, () => handleRequest(request, env, ctx))
               : await handleRequest(request, env, ctx);
 
-            // logRequest must run inside the span so getSpan() returns the
-            // active root span and the trace-sampling gate in otelHttpLog.ts
-            // (traceFlags & 0x01) correctly reflects whether this trace was
-            // sampled. Outside the span getSpan() is null → gate always drops
-            // INFO logs even at 100% sampling rate.
+            // Access log — always emit for 5xx (ERROR level); sample INFO
+            // access logs via DECO_OTEL_ACCESS_LOG_RATE (float 0–1, default
+            // 1.0 = 100%). Set to 0 to silence INFO access logs entirely.
             try {
-              logRequest(request, innerResponse.status, performance.now() - startedAt, {
-                ...(identity.requestId ? { "request.id": identity.requestId } : {}),
-                ...(identity.traceId ? { "trace.id": identity.traceId } : {}),
-              });
+              const status = innerResponse.status;
+              let shouldLog = status >= 500; // errors always logged
+              if (!shouldLog) {
+                const rateRaw = (env as Record<string, unknown>)
+                  .DECO_OTEL_ACCESS_LOG_RATE;
+                const rate =
+                  typeof rateRaw === "string" ? parseFloat(rateRaw) : 1.0;
+                if (rate >= 1.0) {
+                  shouldLog = true;
+                } else if (rate > 0) {
+                  // FNV-1a 32-bit on requestId/traceId for consistent
+                  // per-request sampling (same request always same decision).
+                  const key = identity.requestId || identity.traceId;
+                  if (key) {
+                    let h = 2166136261;
+                    for (let i = 0; i < key.length; i++) {
+                      h ^= key.charCodeAt(i);
+                      h = Math.imul(h, 16777619);
+                    }
+                    shouldLog = (h >>> 0) / 4294967295 < rate;
+                  } else {
+                    shouldLog = Math.random() < rate;
+                  }
+                }
+              }
+              if (shouldLog) {
+                logRequest(
+                  request,
+                  innerResponse.status,
+                  performance.now() - startedAt,
+                  {
+                    ...(identity.requestId
+                      ? { "request.id": identity.requestId }
+                      : {}),
+                    ...(identity.traceId
+                      ? { "trace.id": identity.traceId }
+                      : {}),
+                  },
+                );
+              }
             } catch {
               /* swallow — observability must never fail the request */
             }
@@ -1313,8 +1347,8 @@ export function createDecoWorkerEntry(
         // NOTE: `request.id` and `trace.id` are intentionally NOT stamped
         // on the metric. They are per-request identifiers and would
         // collapse aggregation (every request → its own histogram data
-        // point). They are stamped on the span (see line 1129) and on
-        // the access log (see logRequest call below); use those for
+        // point). They are stamped on the span and the access log
+        // (logRequest inside withTracing above); use those for
         // request-level correlation.
         recordRequestMetric(method, reqUrl.pathname, finalResponse.status, durationMs, {
           ...(cacheDecision ? { cache_decision: cacheDecision } : {}),
