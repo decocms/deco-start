@@ -31,7 +31,7 @@
  * export default defineConfig({ plugins: [decoVitePlugin(), ...] });
  * ```
  */
-import { execFileSync } from "node:child_process";
+import { exec, execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -322,6 +322,75 @@ export function decoVitePlugin() {
             console.warn("[deco] blocks bootstrap failed:", err?.message ?? err);
           });
       }
+
+      // --- meta.gen.json auto-regeneration ---
+      // When section/loader/app source files change (types, JSDoc, Props),
+      // re-run generate-schema.ts so meta.gen.json stays in sync during dev.
+      const schemaWatchDirs = ["src"];
+      const schemaOutFile = path.resolve(cwd, "src/server/admin/meta.gen.json");
+
+      // Resolve the site name once from vite define or env.
+      const definedSite = server.config.define?.["process.env.DECO_SITE_NAME"];
+      const schemaSiteName = definedSite
+        ? JSON.parse(definedSite)
+        : process.env.DECO_SITE_NAME || "storefront";
+
+      let schemaTimer = null;
+      let schemaInFlight = false;
+      let schemaQueued = false;
+      const runSchemaGen = () => {
+        if (schemaInFlight) {
+          schemaQueued = true;
+          return;
+        }
+        schemaInFlight = true;
+        const start = Date.now();
+        const scriptPath = path.resolve(
+          cwd,
+          "node_modules/@decocms/start/scripts/generate-schema.ts",
+        );
+        const cmd = `npx tsx ${JSON.stringify(scriptPath)} --site ${schemaSiteName}`;
+        exec(cmd, { cwd }, (err) => {
+            schemaInFlight = false;
+            if (err) {
+              console.warn("[deco] schema generation failed:", err.message);
+            } else {
+              console.log(`[deco] meta.gen.json updated (${Date.now() - start}ms)`);
+              // Invalidate the meta.gen.json module so SSR picks up fresh schema
+              const mod =
+                server.environments?.ssr?.moduleGraph?.getModuleById(schemaOutFile);
+              if (mod) {
+                server.environments.ssr.moduleGraph.invalidateModule(mod);
+              }
+            }
+            if (schemaQueued) {
+              schemaQueued = false;
+              scheduleSchemaGen();
+            }
+          },
+        );
+      };
+      const scheduleSchemaGen = () => {
+        if (schemaTimer) clearTimeout(schemaTimer);
+        schemaTimer = setTimeout(() => {
+          schemaTimer = null;
+          runSchemaGen();
+        }, 500);
+      };
+
+      const isSchemaSource = (file) => {
+        const rel = path.relative(cwd, file);
+        return (
+          schemaWatchDirs.some((d) => rel.startsWith(d + path.sep)) &&
+          (rel.endsWith(".tsx") || rel.endsWith(".ts"))
+        );
+      };
+      server.watcher.on("change", (file) => {
+        if (isSchemaSource(file)) scheduleSchemaGen();
+      });
+      server.watcher.on("add", (file) => {
+        if (isSchemaSource(file)) scheduleSchemaGen();
+      });
 
       // Tunnel + daemon: connect local dev to admin.deco.cx
       // Activated only when both DECO_SITE_NAME and DECO_ENV_NAME are set.
