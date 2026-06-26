@@ -43,6 +43,7 @@ import { buildHtmlShell } from "./htmlShell";
 import { ensureBlocksHydrated, maybePollRevision } from "./kvHydration";
 import {
   getActiveSpan,
+  logRequest,
   recordCacheMetric,
   recordRequestMetric,
   setSpanAttribute,
@@ -1226,6 +1227,19 @@ export function createDecoWorkerEntry(
             const innerResponse = appMw
               ? await appMw(request, () => handleRequest(request, env, ctx))
               : await handleRequest(request, env, ctx);
+
+            // Access log at debug — no-op in prod (default warn minLevel),
+            // visible in dev with DECO_OTEL_LOGS_MIN_LEVEL=debug.
+            // Must run inside the span so getSpan() returns the active root
+            // span and trace_id is stamped on the log record.
+            try {
+              logRequest(request, innerResponse.status, performance.now() - startedAt, {
+                ...(identity.requestId ? { "request.id": identity.requestId } : {}),
+                ...(identity.traceId ? { "trace.id": identity.traceId } : {}),
+              });
+            } catch {
+              /* swallow — observability must never fail the request */
+            }
 
             return innerResponse;
           },

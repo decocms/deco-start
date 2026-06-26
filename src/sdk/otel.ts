@@ -207,7 +207,7 @@ export interface OtelOptions {
    * errors are frequent. Uses the same FNV-1a hash as head sampling.
    *
    * Precedence: env var (`otlpTracesErrorPromotionRateEnvVar`, default
-   * `DECO_OTEL_ERROR_PROMOTION_RATE`) > this option > `1.0`.
+   * `DECO_OTEL_ERROR_PROMOTION_RATE`) > this option > `0.1`.
    */
   otlpTracesErrorPromotionRate?: number;
   /**
