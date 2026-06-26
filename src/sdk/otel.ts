@@ -680,7 +680,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
   const otlpLogsMinLevel: LogLevel =
     (validLogLevels as readonly string[]).includes(otlpLogsMinLevelFromEnv)
       ? (otlpLogsMinLevelFromEnv as LogLevel)
-      : opts.otlpLogsMinLevel ?? "info";
+      : opts.otlpLogsMinLevel ?? "warn";
   const errorPromotionEnvVar =
     opts.otlpTracesErrorPromotionEnvVar ?? "DECO_OTEL_ERROR_PROMOTION";
   const errorPromotionEnabled =

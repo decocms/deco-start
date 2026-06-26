@@ -147,7 +147,7 @@ export function createOtlpHttpLogAdapter(options: OtlpHttpLogOptions): OtlpHttpL
   const flushTimeoutMs = options.flushTimeoutMs ?? 5000;
   const burstCapacity = options.rateLimitBurstCapacity ?? 500;
   const refillPerMinute = options.rateLimitRefillPerMinute ?? 1000;
-  const minSeverity = SEVERITY_NUMBER[options.minLevel ?? "warn"];
+  const minSeverity = SEVERITY_NUMBER[options.minLevel ?? "error"];
   const fetchImpl = options.fetchImpl ?? fetch;
   const now = options.nowMs ?? (() => Date.now());
   const onError = options.onError;
