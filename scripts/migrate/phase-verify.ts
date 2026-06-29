@@ -17,7 +17,6 @@ const REQUIRED_FILES = [
   // Workers Builds (D6.3) -- configured in the CF dashboard, not via
   // GitHub workflow files in the site repo.
   ".github/workflows/regen-blocks.yml",
-  ".github/workflows/lockfile-check.yml",
   "knip.config.ts",
   ".prettierrc",
   "src/server.ts",
