@@ -409,6 +409,7 @@ const SKIP_RESOLVE_TYPES = new Set([
   "htmx/sections/htmx.tsx",
   "website/sections/Analytics/Analytics.tsx",
   "algolia/sections/Analytics/Algolia.tsx",
+  "vtex/sections/Analytics/Vtex.tsx",
   "shopify/loaders/proxy.ts",
   "vtex/loaders/proxy.ts",
   "website/loaders/pages.ts",
