@@ -34,6 +34,9 @@
 
 import * as asyncHooks from "node:async_hooks";
 import {
+  ATTR_HTTP_REQUEST_METHOD,
+  ATTR_HTTP_RESPONSE_STATUS_CODE,
+  ATTR_HTTP_ROUTE,
   METRIC_HTTP_CLIENT_REQUEST_DURATION,
   METRIC_HTTP_SERVER_REQUEST_DURATION,
 } from "@opentelemetry/semantic-conventions";
@@ -257,8 +260,10 @@ export const MetricNames = {
   HTTP_SERVER_REQUEST_DURATION: METRIC_HTTP_SERVER_REQUEST_DURATION,
   HTTP_CLIENT_REQUEST_DURATION: METRIC_HTTP_CLIENT_REQUEST_DURATION,
   // Deco extensions — no canonical OTel metric exists for these concepts.
-  CACHE_HIT: "deco.cache.hits",
-  CACHE_MISS: "deco.cache.misses",
+  // Single cache counter dimensioned by `deco.cache.status` — follows the OTel
+  // semconv pattern (cf. nfs.server.repcache.requests + .status). deco-cx/deco
+  // uses the same name so both frameworks aggregate together.
+  CACHE_REQUESTS: "deco.cache.requests",
   RESOLVE_DURATION: "deco.cms.resolve.duration",
   LOADER_DURATION: "deco.loader.duration",
   LOADER_ERRORS: "deco.loader.errors",
@@ -266,11 +271,9 @@ export const MetricNames = {
 
 /**
  * Per-metric metadata emitted in the OTLP payload's `description` and
- * `unit` fields. The framework declares units honestly — durations are in
- * `ms` because that's what `recordRequestMetric`-style callers pass. If a
- * downstream consumer needs canonical OTel seconds for
- * `http.server.request.duration`, conversion happens in the collector or
- * the query layer, NOT in this framework.
+ * `unit` fields. Durations are normalized to **seconds at the source** (OTel
+ * semconv), matching the deco-cx/deco framework — NOT converted downstream in
+ * the collector. Callers still pass milliseconds; the record helpers divide.
  *
  * Keep keys aligned with `MetricNames` values so a missing entry is a
  * type error at compile time when a new metric ships without metadata.
@@ -278,27 +281,23 @@ export const MetricNames = {
 export const METRIC_METADATA: Record<string, { description: string; unit: string }> = {
   [MetricNames.HTTP_SERVER_REQUEST_DURATION]: {
     description: "Duration of HTTP server requests handled at the Worker entry point.",
-    unit: "ms",
+    unit: "s",
   },
   [MetricNames.HTTP_CLIENT_REQUEST_DURATION]: {
     description: "Duration of outbound HTTP client requests (commerce, generic fetch).",
-    unit: "ms",
+    unit: "s",
   },
-  [MetricNames.CACHE_HIT]: {
-    description: "Cache lookups resulting in HIT, STALE-HIT, or STALE-ERROR.",
-    unit: "{request}",
-  },
-  [MetricNames.CACHE_MISS]: {
-    description: "Cache lookups resulting in MISS or BYPASS.",
+  [MetricNames.CACHE_REQUESTS]: {
+    description: "Cache lookups, dimensioned by deco.cache.status (hit/stale/miss/bypass).",
     unit: "{request}",
   },
   [MetricNames.RESOLVE_DURATION]: {
     description: "Duration of `deco.cms.resolvePage` — CMS route to block tree resolution.",
-    unit: "ms",
+    unit: "s",
   },
   [MetricNames.LOADER_DURATION]: {
     description: "Per-loader execution duration, emitted by cachedLoader.",
-    unit: "ms",
+    unit: "s",
   },
   [MetricNames.LOADER_ERRORS]: {
     description: "Per-loader error count.",
@@ -403,16 +402,19 @@ export function recordRequestMetric(
   // Total combinations are bounded — safe for unbounded series on
   // ClickHouse but operators should still avoid grouping by `region`
   // unless explicitly needed.
+  // semconv attribute keys for the core HTTP dimensions; deco.* for the
+  // proprietary extras. Unified with deco-cx/deco so both frameworks land on
+  // the same series/labels in ClickHouse.
   const merged: Labels = {
-    method,
-    route_pattern: labels?.route_pattern ?? normalizePath(path),
-    status,
-    status_class: statusClassFor(status),
+    [ATTR_HTTP_REQUEST_METHOD]: method,
+    [ATTR_HTTP_ROUTE]: labels?.route_pattern ?? normalizePath(path),
+    [ATTR_HTTP_RESPONSE_STATUS_CODE]: status,
+    "deco.http.status_class": statusClassFor(status),
   };
-  if (labels?.outcome) merged.outcome = labels.outcome;
-  if (labels?.cache_decision) merged.cache_decision = labels.cache_decision;
-  if (labels?.cache_layer) merged.cache_layer = labels.cache_layer;
-  if (labels?.region) merged.region = labels.region;
+  if (labels?.outcome) merged["deco.http.outcome"] = labels.outcome;
+  if (labels?.cache_decision) merged["deco.cache.decision"] = labels.cache_decision;
+  if (labels?.cache_layer) merged["deco.cache.layer"] = labels.cache_layer;
+  if (labels?.region) merged["deco.http.region"] = labels.region;
   if (labels?.extra) {
     for (const [k, v] of Object.entries(labels.extra)) {
       // Defense-in-depth — refuse to stamp known per-request identifiers
@@ -430,7 +432,12 @@ export function recordRequestMetric(
   // filtering on `http.response.status_code`. Separate `_total` /
   // `_errors_total` counters were removed because they duplicate
   // histogram-derived signals and aren't part of the canonical spec.
-  m.histogramRecord?.(MetricNames.HTTP_SERVER_REQUEST_DURATION, durationMs, merged);
+  // Record in seconds (semconv) — caller passes ms.
+  m.histogramRecord?.(
+    MetricNames.HTTP_SERVER_REQUEST_DURATION,
+    durationMs / 1000,
+    merged,
+  );
 }
 
 /**
@@ -480,22 +487,23 @@ export function recordCacheMetric(
   // meter is a no-op (e.g. on tests, or in dev without DECO_METRICS).
   const active = getActiveSpan();
   if (active) {
-    if (decision) active.setAttribute?.("deco.cache.decision", decision);
+    if (decision) active.setAttribute?.("deco.cache.status", decision);
     if (profile) active.setAttribute?.("deco.cache.profile", profile);
     if (layer) active.setAttribute?.("deco.cache.layer", layer);
   }
 
   const m = getState().meter;
   if (!m) return;
-  // Label names mirror the dotted span attributes `deco.cache.decision`,
-  // `deco.cache.profile`, `deco.cache.layer` (see model/registry/deco.yaml +
-  // model/metrics.yaml). Prometheus convention requires snake_case without
-  // dots — so `cache_decision` / `cache_layer` (not `decision` / `layer`).
-  const labels: Labels = {};
-  if (profile) labels.profile = profile;
-  if (decision) labels.cache_decision = decision;
-  if (layer) labels.cache_layer = layer;
-  m.counterInc(hit ? MetricNames.CACHE_HIT : MetricNames.CACHE_MISS, 1, labels);
+  // Single counter dimensioned by deco.cache.status — unified with deco-cx/deco
+  // (follows the semconv nfs.server.repcache.requests + .status pattern). status
+  // is the decision when known (HIT/STALE-HIT/STALE-ERROR/MISS/BYPASS), else the
+  // hit boolean. Same key on span + metric.
+  const labels: Labels = {
+    "deco.cache.status": decision ?? (hit ? "HIT" : "MISS"),
+  };
+  if (profile) labels["deco.cache.profile"] = profile;
+  if (layer) labels["deco.cache.layer"] = layer;
+  m.counterInc(MetricNames.CACHE_REQUESTS, 1, labels);
 }
 
 /**
@@ -535,7 +543,12 @@ export function recordCommerceMetric(
   // Canonical OTel HTTP client metric — outbound commerce calls share the
   // same metric as any other outbound HTTP request; `peer.service` /
   // `commerce.operation` attributes disambiguate consumer queries.
-  m.histogramRecord?.(MetricNames.HTTP_CLIENT_REQUEST_DURATION, durationMs, merged);
+  // Record in seconds (semconv) — caller passes ms.
+  m.histogramRecord?.(
+    MetricNames.HTTP_CLIENT_REQUEST_DURATION,
+    durationMs / 1000,
+    merged,
+  );
 }
 
 /**
@@ -551,9 +564,10 @@ export function recordLoaderMetric(
 ) {
   const m = getState().meter;
   if (!m) return;
-  m.histogramRecord?.(MetricNames.LOADER_DURATION, durationMs, {
-    loader: name,
-    cache_status: cacheStatus,
+  // Record in seconds (semconv) — caller passes ms.
+  m.histogramRecord?.(MetricNames.LOADER_DURATION, durationMs / 1000, {
+    "deco.loader.name": name,
+    "deco.cache.result": cacheStatus,
   });
 }
 
@@ -564,7 +578,7 @@ export function recordLoaderMetric(
 export function recordLoaderError(name: string) {
   const m = getState().meter;
   if (!m) return;
-  m.counterInc(MetricNames.LOADER_ERRORS, 1, { loader: name });
+  m.counterInc(MetricNames.LOADER_ERRORS, 1, { "deco.loader.name": name });
 }
 
 function normalizePath(path: string): string {

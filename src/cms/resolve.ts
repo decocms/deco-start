@@ -1619,10 +1619,11 @@ export async function resolveDecoPage(
     async () => {
       const result = await resolveDecoPageImpl(targetPath, matcherCtx);
       try {
+        // Record in seconds (semconv); key matches the span's deco.route attr.
         getMeter()?.histogramRecord?.(
           MetricNames.RESOLVE_DURATION,
-          performance.now() - startedAt,
-          { path: targetPath },
+          (performance.now() - startedAt) / 1000,
+          { "deco.route": targetPath },
         );
       } catch {
         /* observability never fails the request */

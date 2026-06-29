@@ -81,13 +81,13 @@ describe("recordRequestMetric — canonical labels (D-11)", () => {
     expect(counters).toHaveLength(0);
     expect(histograms).toHaveLength(1);
     expect(histograms[0]?.name).toBe(MetricNames.HTTP_SERVER_REQUEST_DURATION);
-    expect(histograms[0]?.value).toBe(42);
+    expect(histograms[0]?.value).toBe(0.042); // seconds (semconv)
     expect(histograms[0]?.labels).toMatchObject({
-      method: "GET",
+      "http.request.method": "GET",
       // Default normalization: dynamic segments collapsed.
-      route_pattern: "/products/:slug/p",
-      status: 200,
-      status_class: "2xx",
+      "http.route": "/products/:slug/p",
+      "http.response.status_code": 200,
+      "deco.http.status_class": "2xx",
     });
   });
 
@@ -99,7 +99,7 @@ describe("recordRequestMetric — canonical labels (D-11)", () => {
       route_pattern: "/_products/$slug/p",
     });
 
-    expect(histograms[0]?.labels?.route_pattern).toBe("/_products/$slug/p");
+    expect(histograms[0]?.labels?.["http.route"]).toBe("/_products/$slug/p");
   });
 
   it("tags 5xx requests with status_class=5xx for downstream error filtering", () => {
@@ -108,8 +108,8 @@ describe("recordRequestMetric — canonical labels (D-11)", () => {
 
     recordRequestMetric("POST", "/checkout", 503, 120);
 
-    expect(histograms[0]?.labels?.status_class).toBe("5xx");
-    expect(histograms[0]?.labels?.status).toBe(503);
+    expect(histograms[0]?.labels?.["deco.http.status_class"]).toBe("5xx");
+    expect(histograms[0]?.labels?.["http.response.status_code"]).toBe(503);
   });
 
   it("propagates optional labels (outcome, cache_decision, cache_layer, region, extra)", () => {
@@ -125,10 +125,10 @@ describe("recordRequestMetric — canonical labels (D-11)", () => {
     });
 
     expect(histograms[0]?.labels).toMatchObject({
-      outcome: "ok",
-      cache_decision: "STALE-HIT",
-      cache_layer: "edge",
-      region: "GRU",
+      "deco.http.outcome": "ok",
+      "deco.cache.decision": "STALE-HIT",
+      "deco.cache.layer": "edge",
+      "deco.http.region": "GRU",
       ab_variant: "B",
     });
   });
@@ -154,21 +154,22 @@ describe("recordCacheMetric — cache_layer label", () => {
     recordCacheMetric(true, "product", "HIT", "edge");
 
     expect(counters).toHaveLength(1);
-    expect(counters[0]?.name).toBe(MetricNames.CACHE_HIT);
+    expect(counters[0]?.name).toBe(MetricNames.CACHE_REQUESTS);
     expect(counters[0]?.labels).toMatchObject({
-      profile: "product",
-      cache_decision: "HIT",
-      cache_layer: "edge",
+      "deco.cache.profile": "product",
+      "deco.cache.status": "HIT",
+      "deco.cache.layer": "edge",
     });
   });
 
-  it("emits cache_miss_total when hit=false", () => {
+  it("records status=MISS when hit=false", () => {
     const { adapter, counters } = captureMeter();
     configureMeter(adapter);
 
     recordCacheMetric(false, "search", "MISS", "edge");
 
-    expect(counters[0]?.name).toBe(MetricNames.CACHE_MISS);
+    expect(counters[0]?.name).toBe(MetricNames.CACHE_REQUESTS);
+    expect(counters[0]?.labels?.["deco.cache.status"]).toBe("MISS");
   });
 
   it("supports the legacy 3-arg signature for backward compat", () => {
@@ -177,7 +178,10 @@ describe("recordCacheMetric — cache_layer label", () => {
 
     recordCacheMetric(true, "static");
 
-    expect(counters[0]?.labels).toEqual({ profile: "static" });
+    expect(counters[0]?.labels).toEqual({
+      "deco.cache.status": "HIT",
+      "deco.cache.profile": "static",
+    });
   });
 
   it("distinguishes cachedLoader vs edge vs vtex-swr layers", () => {
@@ -187,8 +191,8 @@ describe("recordCacheMetric — cache_layer label", () => {
     recordCacheMetric(true, "loader-x", "HIT", "cachedLoader");
     recordCacheMetric(true, "vtex-product", "HIT", "vtex-swr");
 
-    expect(counters[0]?.labels?.cache_layer).toBe("cachedLoader");
-    expect(counters[1]?.labels?.cache_layer).toBe("vtex-swr");
+    expect(counters[0]?.labels?.["deco.cache.layer"]).toBe("cachedLoader");
+    expect(counters[1]?.labels?.["deco.cache.layer"]).toBe("vtex-swr");
   });
 });
 
@@ -209,7 +213,7 @@ describe("recordCommerceMetric (D-11)", () => {
 
     expect(histograms).toHaveLength(1);
     expect(histograms[0]?.name).toBe(MetricNames.HTTP_CLIENT_REQUEST_DURATION);
-    expect(histograms[0]?.value).toBe(123);
+    expect(histograms[0]?.value).toBe(0.123); // seconds (semconv)
     expect(histograms[0]?.labels).toMatchObject({
       provider: "vtex",
       operation: "intelligent-search.product_search",
