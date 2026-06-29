@@ -11,6 +11,7 @@ import {
 import { runSingleSectionLoader } from "../cms/sectionLoaders";
 import { buildHtmlShell } from "../sdk/htmlShell";
 import { LIVE_CONTROLS_SCRIPT } from "./liveControls";
+import { parsePropsParam } from "./propsParam";
 import { getPreviewWrapper } from "./setup";
 
 export { setRenderShell, setPreviewWrapper } from "./setup";
@@ -188,15 +189,11 @@ export async function handleRender(request: Request): Promise<Response> {
   }
 
   if (propsParam && Object.keys(props).length === 0) {
-    try {
-      props = JSON.parse(decodeURIComponent(propsParam));
-    } catch {
-      // Try base64-encoded props (admin uses btoa(encodeURIComponent(json)))
-      try {
-        props = JSON.parse(decodeURIComponent(atob(propsParam)));
-      } catch {
-        // props parsing failed
-      }
+    const parsed = parsePropsParam(propsParam);
+    if (parsed) {
+      props = parsed;
+    } else {
+      console.warn("[render] could not parse `props` query param");
     }
   }
 

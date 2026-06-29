@@ -14,6 +14,7 @@
  */
 
 import { RequestContext } from "../sdk/requestContext";
+import { parsePropsParam } from "./propsParam";
 
 export type InvokeLoader = (props: any, request: Request) => Promise<any>;
 export type InvokeAction = (props: any, request: Request) => Promise<any>;
@@ -147,14 +148,7 @@ async function parseBody(request: Request): Promise<any> {
   if (request.method === "GET") {
     const url = new URL(request.url);
     const propsParam = url.searchParams.get("props");
-    if (propsParam) {
-      try {
-        return JSON.parse(decodeURIComponent(propsParam));
-      } catch {
-        return {};
-      }
-    }
-    return {};
+    return (propsParam && parsePropsParam(propsParam)) || {};
   }
 
   // JSON (default for POST)
