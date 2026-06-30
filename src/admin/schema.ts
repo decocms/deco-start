@@ -502,7 +502,7 @@ function buildMatcherDefinitions() {
   for (const matcher of matcherRegistry) {
     const defKey = toBase64(matcher.key);
     definitions[defKey] = {
-      title: matcher.key,
+      title: matcher.title,
       ...(matcher.description ? { description: matcher.description } : {}),
       ...(matcher.icon ? { icon: matcher.icon } : {}),
       type: "object",
