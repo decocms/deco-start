@@ -128,13 +128,12 @@ export interface OtelOptions {
   /** Set to `false` to disable the OTLP/HTTP logs exporter explicitly. */
   otlpLogsEnabled?: boolean;
   /**
-   * Minimum log level forwarded via direct-POST. Defaults to `"warn"` —
-   * errors and warnings travel at 100% capture; debug/info are dropped.
-   * Set to `"info"` to include informational logs, or `"debug"` to capture
-   * everything (preview / local-dev only — can be high volume).
+   * Minimum log level forwarded via direct-POST. Defaults to `"info"` per
+   * the OpenTelemetry specification. Set to `"warn"` to forward only errors
+   * and warnings, or `"debug"` to capture everything (can be high volume).
    *
    * Precedence: env var (`otlpLogsMinLevelEnvVar`, default
-   * `DECO_OTEL_LOGS_MIN_LEVEL`) > this option > `"warn"`. Invalid env
+   * `DECO_OTEL_LOGS_MIN_LEVEL`) > this option > `"info"`. Invalid env
    * values fall through silently.
    */
   otlpLogsMinLevel?: LogLevel;
@@ -702,9 +701,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
   const otlpLogsEndpoint = (env[otlpLogsEnvVar] as string | undefined) ?? "";
   const otlpLogsEnabled =
     opts.otlpLogsEnabled !== false && otlpLogsEndpoint.length > 0;
-  // Minimum log level precedence: env var > options > "warn" default.
-  // "warn" ships errors + warnings at 100%; info/debug are dropped unless
-  // explicitly opted in via DECO_OTEL_LOGS_MIN_LEVEL=info.
+  // Minimum log level precedence: env var > options > "info" default (OTel spec).
   // Invalid env values fall through silently.
   const otlpLogsMinLevelEnvVar =
     opts.otlpLogsMinLevelEnvVar ?? "DECO_OTEL_LOGS_MIN_LEVEL";
@@ -715,7 +712,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
   const otlpLogsMinLevel: LogLevel =
     (validLogLevels as readonly string[]).includes(otlpLogsMinLevelFromEnv)
       ? (otlpLogsMinLevelFromEnv as LogLevel)
-      : opts.otlpLogsMinLevel ?? "warn";
+      : opts.otlpLogsMinLevel ?? "info";
   // Sync the logger gate so logger.debug() calls are not silently dropped
   // before reaching the OTLP adapter when minLevel is "debug" or "info".
   setLogLevel(otlpLogsMinLevel);
