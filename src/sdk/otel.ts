@@ -162,6 +162,24 @@ export interface OtelOptions {
    */
   otlpHeadersEnvVar?: string;
   /**
+   * Authorization header value sent on every OTLP POST.
+   * Equivalent to `otlpHeaders: { authorization: "<value>" }` but intended
+   * for secrets: store via `wrangler secret put DECO_OTEL_AUTH_TOKEN` so the
+   * token is never committed to the repo. Non-secret headers go in
+   * `DECO_OTEL_HEADERS` (plaintext in `wrangler.jsonc`).
+   *
+   * Example: `DECO_OTEL_AUTH_TOKEN=Bearer eyJhbGci...`
+   *
+   * Precedence (lowest → highest): auth token env var → `DECO_OTEL_HEADERS`
+   * env var → `otlpHeaders` option. An explicit `authorization` key in
+   * `DECO_OTEL_HEADERS` or `otlpHeaders` overrides this value.
+   */
+  otlpAuthToken?: string;
+  /**
+   * Env var name to read the auth token from. Defaults to `"DECO_OTEL_AUTH_TOKEN"`.
+   */
+  otlpAuthTokenEnvVar?: string;
+  /**
    * Env var name holding the OTLP/HTTP traces endpoint used by the
    * direct-POST span exporter. Defaults to `"DECO_OTEL_TRACES_ENDPOINT"`.
    * When set (and `otlpTracesEnabled !== false`), framework `deco.*`
@@ -710,7 +728,11 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
       parsedEnvHeaders[pair.slice(0, eqIdx).trim()] = pair.slice(eqIdx + 1).trim();
     }
   }
-  const otlpHeaders: Record<string, string> = { ...parsedEnvHeaders, ...(opts.otlpHeaders ?? {}) };
+  const otlpAuthTokenEnvVar = opts.otlpAuthTokenEnvVar ?? "DECO_OTEL_AUTH_TOKEN";
+  const otlpAuthToken = (env[otlpAuthTokenEnvVar] as string | undefined) ?? opts.otlpAuthToken ?? "";
+  const authHeader: Record<string, string> = otlpAuthToken ? { authorization: otlpAuthToken } : {};
+  // Priority: auth token (lowest) → DECO_OTEL_HEADERS env → otlpHeaders option (highest).
+  const otlpHeaders: Record<string, string> = { ...authHeader, ...parsedEnvHeaders, ...(opts.otlpHeaders ?? {}) };
 
   const errorPromotionEnvVar =
     opts.otlpTracesErrorPromotionEnvVar ?? "DECO_OTEL_ERROR_PROMOTION";
