@@ -111,6 +111,9 @@ const EMPTY_ENTRY: CacheEntry = {
  *
  * Exposed as a util so sites can call it directly if they need globals
  * outside the route loader path (rare).
+ *
+ * Called automatically by `loadCmsPage` / `loadCmsHomePage` unless the route
+ * opted out via `cmsRouteConfig({ resolveGlobals: false })` — see #292.
  */
 export async function resolveSiteGlobals(): Promise<{
   resolvedSections: ResolvedSection[];
@@ -170,7 +173,10 @@ export async function resolveSiteGlobals(): Promise<{
  * both in `site.global` and in a page's section list, which would otherwise
  * render twice.
  */
-export function dedupeGlobals(globals: ResolvedSection[], existing: ResolvedSection[]): ResolvedSection[] {
+export function dedupeGlobals(
+  globals: ResolvedSection[],
+  existing: ResolvedSection[],
+): ResolvedSection[] {
   if (globals.length === 0) return [];
   const seenComponents = new Set<string>();
   for (const s of existing) {

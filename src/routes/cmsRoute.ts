@@ -30,6 +30,7 @@ import {
   setResponseHeader,
 } from "@tanstack/react-start/server";
 import { createElement } from "react";
+import { getSiteSeo } from "../cms/loader";
 import { preloadSectionComponents } from "../cms/registry";
 import type { DeferredSection, MatcherContext, PageSeo, ResolvedSection } from "../cms/resolve";
 import {
@@ -41,7 +42,6 @@ import {
   resolveDeferredSection,
   resolveDeferredSectionFull,
 } from "../cms/resolve";
-import { getSiteSeo } from "../cms/loader";
 import { runSectionLoaders, runSingleSectionLoader } from "../cms/sectionLoaders";
 import { withTracing } from "../middleware/observability";
 import {
@@ -53,7 +53,7 @@ import {
 import { normalizeUrlsInObject } from "../sdk/normalizeUrls";
 import { type Device, detectDevice } from "../sdk/useDevice";
 import { derivePageUrl, isClientNavigation } from "./pageUrl";
-import { dedupeGlobals, resolveSiteGlobals } from "./withSiteGlobals";
+import { dedupeGlobals, resolveSiteGlobals, type SiteGlobalRef } from "./withSiteGlobals";
 
 const isServer = typeof document === "undefined";
 
@@ -77,7 +77,12 @@ export function setSectionChunkMap(map: Record<string, string>): void {
 type PageResult = Awaited<ReturnType<typeof loadCmsPageInternal>>;
 const pageInflight = new Map<string, Promise<PageResult>>();
 
-async function loadCmsPageInternal(fullPath: string) {
+// Empty globals result — used when a route opts out of automatic site-globals
+// resolution via `resolveGlobals: false`. Matches the shape of
+// `resolveSiteGlobals()` so the merge path below is identical.
+const EMPTY_GLOBALS = { resolvedSections: [] as ResolvedSection[], rawRefs: [] as SiteGlobalRef[] };
+
+async function loadCmsPageInternal(fullPath: string, resolveGlobals: boolean) {
   const [basePath] = fullPath.split("?");
   // On client-side navigation getRequestUrl() is the /_serverFn/... endpoint,
   // not the page being loaded — derivePageUrl rebuilds the real page URL so
@@ -106,9 +111,13 @@ async function loadCmsPageInternal(fullPath: string) {
   // function is identical for SSR (F5) and SPA (<Link>) navigations — see
   // #233 for the previous SPA-breakage when `withSiteGlobals` ran client-side
   // and saw an empty client-bundled `blocks.gen.ts`.
+  //
+  // `resolveGlobals: false` (set via cmsRouteConfig) opts out entirely —
+  // restores pre-6.7.4 behavior for sites that rely on `:root` CSS fallbacks
+  // and don't want the CMS `Site` block injected (see #292).
   const [enrichedSections, globals] = await Promise.all([
     runSectionLoaders(page.resolvedSections, request),
-    resolveSiteGlobals(),
+    resolveGlobals ? resolveSiteGlobals() : Promise.resolve(EMPTY_GLOBALS),
   ]);
 
   // Page sections take precedence over globals — dedupe drops any global
@@ -147,19 +156,36 @@ async function loadCmsPageInternal(fullPath: string) {
   };
 }
 
+/**
+ * Parse the `loadCmsPage` server-function input. Accepts a bare string (the
+ * page path — back-compat for direct callers, globals enabled) or an object
+ * `{ path, resolveGlobals }`. Globals default ON unless explicitly `false`.
+ * @internal exported for tests.
+ */
+export function parseLoadCmsPageInput(data: unknown): { path: string; resolveGlobals: boolean } {
+  if (typeof data === "string") return { path: data, resolveGlobals: true };
+  const d = (data ?? {}) as { path?: string; resolveGlobals?: boolean };
+  return { path: d.path ?? "/", resolveGlobals: d.resolveGlobals !== false };
+}
+
 export const loadCmsPage = createServerFn({ method: "GET" })
-  .inputValidator((data: unknown) => data as string)
+  .inputValidator(parseLoadCmsPageInput)
   .handler(async (ctx) => {
-    const fullPath = ctx.data;
+    const { path: fullPath, resolveGlobals } = ctx.data;
 
     // Use the full path (including query string) as the dedup key.
     // Using basePath only caused /s?q=a and /s?q=b to share one promise,
     // returning wrong/empty results for search and filtered PLPs.
-    const existing = pageInflight.get(fullPath);
+    // Include resolveGlobals so two routes over the same path with different
+    // opt-out settings don't share a promise.
+    const dedupKey = `${resolveGlobals ? "g" : "n"}:${fullPath}`;
+    const existing = pageInflight.get(dedupKey);
     if (existing) return existing;
 
-    const promise = loadCmsPageInternal(fullPath).finally(() => pageInflight.delete(fullPath));
-    pageInflight.set(fullPath, promise);
+    const promise = loadCmsPageInternal(fullPath, resolveGlobals).finally(() =>
+      pageInflight.delete(dedupKey),
+    );
+    pageInflight.set(dedupKey, promise);
     return promise;
   });
 
@@ -167,49 +193,61 @@ export const loadCmsPage = createServerFn({ method: "GET" })
  * Same as loadCmsPage but hardcoded to "/" path.
  * Avoids passing data through the server function for the homepage.
  */
-export const loadCmsHomePage = createServerFn({ method: "GET" }).handler(async () => {
-  const request = getRequest();
-  const ua = getRequestHeader("user-agent") ?? "";
-  const serverUrl = getRequestUrl();
-  const matcherCtx: MatcherContext = {
-    userAgent: ua,
-    url: serverUrl.toString(),
-    path: "/",
-    cookies: getCookies(),
-    request,
-    isClientNavigation: isClientNavigation("/", serverUrl),
-  };
-  const page = await resolveDecoPage("/", matcherCtx);
-  if (!page) return null;
-  const [enrichedSections, globals] = await Promise.all([
-    runSectionLoaders(page.resolvedSections, request),
-    resolveSiteGlobals(),
-  ]);
+/**
+ * Parse the `loadCmsHomePage` server-function input. Globals default ON unless
+ * explicitly `false`. @internal exported for tests.
+ */
+export function parseLoadCmsHomePageInput(data: unknown): { resolveGlobals: boolean } {
+  const d = (data ?? {}) as { resolveGlobals?: boolean };
+  return { resolveGlobals: d.resolveGlobals !== false };
+}
 
-  const mergedSections: ResolvedSection[] = [
-    ...dedupeGlobals(globals.resolvedSections, enrichedSections),
-    ...enrichedSections,
-  ];
+export const loadCmsHomePage = createServerFn({ method: "GET" })
+  .inputValidator(parseLoadCmsHomePageInput)
+  .handler(async (ctx) => {
+    const { resolveGlobals } = ctx.data;
+    const request = getRequest();
+    const ua = getRequestHeader("user-agent") ?? "";
+    const serverUrl = getRequestUrl();
+    const matcherCtx: MatcherContext = {
+      userAgent: ua,
+      url: serverUrl.toString(),
+      path: "/",
+      cookies: getCookies(),
+      request,
+      isClientNavigation: isClientNavigation("/", serverUrl),
+    };
+    const page = await resolveDecoPage("/", matcherCtx);
+    if (!page) return null;
+    const [enrichedSections, globals] = await Promise.all([
+      runSectionLoaders(page.resolvedSections, request),
+      resolveGlobals ? resolveSiteGlobals() : Promise.resolve(EMPTY_GLOBALS),
+    ]);
 
-  const eagerKeys = mergedSections.map((s) => s.component);
-  await preloadSectionComponents(eagerKeys);
+    const mergedSections: ResolvedSection[] = [
+      ...dedupeGlobals(globals.resolvedSections, enrichedSections),
+      ...enrichedSections,
+    ];
 
-  const device = detectDevice(ua);
-  const seo = await buildPageSeo(page.seoSection, mergedSections, request);
+    const eagerKeys = mergedSections.map((s) => s.component);
+    await preloadSectionComponents(eagerKeys);
 
-  const { seoSection: _seo, ...pageData } = page;
+    const device = detectDevice(ua);
+    const seo = await buildPageSeo(page.seoSection, mergedSections, request);
 
-  return {
-    ...pageData,
-    resolvedSections: normalizeUrlsInObject(mergedSections),
-    deferredSections: normalizeUrlsInObject(page.deferredSections),
-    pagePath: "/",
-    pageUrl: serverUrl.toString(),
-    seo,
-    device,
-    siteGlobals: { rawRefs: globals.rawRefs },
-  };
-});
+    const { seoSection: _seo, ...pageData } = page;
+
+    return {
+      ...pageData,
+      resolvedSections: normalizeUrlsInObject(mergedSections),
+      deferredSections: normalizeUrlsInObject(page.deferredSections),
+      pagePath: "/",
+      pageUrl: serverUrl.toString(),
+      seo,
+      device,
+      siteGlobals: { rawRefs: globals.rawRefs },
+    };
+  });
 
 // ---------------------------------------------------------------------------
 // Deferred section loader — resolves + enriches a single section on demand
@@ -249,14 +287,17 @@ export const loadDeferredSection = createServerFn({ method: "POST" })
     // Resolve rawProps: prefer client-provided (backward compat), then server cache,
     // then re-extract from the page as a last resort (handles cross-isolate cache miss
     // on Cloudflare Workers and TTL expiry for slow-scrolling users).
-    const rawProps = clientRawProps
-      ?? (index !== undefined ? getDeferredRawProps(pagePath, component, index) : null)
-      ?? (index !== undefined
+    const rawProps =
+      clientRawProps ??
+      (index !== undefined ? getDeferredRawProps(pagePath, component, index) : null) ??
+      (index !== undefined
         ? await reExtractRawProps(pagePath, component, index, matcherCtx)
         : null);
 
     if (!rawProps) {
-      console.warn(`[CMS] Deferred section cache miss: ${component} at index ${index} on ${pagePath}`);
+      console.warn(
+        `[CMS] Deferred section cache miss: ${component} at index ${index} on ${pagePath}`,
+      );
       return null;
     }
 
@@ -385,6 +426,17 @@ export interface CmsRouteOptions {
    * - `false`: Everything runs on client only.
    */
   ssr?: boolean | "data-only";
+  /**
+   * Whether to automatically resolve and inject site globals
+   * (the CMS `Site` block: `theme` + `global` + `pageSections`) into every
+   * page's section list. Default `true`.
+   *
+   * Set `false` to opt out — restores pre-6.7.4 behavior where globals were
+   * dormant. Use this when your site relies on `:root` CSS fallbacks (e.g. in
+   * `app.css`) and does NOT want the CMS `Theme`/`Site` sections injected,
+   * which would otherwise override those fallbacks. See #292.
+   */
+  resolveGlobals?: boolean;
 }
 
 type CmsPageLoaderData = {
@@ -589,6 +641,7 @@ export function cmsRouteConfig(options: CmsRouteOptions) {
     pendingMs = 200,
     pendingMinMs = 300,
     ssr: ssrMode,
+    resolveGlobals = true,
   } = options;
 
   const ignoreSet = new Set(ignoreSearchParams);
@@ -597,8 +650,7 @@ export function cmsRouteConfig(options: CmsRouteOptions) {
     // Catch-all search validation: preserve all URL search params so they
     // reach loaderDeps. Without this, TanStack Router may strip unknown
     // params (e.g. ?q=, filter.*, page, sort) during SPA navigation.
-    validateSearch: (search: Record<string, unknown>) =>
-      search as Record<string, string>,
+    validateSearch: (search: Record<string, unknown>) => search as Record<string, string>,
 
     loaderDeps: ({ search }: { search: Record<string, string> }) => {
       const filtered = Object.fromEntries(
@@ -620,7 +672,9 @@ export function cmsRouteConfig(options: CmsRouteOptions) {
       const searchStr = deps.search
         ? "?" + new URLSearchParams(deps.search as Record<string, string>).toString()
         : "";
-      const page = await loadCmsPage({ data: basePath + searchStr });
+      const page = await loadCmsPage({
+        data: { path: basePath + searchStr, resolveGlobals },
+      });
       if (!page) return page;
 
       if (!isServer && page.resolvedSections) {
@@ -677,12 +731,25 @@ export function cmsHomeRouteConfig(options: {
   pendingMs?: number;
   /** Minimum display time (ms) for pending component. Default: 300. */
   pendingMinMs?: number;
+  /**
+   * Whether to automatically resolve and inject site globals (the CMS `Site`
+   * block) into the homepage's section list. Default `true`. Set `false` to
+   * opt out — see `CmsRouteOptions.resolveGlobals` and #292.
+   */
+  resolveGlobals?: boolean;
 }) {
-  const { defaultTitle, defaultDescription, siteName, pendingMs = 200, pendingMinMs = 300 } = options;
+  const {
+    defaultTitle,
+    defaultDescription,
+    siteName,
+    pendingMs = 200,
+    pendingMinMs = 300,
+    resolveGlobals = true,
+  } = options;
 
   return {
     loader: async () => {
-      const page = await loadCmsHomePage();
+      const page = await loadCmsHomePage({ data: { resolveGlobals } });
       if (!page) return page;
 
       if (!isServer && page.resolvedSections) {
