@@ -387,7 +387,13 @@ registerMatcherSchemas([
           },
         },
       };
-      const locationOrMapItem = { anyOf: [locationBranch, mapBranch] };
+      // Mustache title so array items summarise their content instead of
+      // "Item 1". Absent fields render empty; the label is trimmed. Covers both
+      // branches — Location fields and the Map coordinates.
+      const locationOrMapItem = {
+        title: "{{{city}}} {{{regionCode}}} {{{country}}} {{{coordinates}}}",
+        anyOf: [locationBranch, mapBranch],
+      };
       return {
         type: "object" as const,
         properties: {
