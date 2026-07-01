@@ -81,6 +81,11 @@ export interface OtlpHttpLogOptions {
    * Resolved from `DECO_OTEL_LOGS_MIN_LEVEL` in `bootObservability`.
    */
   minLevel?: LogLevel;
+  /**
+   * Extra HTTP headers merged into every OTLP POST (e.g. `Authorization: Bearer …`).
+   * `Content-Type: application/json` is always set and cannot be overridden here.
+   */
+  headers?: Record<string, string>;
   /** Test seam — override fetch. */
   fetchImpl?: typeof fetch;
   /** Test seam — override Date.now(). */
@@ -147,7 +152,8 @@ export function createOtlpHttpLogAdapter(options: OtlpHttpLogOptions): OtlpHttpL
   const flushTimeoutMs = options.flushTimeoutMs ?? 5000;
   const burstCapacity = options.rateLimitBurstCapacity ?? 500;
   const refillPerMinute = options.rateLimitRefillPerMinute ?? 1000;
-  const minSeverity = SEVERITY_NUMBER[options.minLevel ?? "warn"];
+  const minSeverity = SEVERITY_NUMBER[options.minLevel ?? "error"];
+  const extraHeaders = options.headers ?? {};
   const fetchImpl = options.fetchImpl ?? fetch;
   const now = options.nowMs ?? (() => Date.now());
   const onError = options.onError;
@@ -297,7 +303,7 @@ export function createOtlpHttpLogAdapter(options: OtlpHttpLogOptions): OtlpHttpL
     try {
       const res = await fetchImpl(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { ...extraHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(payload),
         signal: controller.signal,
       });

@@ -82,7 +82,7 @@ import {
   ATTR_CLOUD_PROVIDER,
 } from "@opentelemetry/semantic-conventions/incubating";
 import { createCompositeLogger, createCompositeMeter } from "./composite";
-import { configureLogger, defaultLoggerAdapter, logger, setLoggerAttributeFloor, type LogLevel } from "./logger";
+import { configureLogger, defaultLoggerAdapter, logger, setLogLevel, setLoggerAttributeFloor, type LogLevel } from "./logger";
 import { METRIC_METADATA } from "../middleware/observability";
 import { configureMeter, configureTracer, getActiveSpan } from "./observability";
 import { createAnalyticsEngineMeterAdapter } from "./otelAdapters";
@@ -128,13 +128,12 @@ export interface OtelOptions {
   /** Set to `false` to disable the OTLP/HTTP logs exporter explicitly. */
   otlpLogsEnabled?: boolean;
   /**
-   * Minimum log level forwarded via direct-POST. Defaults to `"warn"` —
-   * errors and warnings travel at 100% capture; debug/info are dropped.
-   * Set to `"info"` to include informational logs, or `"debug"` to capture
-   * everything (preview / local-dev only — can be high volume).
+   * Minimum log level forwarded via direct-POST. Defaults to `"info"` per
+   * the OpenTelemetry specification. Set to `"warn"` to forward only errors
+   * and warnings, or `"debug"` to capture everything (can be high volume).
    *
    * Precedence: env var (`otlpLogsMinLevelEnvVar`, default
-   * `DECO_OTEL_LOGS_MIN_LEVEL`) > this option > `"warn"`. Invalid env
+   * `DECO_OTEL_LOGS_MIN_LEVEL`) > this option > `"info"`. Invalid env
    * values fall through silently.
    */
   otlpLogsMinLevel?: LogLevel;
@@ -144,6 +143,41 @@ export interface OtelOptions {
    * `"debug"`, `"info"`, `"warn"`, `"error"`.
    */
   otlpLogsMinLevelEnvVar?: string;
+  /**
+   * Extra HTTP headers sent on every OTLP POST (logs, traces, metrics).
+   * Merged with the adapter default (`Content-Type: application/json`).
+   *
+   * Resolved from `DECO_OTEL_HEADERS` env var (format: `key=value,key2=value2`)
+   * when not set programmatically. Useful for collector auth:
+   *
+   * ```
+   * DECO_OTEL_HEADERS=Authorization=Bearer <token>
+   * ```
+   */
+  otlpHeaders?: Record<string, string>;
+  /**
+   * Env var name to read extra OTLP headers from. Defaults to `"DECO_OTEL_HEADERS"`.
+   * Format: `key=value,key2=value2`.
+   */
+  otlpHeadersEnvVar?: string;
+  /**
+   * Authorization header value sent on every OTLP POST.
+   * Equivalent to `otlpHeaders: { authorization: "<value>" }` but intended
+   * for secrets: store via `wrangler secret put DECO_OTEL_AUTH_TOKEN` so the
+   * token is never committed to the repo. Non-secret headers go in
+   * `DECO_OTEL_HEADERS` (plaintext in `wrangler.jsonc`).
+   *
+   * Example: `DECO_OTEL_AUTH_TOKEN=Bearer eyJhbGci...`
+   *
+   * Precedence (lowest → highest): auth token env var → `DECO_OTEL_HEADERS`
+   * env var → `otlpHeaders` option. An explicit `authorization` key in
+   * `DECO_OTEL_HEADERS` or `otlpHeaders` overrides this value.
+   */
+  otlpAuthToken?: string;
+  /**
+   * Env var name to read the auth token from. Defaults to `"DECO_OTEL_AUTH_TOKEN"`.
+   */
+  otlpAuthTokenEnvVar?: string;
   /**
    * Env var name holding the OTLP/HTTP traces endpoint used by the
    * direct-POST span exporter. Defaults to `"DECO_OTEL_TRACES_ENDPOINT"`.
@@ -207,7 +241,7 @@ export interface OtelOptions {
    * errors are frequent. Uses the same FNV-1a hash as head sampling.
    *
    * Precedence: env var (`otlpTracesErrorPromotionRateEnvVar`, default
-   * `DECO_OTEL_ERROR_PROMOTION_RATE`) > this option > `1.0`.
+   * `DECO_OTEL_ERROR_PROMOTION_RATE`) > this option > `0.1`.
    */
   otlpTracesErrorPromotionRate?: number;
   /**
@@ -667,9 +701,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
   const otlpLogsEndpoint = (env[otlpLogsEnvVar] as string | undefined) ?? "";
   const otlpLogsEnabled =
     opts.otlpLogsEnabled !== false && otlpLogsEndpoint.length > 0;
-  // Minimum log level precedence: env var > options > "warn" default.
-  // "warn" ships errors + warnings at 100%; info/debug are dropped unless
-  // explicitly opted in via DECO_OTEL_LOGS_MIN_LEVEL=info.
+  // Minimum log level precedence: env var > options > "info" default (OTel spec).
   // Invalid env values fall through silently.
   const otlpLogsMinLevelEnvVar =
     opts.otlpLogsMinLevelEnvVar ?? "DECO_OTEL_LOGS_MIN_LEVEL";
@@ -681,6 +713,24 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
     (validLogLevels as readonly string[]).includes(otlpLogsMinLevelFromEnv)
       ? (otlpLogsMinLevelFromEnv as LogLevel)
       : opts.otlpLogsMinLevel ?? "info";
+  // Sync the logger gate so logger.debug() calls are not silently dropped
+  // before reaching the OTLP adapter when minLevel is "debug" or "info".
+  setLogLevel(otlpLogsMinLevel);
+  const otlpHeadersEnvVar = opts.otlpHeadersEnvVar ?? "DECO_OTEL_HEADERS";
+  const otlpHeadersFromEnv = (env[otlpHeadersEnvVar] as string | undefined) ?? "";
+  const parsedEnvHeaders: Record<string, string> = {};
+  for (const pair of otlpHeadersFromEnv.split(",")) {
+    const eqIdx = pair.indexOf("=");
+    if (eqIdx > 0) {
+      parsedEnvHeaders[pair.slice(0, eqIdx).trim()] = pair.slice(eqIdx + 1).trim();
+    }
+  }
+  const otlpAuthTokenEnvVar = opts.otlpAuthTokenEnvVar ?? "DECO_OTEL_AUTH_TOKEN";
+  const otlpAuthToken = (env[otlpAuthTokenEnvVar] as string | undefined) ?? opts.otlpAuthToken ?? "";
+  const authHeader: Record<string, string> = otlpAuthToken ? { authorization: otlpAuthToken } : {};
+  // Priority: auth token (lowest) → DECO_OTEL_HEADERS env → otlpHeaders option (highest).
+  const otlpHeaders: Record<string, string> = { ...authHeader, ...parsedEnvHeaders, ...(opts.otlpHeaders ?? {}) };
+
   const errorPromotionEnvVar =
     opts.otlpTracesErrorPromotionEnvVar ?? "DECO_OTEL_ERROR_PROMOTION";
   const errorPromotionEnabled =
@@ -693,6 +743,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
       resourceAttributes: floor,
       scopeVersion: decoRuntimeVersion,
       minLevel: otlpLogsMinLevel,
+      headers: otlpHeaders,
       fetchImpl: opts.otlpLogsFetchImpl,
       promoteTrace: errorPromotionEnabled
         ? (traceId) => state.otlpTracer?.promoteTrace(traceId)
@@ -761,6 +812,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
       endpoint: otlpEndpoint,
       resourceAttributes: floor,
       scopeVersion: decoRuntimeVersion,
+      headers: otlpHeaders,
       fetchImpl: opts.otlpMetricsFetchImpl,
       metricMetadata: METRIC_METADATA,
       onError: (kind, err) => {
@@ -830,6 +882,7 @@ function bootObservability(opts: OtelOptions, env: Record<string, unknown>): voi
       scopeVersion: decoRuntimeVersion,
       headSamplingRate: samplingRateOverride ?? opts.otlpTracesSamplingRate ?? 0.01,
       errorPromotionRate,
+      headers: otlpHeaders,
       fetchImpl: opts.otlpTracesFetchImpl,
       getActiveSpanForParent: () => getActiveSpan(),
       getRequestTraceContext,

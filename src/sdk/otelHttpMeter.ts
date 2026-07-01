@@ -61,6 +61,11 @@ export interface OtlpHttpMeterOptions {
   /** Per-flush HTTP timeout (ms). Default: 5000. */
   flushTimeoutMs?: number;
   /**
+   * Extra HTTP headers merged into every OTLP POST (e.g. `Authorization: Bearer …`).
+   * `Content-Type: application/json` is always set and cannot be overridden here.
+   */
+  headers?: Record<string, string>;
+  /**
    * Test seam — override fetch for the flush path so unit tests can
    * inspect the OTLP payload without going to the network.
    */
@@ -147,6 +152,7 @@ export function createOtlpHttpMeterAdapter(options: OtlpHttpMeterOptions): OtlpH
   const maxBuffer = options.maxBufferDatapoints ?? 2000;
   const minFlushIntervalMs = options.minFlushIntervalMs ?? 5000;
   const flushTimeoutMs = options.flushTimeoutMs ?? 5000;
+  const extraHeaders = options.headers ?? {};
   const fetchImpl = options.fetchImpl ?? fetch;
   const now = options.nowMs ?? (() => Date.now());
   const onError = options.onError;
@@ -313,7 +319,7 @@ export function createOtlpHttpMeterAdapter(options: OtlpHttpMeterOptions): OtlpH
     try {
       const res = await fetchImpl(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { ...extraHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(payload),
         signal: controller.signal,
       });

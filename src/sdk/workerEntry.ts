@@ -1228,11 +1228,10 @@ export function createDecoWorkerEntry(
               ? await appMw(request, () => handleRequest(request, env, ctx))
               : await handleRequest(request, env, ctx);
 
-            // logRequest must run inside the span so getSpan() returns the
-            // active root span and the trace-sampling gate in otelHttpLog.ts
-            // (traceFlags & 0x01) correctly reflects whether this trace was
-            // sampled. Outside the span getSpan() is null → gate always drops
-            // INFO logs even at 100% sampling rate.
+            // Access log at debug — no-op in prod (default warn minLevel),
+            // visible in dev with DECO_OTEL_LOGS_MIN_LEVEL=debug.
+            // Must run inside the span so getSpan() returns the active root
+            // span and trace_id is stamped on the log record.
             try {
               logRequest(request, innerResponse.status, performance.now() - startedAt, {
                 ...(identity.requestId ? { "request.id": identity.requestId } : {}),
@@ -1313,8 +1312,7 @@ export function createDecoWorkerEntry(
         // NOTE: `request.id` and `trace.id` are intentionally NOT stamped
         // on the metric. They are per-request identifiers and would
         // collapse aggregation (every request → its own histogram data
-        // point). They are stamped on the span (see line 1129) and on
-        // the access log (see logRequest call below); use those for
+        // point). They are stamped on the span; use traces for
         // request-level correlation.
         recordRequestMetric(method, reqUrl.pathname, finalResponse.status, durationMs, {
           ...(cacheDecision ? { cache_decision: cacheDecision } : {}),

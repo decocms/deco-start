@@ -453,11 +453,10 @@ describe("instrumentWorker — OTLP/HTTP error-log channel wiring", () => {
     expect(rec.body.stringValue).toBe("payment failed");
   });
 
-  it("info / debug calls do NOT trigger a direct POST (below default warn minLevel)", async () => {
+  it("debug calls do NOT trigger a direct POST (below default info minLevel)", async () => {
     const { impl, calls } = makeFetchSpy();
     const handler = {
       fetch: vi.fn(async () => {
-        logger.logger.info("info msg");
         logger.logger.debug("debug msg");
         return new Response("ok");
       }),
@@ -476,11 +475,11 @@ describe("instrumentWorker — OTLP/HTTP error-log channel wiring", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("warn calls DO trigger a direct POST (at default warn minLevel)", async () => {
+  it("info calls DO trigger a direct POST (at default info minLevel)", async () => {
     const { impl, calls } = makeFetchSpy();
     const handler = {
       fetch: vi.fn(async () => {
-        logger.logger.warn("topsort api key not found");
+        logger.logger.info("section loaded");
         return new Response("ok");
       }),
     };
@@ -499,7 +498,7 @@ describe("instrumentWorker — OTLP/HTTP error-log channel wiring", () => {
     const payload = JSON.parse(calls[0].body) as {
       resourceLogs: Array<{ scopeLogs: Array<{ logRecords: Array<{ severityText: string }> }> }>;
     };
-    expect(payload.resourceLogs[0].scopeLogs[0].logRecords[0].severityText).toBe("warn");
+    expect(payload.resourceLogs[0].scopeLogs[0].logRecords[0].severityText).toBe("info");
   });
 
   it("otlpLogsEnabled=false disables the channel even when env is set", async () => {
