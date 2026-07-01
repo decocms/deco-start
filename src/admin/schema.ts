@@ -195,8 +195,20 @@ export function getRegisteredMatchers(): MatcherConfig[] {
 
 // Register built-in matchers that are always available
 registerMatcherSchemas([
-  { key: "website/matchers/always.ts", title: "Always", description: "Target all users", icon: "eye", namespace: "website" },
-  { key: "website/matchers/never.ts", title: "Never", description: "Hide from all users", icon: "eye-off", namespace: "website" },
+  {
+    key: "website/matchers/always.ts",
+    title: "Always",
+    description: "Target all users",
+    icon: "eye",
+    namespace: "website",
+  },
+  {
+    key: "website/matchers/never.ts",
+    title: "Never",
+    description: "Hide from all users",
+    icon: "eye-off",
+    namespace: "website",
+  },
   {
     key: "website/matchers/device.ts",
     title: "Device",
@@ -324,40 +336,58 @@ registerMatcherSchemas([
   {
     key: "website/matchers/location.ts",
     title: "Location",
-    description: "Target users based on their geographical location, such as country, city, or region",
+    description:
+      "Target users based on their geographical location, such as country, city, or region",
     icon: "map-2",
     namespace: "website",
     propsSchema: (() => {
-      const locationOrMapItem = {
+      // `includeLocations`/`excludeLocations` are `(Location | Map)[]` in the
+      // matcher source. Emit the union as an `anyOf` of two branches so the CMS
+      // renders a Location/Map choice instead of merging every field into one
+      // form. The Location branch is exactly {city, regionCode, country}; the
+      // Map branch carries the `@format: map` coordinate picker.
+      const locationBranch = {
         type: "object" as const,
+        title: "Location",
         properties: {
           city: {
             type: "string",
             title: "City",
             examples: ["São Paulo"],
-            description: "Exact city name (case-insensitive) as returned by Cloudflare's cf-ipcity header.",
+            description:
+              "Exact city name (case-insensitive) as returned by Cloudflare's cf-ipcity header.",
           },
           regionCode: {
             type: "string",
             title: "Region Code",
             examples: ["SP", "RJ", "MG", "47"],
             description:
-              "Matches Cloudflare's cf-region-code header. Usually the ISO 3166-2 subdivision code (SP, RJ, MG, …); for some regions Cloudflare returns numeric codes (e.g. 47). Use the same value cf-region-code returns for your audience — full region names like \"São Paulo\" are NOT matched.",
+              'Matches Cloudflare\'s cf-region-code header. Usually the ISO 3166-2 subdivision code (SP, RJ, MG, …); for some regions Cloudflare returns numeric codes (e.g. 47). Use the same value cf-region-code returns for your audience — full region names like "São Paulo" are NOT matched.',
           },
           country: {
             type: "string",
             title: "Country",
             examples: ["BR", "Brasil", "US"],
-            description: "ISO 3166-1 alpha-2 code (BR, US, AR, …) or a full country name (Brasil, United States) — the matcher resolves common aliases.",
-          },
-          coordinates: {
-            type: "string",
-            title: "Area selection",
-            examples: ["-23.5505,-46.6333,5000"],
-            description: "\"latitude,longitude,radius_in_meters\" for haversine-radius matching. Set this for the Map mode.",
+            description:
+              "ISO 3166-1 alpha-2 code (BR, US, AR, …) or a full country name (Brasil, United States) — the matcher resolves common aliases.",
           },
         },
       };
+      const mapBranch = {
+        type: "object" as const,
+        title: "Map",
+        properties: {
+          coordinates: {
+            type: "string",
+            title: "Area selection",
+            format: "map",
+            examples: ["-23.5505,-46.6333,5000"],
+            description:
+              '"latitude,longitude,radius_in_meters" for haversine-radius matching. Set this for the Map mode.',
+          },
+        },
+      };
+      const locationOrMapItem = { anyOf: [locationBranch, mapBranch] };
       return {
         type: "object" as const,
         properties: {
@@ -392,7 +422,8 @@ registerMatcherSchemas([
   {
     key: "website/matchers/environment.ts",
     title: "Environment",
-    description: "Target users based from where they are accessing your site (development, testing, or production)",
+    description:
+      "Target users based from where they are accessing your site (development, testing, or production)",
     icon: "code",
     namespace: "website",
     propsSchema: {
